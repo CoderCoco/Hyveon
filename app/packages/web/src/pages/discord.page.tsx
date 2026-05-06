@@ -33,6 +33,8 @@ import {
 } from '@/components/ui/table.component';
 import { cn } from '@/lib/utils.utils';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
+import { ConfirmDialog } from '../components/confirm-dialog.component.js';
+import { isSuppressed } from '../lib/confirm-skip.utils.js';
 
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 const ALL_ACTIONS: DiscordAction[] = ['start', 'stop', 'status'];
@@ -493,6 +495,7 @@ function GuildsSection({
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [registered, setRegistered] = useState<Set<string>>(new Set());
+  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   // Merge the terraform-managed and dynamic allowlists, deduping by guild ID
   // so a guild that appears in both never renders twice (which would collide
   // React keys and produce conflicting per-row actions). The terraform entry
@@ -554,15 +557,28 @@ function GuildsSection({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Guilds</CardTitle>
-        <CardDescription>
-          The interactions Lambda rejects commands from any server whose ID isn&apos;t in this
-          allowlist. Enable Discord Developer Mode (Settings → Advanced) to copy server IDs.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <>
+      <ConfirmDialog
+        open={pendingRemoveId !== null}
+        onOpenChange={(o) => { if (!o) setPendingRemoveId(null); }}
+        title="Remove guild?"
+        description="The bot will no longer respond to commands from this guild."
+        confirmLabel="Remove guild"
+        typeToConfirm={pendingRemoveId ?? ''}
+        onConfirm={() => {
+          if (pendingRemoveId) void onRemove(pendingRemoveId);
+          setPendingRemoveId(null);
+        }}
+      />
+      <Card>
+        <CardHeader>
+          <CardTitle>Guilds</CardTitle>
+          <CardDescription>
+            The interactions Lambda rejects commands from any server whose ID isn&apos;t in this
+            allowlist. Enable Discord Developer Mode (Settings → Advanced) to copy server IDs.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
         <div>
           <Label htmlFor="add-guild" className="mb-2 block">
             Add a guild
@@ -656,7 +672,7 @@ function GuildsSection({
                           variant="outline"
                           size="sm"
                           disabled={busy || locked}
-                          onClick={() => onRemove(id)}
+                          onClick={() => setPendingRemoveId(id)}
                           title={locked ? 'Managed by Terraform — remove via terraform.tfvars' : undefined}
                         >
                           Remove
@@ -671,6 +687,7 @@ function GuildsSection({
         )}
       </CardContent>
     </Card>
+  </>
   );
 }
 
@@ -689,6 +706,7 @@ function AdminsSection({
 }) {
   const [userIds, setUserIds] = useState<string[]>(cfg.admins.userIds);
   const [roleIds, setRoleIds] = useState<string[]>(cfg.admins.roleIds);
+  const [pendingRemove, setPendingRemove] = useState<{ list: 'user' | 'role'; id: string } | null>(null);
   const hasBaseAdmins =
     cfg.baseAdmins.userIds.length > 0 || cfg.baseAdmins.roleIds.length > 0;
 
@@ -697,64 +715,98 @@ function AdminsSection({
     JSON.stringify(roleIds) !== JSON.stringify(cfg.admins.roleIds);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Admins</CardTitle>
-        <CardDescription>
-          Admins can run every command on every game. Right-click a user or role with Discord
-          Developer Mode enabled to copy their ID.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <div className="space-y-2">
-          <Label>Admin User IDs</Label>
-          <SnowflakeChipsInput
-            value={userIds}
-            onChange={setUserIds}
-            placeholder="Paste or type a user ID, then press Enter"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Admin Role IDs</Label>
-          <SnowflakeChipsInput
-            value={roleIds}
-            onChange={setRoleIds}
-            placeholder="Paste or type a role ID, then press Enter"
-          />
-        </div>
-
-        <div className="flex justify-end">
-          <Button disabled={busy || !dirty} onClick={() => onSave({ userIds, roleIds })}>
-            Save admins
-          </Button>
-        </div>
-
-        {hasBaseAdmins && (
-          <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
-            <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-              <ShieldCheck className="size-3.5" />
-              Terraform-managed (read-only)
-            </div>
-            {cfg.baseAdmins.userIds.length > 0 && (
-              <div>
-                <Label className="text-xs text-[var(--color-muted-foreground)]">
-                  Admin User IDs
-                </Label>
-                <ChipList ids={cfg.baseAdmins.userIds} />
-              </div>
-            )}
-            {cfg.baseAdmins.roleIds.length > 0 && (
-              <div>
-                <Label className="text-xs text-[var(--color-muted-foreground)]">
-                  Admin Role IDs
-                </Label>
-                <ChipList ids={cfg.baseAdmins.roleIds} />
-              </div>
-            )}
+    <>
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        onOpenChange={(o) => { if (!o) setPendingRemove(null); }}
+        title="Remove admin?"
+        description="This ID will no longer have admin-level access."
+        confirmLabel="Remove"
+        confirmKey="remove-admin"
+        onConfirm={() => {
+          if (pendingRemove) {
+            if (pendingRemove.list === 'user') {
+              setUserIds((cur) => cur.filter((v) => v !== pendingRemove.id));
+            } else {
+              setRoleIds((cur) => cur.filter((v) => v !== pendingRemove.id));
+            }
+          }
+          setPendingRemove(null);
+        }}
+      />
+      <Card>
+        <CardHeader>
+          <CardTitle>Admins</CardTitle>
+          <CardDescription>
+            Admins can run every command on every game. Right-click a user or role with Discord
+            Developer Mode enabled to copy their ID.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="space-y-2">
+            <Label>Admin User IDs</Label>
+            <SnowflakeChipsInput
+              value={userIds}
+              onChange={setUserIds}
+              placeholder="Paste or type a user ID, then press Enter"
+              onRemoveChip={(id) => {
+                if (isSuppressed('remove-admin')) {
+                  setUserIds((cur) => cur.filter((v) => v !== id));
+                } else {
+                  setPendingRemove({ list: 'user', id });
+                }
+              }}
+            />
           </div>
-        )}
-      </CardContent>
-    </Card>
+          <div className="space-y-2">
+            <Label>Admin Role IDs</Label>
+            <SnowflakeChipsInput
+              value={roleIds}
+              onChange={setRoleIds}
+              placeholder="Paste or type a role ID, then press Enter"
+              onRemoveChip={(id) => {
+                if (isSuppressed('remove-admin')) {
+                  setRoleIds((cur) => cur.filter((v) => v !== id));
+                } else {
+                  setPendingRemove({ list: 'role', id });
+                }
+              }}
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <Button disabled={busy || !dirty} onClick={() => onSave({ userIds, roleIds })}>
+              Save admins
+            </Button>
+          </div>
+
+          {hasBaseAdmins && (
+            <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
+              <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
+                <ShieldCheck className="size-3.5" />
+                Terraform-managed (read-only)
+              </div>
+              {cfg.baseAdmins.userIds.length > 0 && (
+                <div>
+                  <Label className="text-xs text-[var(--color-muted-foreground)]">
+                    Admin User IDs
+                  </Label>
+                  <ChipList ids={cfg.baseAdmins.userIds} />
+                </div>
+              )}
+              {cfg.baseAdmins.roleIds.length > 0 && (
+                <div>
+                  <Label className="text-xs text-[var(--color-muted-foreground)]">
+                    Admin Role IDs
+                  </Label>
+                  <ChipList ids={cfg.baseAdmins.roleIds} />
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </>
   );
 }
 
@@ -783,10 +835,13 @@ function SnowflakeChipsInput({
   value,
   onChange,
   placeholder,
+  onRemoveChip,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   placeholder?: string;
+  /** When provided, called instead of removing the chip immediately — caller handles confirmation. */
+  onRemoveChip?: (id: string) => void;
 }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -823,7 +878,7 @@ function SnowflakeChipsInput({
             {id}
             <button
               type="button"
-              onClick={() => removeAt(id)}
+              onClick={() => (onRemoveChip ? onRemoveChip(id) : removeAt(id))}
               aria-label={`Remove ${id}`}
               className="hover:text-[var(--color-red)]"
             >
@@ -843,7 +898,12 @@ function SnowflakeChipsInput({
               e.preventDefault();
               commit();
             } else if (e.key === 'Backspace' && !draft && value.length) {
-              onChange(value.slice(0, -1));
+              const last = value[value.length - 1];
+              if (onRemoveChip) {
+                onRemoveChip(last);
+              } else {
+                onChange(value.slice(0, -1));
+              }
             }
           }}
           onBlur={() => commit()}
@@ -960,6 +1020,7 @@ function PermissionRow({
   const [userIds, setUserIds] = useState<string[]>(initial.userIds);
   const [roleIds, setRoleIds] = useState<string[]>(initial.roleIds);
   const [actions, setActions] = useState<DiscordAction[]>(initial.actions);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
 
   const dirty =
     JSON.stringify(userIds) !== JSON.stringify(initial.userIds) ||
@@ -972,43 +1033,65 @@ function PermissionRow({
   }
 
   return (
-    <TableRow>
-      <TableCell className="font-medium capitalize align-top pt-4">{game}</TableCell>
-      <TableCell className="align-top">
-        <SnowflakeChipsInput value={userIds} onChange={setUserIds} placeholder="User IDs" />
-      </TableCell>
-      <TableCell className="align-top">
-        <SnowflakeChipsInput value={roleIds} onChange={setRoleIds} placeholder="Role IDs" />
-      </TableCell>
-      <TableCell className="align-top pt-4">
-        <div className="flex flex-col gap-1.5">
-          {ALL_ACTIONS.map((a) => (
-            <label key={a} className="flex items-center gap-2 text-xs cursor-pointer">
-              <input
-                type="checkbox"
-                checked={actions.includes(a)}
-                onChange={() => toggle(a)}
-                className="size-3.5 rounded border-[var(--color-border)] bg-[var(--color-surface-2)] accent-[var(--color-primary)]"
-              />
-              <span className="capitalize">{a}</span>
-            </label>
-          ))}
-        </div>
-      </TableCell>
-      <TableCell className="text-right align-top pt-4">
-        <div className="inline-flex flex-col gap-1.5">
-          <Button
-            size="sm"
-            disabled={busy || !dirty}
-            onClick={() => onSave({ userIds, roleIds, actions })}
-          >
-            Save
-          </Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={onDelete}>
-            Clear
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
+    <>
+      <ConfirmDialog
+        open={clearDialogOpen}
+        onOpenChange={setClearDialogOpen}
+        title={`Clear permissions for ${game}?`}
+        description="Per-game permissions will be reset. This is recoverable from infrastructure-as-code."
+        confirmLabel="Clear"
+        confirmKey="clear-permissions"
+        onConfirm={() => { void onDelete(); }}
+      />
+      <TableRow>
+        <TableCell className="font-medium capitalize align-top pt-4">{game}</TableCell>
+        <TableCell className="align-top">
+          <SnowflakeChipsInput value={userIds} onChange={setUserIds} placeholder="User IDs" />
+        </TableCell>
+        <TableCell className="align-top">
+          <SnowflakeChipsInput value={roleIds} onChange={setRoleIds} placeholder="Role IDs" />
+        </TableCell>
+        <TableCell className="align-top pt-4">
+          <div className="flex flex-col gap-1.5">
+            {ALL_ACTIONS.map((a) => (
+              <label key={a} className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={actions.includes(a)}
+                  onChange={() => toggle(a)}
+                  className="size-3.5 rounded border-[var(--color-border)] bg-[var(--color-surface-2)] accent-[var(--color-primary)]"
+                />
+                <span className="capitalize">{a}</span>
+              </label>
+            ))}
+          </div>
+        </TableCell>
+        <TableCell className="text-right align-top pt-4">
+          <div className="inline-flex flex-col gap-1.5">
+            <Button
+              size="sm"
+              disabled={busy || !dirty}
+              onClick={() => onSave({ userIds, roleIds, actions })}
+            >
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                if (isSuppressed('clear-permissions')) {
+                  void onDelete();
+                } else {
+                  setClearDialogOpen(true);
+                }
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    </>
   );
 }

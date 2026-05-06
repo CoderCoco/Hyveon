@@ -15,6 +15,8 @@ import { Card } from '@/components/ui/card.component';
 import { Button } from '@/components/ui/button.component';
 import { Badge } from '@/components/ui/badge.component';
 import { cn } from '@/lib/utils.utils';
+import { ConfirmDialog } from './confirm-dialog.component.js';
+import { isSuppressed } from '../lib/confirm-skip.utils.js';
 
 interface Props {
   status: GameStatus;
@@ -132,6 +134,7 @@ function Stat({ label, value, mono }: StatRowProps) {
 export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
   const { game, state } = status;
   const [busy, setBusy] = useState(false);
+  const [stopDialogOpen, setStopDialogOpen] = useState(false);
 
   const canStart = state === 'stopped' || state === 'not_deployed';
   const canStop  = state === 'running'  || state === 'starting';
@@ -161,92 +164,109 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
   const costPerHourLabel = estimate ? `$${estimate.costPerHour.toFixed(3)}` : '—';
 
   return (
-    <Card className="relative overflow-hidden p-0 flex flex-col">
-      {/* Top gradient accent rule */}
-      <div className={cn('h-0.5 w-full', accentRuleClass(state))} />
+    <>
+      <ConfirmDialog
+        open={stopDialogOpen}
+        onOpenChange={setStopDialogOpen}
+        title={`Stop ${game}?`}
+        description="Active sessions will end."
+        confirmLabel="Stop server"
+        confirmKey="stop-server"
+        onConfirm={() => { void handleStop(); }}
+      />
+      <Card className="relative overflow-hidden p-0 flex flex-col">
+        {/* Top gradient accent rule */}
+        <div className={cn('h-0.5 w-full', accentRuleClass(state))} />
 
-      {/* Header */}
-      <div className="px-5 pt-4 pb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="font-[var(--font-ui)] text-[17px] font-bold capitalize leading-tight text-[var(--color-foreground)]">
-            {game}
-          </h3>
-          <div className="mt-1 flex items-center gap-1.5 min-w-0">
-            <span
-              className={cn(
-                'font-[var(--font-mono)] text-xs truncate',
-                connectStr ? 'text-[var(--color-cyan-light)]' : 'text-[var(--color-muted-foreground)]',
-              )}
-            >
-              {connectStr ?? 'no hostname'}
-            </span>
-            {connectStr && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-5 w-5 p-0 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
-                onClick={() => void navigator.clipboard.writeText(connectStr)}
-                aria-label="Copy connect string"
+        {/* Header */}
+        <div className="px-5 pt-4 pb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="font-[var(--font-ui)] text-[17px] font-bold capitalize leading-tight text-[var(--color-foreground)]">
+              {game}
+            </h3>
+            <div className="mt-1 flex items-center gap-1.5 min-w-0">
+              <span
+                className={cn(
+                  'font-[var(--font-mono)] text-xs truncate',
+                  connectStr ? 'text-[var(--color-cyan-light)]' : 'text-[var(--color-muted-foreground)]',
+                )}
               >
-                <Copy className="size-3" />
-              </Button>
-            )}
-            {status.publicIp && status.hostname && (
-              <span className="font-[var(--font-mono)] text-[0.65rem] text-[var(--color-muted-foreground)] truncate">
-                ({status.publicIp})
+                {connectStr ?? 'no hostname'}
               </span>
-            )}
+              {connectStr && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 w-5 p-0 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                  onClick={() => void navigator.clipboard.writeText(connectStr)}
+                  aria-label="Copy connect string"
+                >
+                  <Copy className="size-3" />
+                </Button>
+              )}
+              {status.publicIp && status.hostname && (
+                <span className="font-[var(--font-mono)] text-[0.65rem] text-[var(--color-muted-foreground)] truncate">
+                  ({status.publicIp})
+                </span>
+              )}
+            </div>
           </div>
+          <Badge variant={badgeVariant(state)} className="shrink-0 gap-1.5 text-[0.65rem]">
+            <span className={dotClass(state)} aria-hidden="true" />
+            <StateIcon state={state} />
+            {STATE_LABELS[state]}
+          </Badge>
         </div>
-        <Badge variant={badgeVariant(state)} className="shrink-0 gap-1.5 text-[0.65rem]">
-          <span className={dotClass(state)} aria-hidden="true" />
-          <StateIcon state={state} />
-          {STATE_LABELS[state]}
-        </Badge>
-      </div>
 
-      {/* 2x2 stats grid */}
-      <div className="px-5 pb-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--color-border)] pt-4">
-        <Stat label="Last run" value={lastRunLabel(state)} />
-        <Stat label="Players" value={playersLabel} />
-        <Stat label="$ per hour" value={costPerHourLabel} />
-        <Stat label="Task" value={taskShortId(status.taskArn)} mono />
-      </div>
+        {/* 2x2 stats grid */}
+        <div className="px-5 pb-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--color-border)] pt-4">
+          <Stat label="Last run" value={lastRunLabel(state)} />
+          <Stat label="Players" value={playersLabel} />
+          <Stat label="$ per hour" value={costPerHourLabel} />
+          <Stat label="Task" value={taskShortId(status.taskArn)} mono />
+        </div>
 
-      {/* Actions */}
-      <div className="px-5 pb-4 mt-auto flex flex-wrap gap-2">
-        {canStart || !canStop ? (
-          <Button
-            variant="start"
-            size="sm"
-            onClick={() => void handleStart()}
-            disabled={!canStart || busy}
-            className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-green)] to-[var(--color-cyan)] hover:brightness-110"
-          >
-            Start
+        {/* Actions */}
+        <div className="px-5 pb-4 mt-auto flex flex-wrap gap-2">
+          {canStart || !canStop ? (
+            <Button
+              variant="start"
+              size="sm"
+              onClick={() => void handleStart()}
+              disabled={!canStart || busy}
+              className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-green)] to-[var(--color-cyan)] hover:brightness-110"
+            >
+              Start
+            </Button>
+          ) : (
+            <Button
+              variant="stop"
+              size="sm"
+              onClick={() => {
+                if (isSuppressed('stop-server')) {
+                  void handleStop();
+                } else {
+                  setStopDialogOpen(true);
+                }
+              }}
+              disabled={!canStop || busy}
+              className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-red)] to-[var(--color-pink)] hover:brightness-110"
+            >
+              Stop
+            </Button>
+          )}
+          <Button variant="secondary" size="sm" onClick={() => onOpenFiles(game)}>
+            <FolderOpen className="size-3.5" />
+            Files
           </Button>
-        ) : (
-          <Button
-            variant="stop"
-            size="sm"
-            onClick={() => void handleStop()}
-            disabled={!canStop || busy}
-            className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-red)] to-[var(--color-pink)] hover:brightness-110"
-          >
-            Stop
+          <Button variant="secondary" size="sm" asChild>
+            <Link to="/logs" state={{ game }} aria-label={`View logs for ${game}`}>
+              <ScrollText className="size-3.5" />
+              Logs
+            </Link>
           </Button>
-        )}
-        <Button variant="secondary" size="sm" onClick={() => onOpenFiles(game)}>
-          <FolderOpen className="size-3.5" />
-          Files
-        </Button>
-        <Button variant="secondary" size="sm" asChild>
-          <Link to="/logs" state={{ game }} aria-label={`View logs for ${game}`}>
-            <ScrollText className="size-3.5" />
-            Logs
-          </Link>
-        </Button>
-      </div>
-    </Card>
+        </div>
+      </Card>
+    </>
   );
 }
