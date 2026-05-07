@@ -212,7 +212,7 @@ export function CostsPage() {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="max-w-6xl mx-auto p-8 space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Cost Analysis</h2>

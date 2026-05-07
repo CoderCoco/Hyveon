@@ -273,7 +273,7 @@ export function LogsPage() {
   };
 
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 p-8">
+    <div className="mx-auto flex h-full max-w-6xl flex-col gap-4">
       {/* Header — title + LIVE/PAUSED badge */}
       <div className="flex items-center justify-between">
         <div>

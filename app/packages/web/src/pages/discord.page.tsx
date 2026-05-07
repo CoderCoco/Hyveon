@@ -155,7 +155,7 @@ export function DiscordPage() {
 
   if (!cfg) {
     return (
-      <div className="max-w-5xl mx-auto p-8 space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold">Discord</h2>
@@ -172,7 +172,7 @@ export function DiscordPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-8 space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold">Discord</h2>
@@ -319,10 +319,10 @@ function SetupWizard({ cfg }: { cfg: DiscordConfigRedacted }) {
           The bot isn&apos;t configured yet. Follow these steps to wire it up.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
-        <ol className="space-y-4">
+      <CardContent className="pb-6">
+        <ol className="divide-y divide-[var(--color-border)]">
           {steps.map((step, i) => (
-            <li key={i} className="flex items-start gap-3 text-sm">
+            <li key={i} className="flex items-start gap-3 text-sm py-3 first:pt-0 last:pb-0">
               {step.done ? (
                 <CheckCircle2 className="size-4 mt-0.5 shrink-0 text-[var(--color-green)]" />
               ) : (
@@ -336,7 +336,7 @@ function SetupWizard({ cfg }: { cfg: DiscordConfigRedacted }) {
             </li>
           ))}
         </ol>
-        <p className="text-xs text-[var(--color-muted-foreground)] border-t border-[var(--color-border)] pt-4">
+        <p className="text-xs text-[var(--color-muted-foreground)] border-t border-[var(--color-border)] mt-4 pt-4">
           Full walkthrough:{' '}
           <a
             href="https://codercoco.github.io/game-server-deploy/setup"

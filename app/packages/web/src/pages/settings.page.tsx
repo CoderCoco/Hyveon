@@ -7,7 +7,7 @@ import { PollingIndicator } from '../polling/polling-indicator.component.js';
  */
 export function SettingsPage() {
   return (
-    <div className="max-w-5xl mx-auto p-8">
+    <div className="max-w-5xl mx-auto">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-2xl font-semibold">Settings</h2>
         <PollingIndicator />
