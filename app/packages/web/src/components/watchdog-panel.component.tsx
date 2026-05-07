@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { HelpCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type WatchdogConfig } from '../api.service.js';
@@ -88,10 +88,13 @@ function Field({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const id = useId();
   return (
     <div>
-      <label style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.2rem' }}>
-        {label}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.2rem' }}>
+        <label htmlFor={id} style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+          {label}
+        </label>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -106,8 +109,9 @@ function Field({
             {tooltip}
           </TooltipContent>
         </Tooltip>
-      </label>
+      </div>
       <input
+        id={id}
         type="number"
         value={value}
         onChange={(e) => onChange(parseInt(e.target.value, 10) || 0)}
