@@ -319,8 +319,8 @@ function SetupWizard({ cfg }: { cfg: DiscordConfigRedacted }) {
           The bot isn&apos;t configured yet. Follow these steps to wire it up.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <ol className="space-y-3">
+      <CardContent className="space-y-5">
+        <ol className="space-y-4">
           {steps.map((step, i) => (
             <li key={i} className="flex items-start gap-3 text-sm">
               {step.done ? (
@@ -336,7 +336,7 @@ function SetupWizard({ cfg }: { cfg: DiscordConfigRedacted }) {
             </li>
           ))}
         </ol>
-        <p className="text-xs text-[var(--color-muted-foreground)]">
+        <p className="text-xs text-[var(--color-muted-foreground)] border-t border-[var(--color-border)] pt-4">
           Full walkthrough:{' '}
           <a
             href="https://codercoco.github.io/game-server-deploy/setup"
