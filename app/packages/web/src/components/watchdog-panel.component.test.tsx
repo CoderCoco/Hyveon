@@ -41,6 +41,14 @@ describe('WatchdogPanel', () => {
     expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
   });
 
+  it('should render an accessible help button for each watchdog field', () => {
+    render(<WatchdogPanel />);
+
+    expect(screen.getByRole('button', { name: 'Check interval (min) help' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Idle checks before shutdown help' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Min packets (activity threshold) help' })).toBeInTheDocument();
+  });
+
   it('should show a success toast after saving settings', async () => {
     render(<WatchdogPanel />);
 
