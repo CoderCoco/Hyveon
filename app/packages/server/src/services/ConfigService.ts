@@ -26,10 +26,11 @@ function resolveRuntimePath(...relativeCandidates: string[]): string {
   return join(__dirname, relativeCandidates[0]);
 }
 
-const TF_STATE_PATH = resolveRuntimePath(
-  '../../../../../terraform/terraform.tfstate',
-  '../../../../terraform/terraform.tfstate',
-);
+const TF_STATE_PATH = process.env['TF_STATE_PATH'] ??
+  resolveRuntimePath(
+    '../../../../../terraform/terraform.tfstate',
+    '../../../../terraform/terraform.tfstate',
+  );
 const CONFIG_PATH = resolveRuntimePath(
   '../../../../../app/server_config.json',
   '../../../../server_config.json',
