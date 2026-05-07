@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { api, type WatchdogConfig } from '../api.service.js';
 
 /**
@@ -12,8 +13,6 @@ export function WatchdogPanel() {
     watchdog_idle_checks: 4,
     watchdog_min_packets: 100,
   });
-  const [saved, setSaved] = useState(false);
-
   useEffect(() => {
     void api.config().then(setCfg);
   }, []);
@@ -21,9 +20,14 @@ export function WatchdogPanel() {
   const idleMinutes = cfg.watchdog_interval_minutes * cfg.watchdog_idle_checks;
 
   async function handleSave() {
-    await api.saveConfig(cfg);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await api.saveConfig(cfg);
+      toast.success('Watchdog settings saved');
+    } catch (err) {
+      toast.error('Failed to save watchdog settings', {
+        description: err instanceof Error ? err.message : 'An unknown error occurred',
+      });
+    }
   }
 
   return (
@@ -45,7 +49,7 @@ export function WatchdogPanel() {
       </p>
       <div style={{ marginTop: '0.75rem' }}>
         <button className="btn-secondary btn-sm" onClick={() => void handleSave()}>
-          {saved ? 'Saved ✓' : 'Save'}
+          Save
         </button>
       </div>
     </div>

@@ -16,7 +16,7 @@ import {
   CONFIGURED_DISCORD_CONFIG,
   makeActualCosts,
 } from './game-data.js';
-import { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage } from '../pages/index.js';
+import { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
 
 export type {
   GameStatus,
@@ -43,7 +43,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage } from '../pages/index.js';
+export { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -202,6 +202,8 @@ type E2EFixtures = {
   costs: CostsPage;
   /** Page object for the `/logs` route — use in any authed-logs spec. */
   logs: LogsPage;
+  /** Page object for the `/settings` route — use in any authed-settings spec. */
+  settings: SettingsPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
   /** Page object for the API-token modal — use in auth-gate specs. */
@@ -227,6 +229,9 @@ export const test = base.extend<E2EFixtures>({
   },
   logs: async ({ authedPage }, use) => {
     await use(new LogsPage(authedPage));
+  },
+  settings: async ({ authedPage }, use) => {
+    await use(new SettingsPage(authedPage));
   },
   layout: async ({ page }, use) => {
     await use(new AppLayout(page));

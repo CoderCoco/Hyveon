@@ -10,6 +10,7 @@ import { LogsPage } from './pages/logs.page.js';
 import { SettingsPage } from './pages/settings.page.js';
 import { PollingProvider } from './polling/polling-provider.component.js';
 import { GameStatusProvider } from './polling/game-status-provider.component.js';
+import { Toaster } from './components/ui/sonner.component.js';
 
 /**
  * Root component. Wires up the 401 handler on `api.ts` and renders the routed
@@ -36,6 +37,7 @@ export default function App() {
     <PollingProvider>
       <GameStatusProvider>
         <BrowserRouter>
+          <Toaster position="bottom-right" />
           <ApiTokenModal open={needsToken} onSuccess={() => setNeedsToken(false)} />
           <AppLayout>
             <Routes>

@@ -7,6 +7,7 @@ import {
   MULTI_GAME_STATUSES,
 } from '../fixtures/index.js';
 
+
 test.describe('dashboard', () => {
   test('should render a game card for a stopped game', async ({ dashboard }) => {
     await stubApis(dashboard.page, { statuses: [STOPPED_GAME] });
@@ -119,5 +120,27 @@ test.describe('dashboard', () => {
     await dashboard.goto();
 
     await layout.navigateTo('Settings', '/settings');
+  });
+
+  test('should show a success toast after starting a game', async ({ dashboard, layout }) => {
+    await stubApis(dashboard.page, { statuses: [STOPPED_GAME] });
+    await dashboard.goto();
+
+    await dashboard.startButton().click();
+
+    await expect(layout.toastMessage('minecraft is starting')).toBeVisible();
+  });
+
+  test('should show a stop toast with an Undo button after stopping a game', async ({ dashboard, layout }) => {
+    await stubApis(dashboard.page, { statuses: [RUNNING_GAME] });
+    await dashboard.goto();
+
+    await dashboard.stopButton().click();
+
+    // ConfirmDialog appears — confirm the stop.
+    await dashboard.page.getByRole('button', { name: /stop server/i }).click();
+
+    await expect(layout.toastMessage('minecraft stopped')).toBeVisible();
+    await expect(layout.toastUndoButton()).toBeVisible();
   });
 });

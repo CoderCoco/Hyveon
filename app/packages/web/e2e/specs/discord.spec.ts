@@ -9,6 +9,7 @@ import {
   VALID_GUILD_ID,
   VALID_GUILD_ID_2,
   VALID_USER_ID,
+  AppLayout,
   type DiscordConfigRedacted,
 } from '../fixtures/index.js';
 
@@ -288,5 +289,17 @@ test.describe('discord settings', () => {
 
     await page.goto('/discord');
     await expect(page.getByText(/infrastructure not deployed yet/i)).toBeVisible();
+  });
+
+  test('should show a success toast after saving credentials', async ({ authedPage: page }) => {
+    await stubApis(page, { discord: CONFIGURED_DISCORD_CONFIG });
+    await page.goto('/discord');
+
+    // Credentials tab is the default — wait for the form to be ready.
+    await expect(page.getByRole('button', { name: 'Save credentials' })).toBeVisible();
+    await page.getByRole('button', { name: 'Save credentials' }).click();
+
+    const layout = new AppLayout(page);
+    await expect(layout.toastMessage('Credentials saved')).toBeVisible();
   });
 });

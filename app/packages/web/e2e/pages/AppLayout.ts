@@ -23,4 +23,14 @@ export class AppLayout {
     await this.sidebarLink(label).click();
     await this.page.waitForURL(expectedPath);
   }
+
+  /** A visible Sonner toast matched by its message text. */
+  toastMessage(text: string | RegExp): import('@playwright/test').Locator {
+    return this.page.locator('[data-sonner-toast]').filter({ hasText: text });
+  }
+
+  /** The Undo action button inside a Sonner toast. */
+  toastUndoButton(): import('@playwright/test').Locator {
+    return this.page.locator('[data-sonner-toast]').getByRole('button', { name: 'Undo' });
+  }
 }

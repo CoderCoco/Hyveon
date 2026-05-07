@@ -10,8 +10,14 @@ const apiMock = vi.hoisted(() => ({
   discordRemoveGuild: vi.fn().mockResolvedValue(undefined),
   discordDeletePermission: vi.fn().mockResolvedValue(undefined),
   discordSaveAdmins: vi.fn().mockResolvedValue(undefined),
+  discordSaveCredentials: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
+
+const toastMock = vi.hoisted(() =>
+  Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+);
+vi.mock('sonner', () => ({ toast: toastMock }));
 
 import { DiscordPage } from './discord.page.js';
 import { renderPage } from '../test-utils/render-page.utils.js';
@@ -34,6 +40,9 @@ describe('DiscordPage', () => {
     apiMock.costsEstimate.mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 });
     apiMock.games.mockResolvedValue({ games: ['minecraft'] });
     apiMock.discordConfig.mockResolvedValue(REDACTED_CONFIG);
+    apiMock.discordSaveCredentials.mockResolvedValue(undefined);
+    toastMock.success.mockClear();
+    toastMock.error.mockClear();
   });
 
   it('should render the Discord heading and the polling indicator wired to the status poll', async () => {
@@ -137,6 +146,43 @@ describe('DiscordPage', () => {
       await userEvent.click(screen.getByRole('button', { name: /remove guild/i }));
 
       expect(apiMock.discordRemoveGuild).toHaveBeenCalledWith('111111111111111111');
+    });
+  });
+
+  describe('Credentials tab — Save', () => {
+    it('should show a success toast after saving credentials', async () => {
+      renderPage(<DiscordPage />, { initialEntries: ['/discord'] });
+
+      await screen.findByRole('tab', { name: 'Credentials' });
+      await userEvent.click(screen.getByRole('button', { name: 'Save credentials' }));
+
+      expect(toastMock.success).toHaveBeenCalledWith('Credentials saved');
+    });
+
+    it('should show an error toast when saving credentials fails', async () => {
+      apiMock.discordSaveCredentials.mockRejectedValueOnce(new Error('unauthorized'));
+      renderPage(<DiscordPage />, { initialEntries: ['/discord'] });
+
+      await screen.findByRole('tab', { name: 'Credentials' });
+      await userEvent.click(screen.getByRole('button', { name: 'Save credentials' }));
+
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'Action failed',
+        expect.objectContaining({ description: 'unauthorized' }),
+      );
+    });
+
+    it('should show the fallback description when saving credentials fails with an unknown error', async () => {
+      apiMock.discordSaveCredentials.mockRejectedValueOnce('not an Error');
+      renderPage(<DiscordPage />, { initialEntries: ['/discord'] });
+
+      await screen.findByRole('tab', { name: 'Credentials' });
+      await userEvent.click(screen.getByRole('button', { name: 'Save credentials' }));
+
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'Action failed',
+        expect.objectContaining({ description: 'An unknown error occurred' }),
+      );
     });
   });
 
