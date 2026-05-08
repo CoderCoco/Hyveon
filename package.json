@@ -20,7 +20,7 @@
     "app:lint": "npm run lint           -w game-server-manager",
     "app:lint:fix": "npm run lint:fix       -w game-server-manager",
     "app:test:e2e": "npm run test:e2e       -w @gsd/web",
-    "app:test:integration": "npm run build -w @gsd/server && npm run test:integration -w @gsd/web",
+    "app:test:integration": "node app/scripts/embed-tfstate.mjs && npm run build -w @gsd/server && npm run test:integration -w @gsd/web",
     "scripts:init-parent": "npm run init-parent  -w @gsd/scripts"
   }
 }
