@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { DiscordController } from './discord.controller.js';
 import type { DiscordConfigService, DiscordAction } from '../services/DiscordConfigService.js';

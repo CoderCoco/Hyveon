@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { GamesController } from './games.controller.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 import type { EcsService } from '../services/EcsService.js';
