@@ -38,5 +38,6 @@ app/packages/server/src/generated/tfstate.ts
 app/packages/web/test-results/
 app/packages/web/playwright-report/
 app/packages/web/playwright/.cache/
+app/packages/web/dist-integration/
 
 .make

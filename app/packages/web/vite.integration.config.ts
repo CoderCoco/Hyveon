@@ -20,6 +20,10 @@ export default defineConfig({
     outDir: 'dist-integration',
     emptyOutDir: true,
   },
+  define: {
+    // Speed up the status poller so browser integration tests don't wait 20 s per cycle.
+    'import.meta.env.VITE_STATUS_POLL_MS': '"3000"',
+  },
   preview: {
     port: 4174,
     strictPort: true,

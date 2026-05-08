@@ -140,6 +140,7 @@ When working in a specific area, read the relevant doc rather than relying on wh
 | AWS IAM deploy policy | `docs/docs/setup.md` |
 | Terraform variables reference | `docs/docs/components/terraform.md` |
 | Full setup walkthrough | `docs/docs/setup.md` |
+| Integration test architecture | `docs/docs/components/integration-tests.md` |
 | Copilot review tuning | `.github/copilot-instructions.md` |
 | PR creation command | `.claude/commands/pr.md` |
 
@@ -161,14 +162,13 @@ Any time you add or remove Terraform variables, update **all four** of these in 
 
 ### Two-tier browser testing strategy
 
-The test suite has two complementary tiers:
+The test suite has three complementary tiers:
 
 | Tier | Command | What runs | When to add specs |
 |------|---------|-----------|-------------------|
 | **Unit / integration** | `npm run app:test` | Vitest. Server-side logic, hooks, helpers run under the `node` environment; React component specs in `@gsd/web` run under `jsdom` via `environmentMatchGlobs`. No real network — AWS SDK mocked via `aws-sdk-client-mock`; the `@gsd/web` API client is stubbed via `vi.mock`. | Pure logic, hook behaviour, server controllers, **per-component React behaviour** (rendering, callbacks, internal state transitions). |
 | **E2E (tier 1 — #74)** | `npm run app:test:e2e` | Playwright against `vite build` + `vite preview`. Nest server never runs; every `/api/*` call is stubbed at the network layer via `page.route()`. | User-visible flows: routing, auth gate, button interactions, status-badge rendering, optimistic updates. |
-
-A planned **tier 2** (#75) will add full-stack specs (real Nest + mocked AWS SDK) for scenarios that require real HTTP contract validation between the client and server. Until that lands, all browser-facing specs belong in tier 1.
+| **Integration (tier 2 — #75)** | `npm run app:test:integration` | Playwright against `vite build (integration config)` + `vite preview` + real Nest server on `:3002`. AWS SDK intercepted by `aws-sdk-client-mock`. Mock state pushed via `ServerMocks` fixture to `/api/test/mocks/*`. | Real HTTP contract validation, `ApiTokenGuard` behaviour, `ConfigService` tfstate parsing, start/stop flows end-to-end, error propagation from ECS through the API response. |
 
 **React component unit tests (`@gsd/web`):**
 - Use **Vitest + jsdom + `@testing-library/react` + `@testing-library/user-event`**. `@testing-library/jest-dom` matchers (`toBeInTheDocument`, `toHaveTextContent`, etc.) are auto-loaded via `app/vitest.setup.ts`.
@@ -180,7 +180,7 @@ A planned **tier 2** (#75) will add full-stack specs (real Nest + mocked AWS SDK
 - Each routed page (`DashboardPage`, `CostsPage`, `DiscordPage`, `LogsPage`, `SettingsPage`) gets a co-located `*.test.tsx` that mounts the page through `renderPage()` (`app/packages/web/src/test-utils/renderPage.tsx`). The helper wraps children in `PollingProvider → GameStatusProvider → MemoryRouter` so the same provider stack the production app uses is exercised; pass `initialEntries` when the page reads `useLocation`.
 - Mock `../api.js` with `vi.mock` + `vi.hoisted` so the page drives off canned data instead of real fetches. Stub every method the page (and the GameStatusProvider above it) calls — at minimum `api.status` and `api.costsEstimate` — or the test will hang waiting for the polling registry to settle.
 - These tests are intentionally **complementary** to the e2e tier, not a replacement: the e2e specs prove the indicator + chrome render at the route level under a real Vite preview build; the unit tests pin the page's own provider wiring (e.g. that `<PollingIndicator />` resolves to "Updated …" once the mocked status poll resolves) and let us iterate on the page layout without spinning up Playwright.
-- Keep page-test scope tight: smoke-render each header section, exercise interactive controls that aren't already covered by a child component's unit test, and verify the polling indicator wiring. Anything that requires real HTTP belongs in the planned tier-2 specs (#75).
+- Keep page-test scope tight: smoke-render each header section, exercise interactive controls that aren't already covered by a child component's unit test, and verify the polling indicator wiring. Anything that requires real HTTP belongs in tier-2 integration specs (`e2e/integration-specs/`).
 
 **Playwright conventions:**
 - Specs live under `app/packages/web/e2e/specs/`.
@@ -190,6 +190,13 @@ A planned **tier 2** (#75) will add full-stack specs (real Nest + mocked AWS SDK
 - Import `{ test, expect, stubApis }` plus the page-object fixture you need (`logs`, `dashboard`, `costs`, `layout`, `authGate`) from `../fixtures/index.js` for authenticated specs; use `@playwright/test` directly for auth-gate specs.
 - Use the `authedPage` fixture (token pre-seeded in localStorage) only when a spec needs raw `Page` access (e.g. to call `stubApis` or `addInitScript`); otherwise prefer the higher-level page-object fixtures.
 - Stubs must cover every `/api/*` endpoint the page hits, or the catch-all returns 404 and the test will surface the missing stub quickly.
+
+**Integration test conventions (tier 2):**
+- Specs live under `app/packages/web/e2e/integration-specs/`. Import `{ test, expect }` from `./index.js` (NOT from `@playwright/test`) — the extended `test` includes the `serverMocks`, `authedPage`, and `dashboard` fixtures.
+- `serverMocks` (`ServerMocks` from `e2e/fixtures/server-mocks.ts`) pushes queued responses to the test server via `POST /api/test/mocks/*`. Always include it in test parameters — it resets the MockStore before and after each spec automatically.
+- The test Nest server (`test-main.ts`) runs on `:3002`; the Vite integration preview (port 4174) proxies `/api` to it. Pure HTTP tests call `http://localhost:3002/api/...` directly (bypasses the proxy). Browser tests navigate to the `baseURL` (port 4174) and the proxy routes API calls.
+- `workers: 1` and `fullyParallel: false` in `playwright.integration.config.ts` are intentional — the shared in-process `MockStore` cannot be used concurrently.
+- The integration Vite build sets `VITE_STATUS_POLL_MS=3000` so pollers fire every 3 s instead of 20 s, keeping status-polling specs fast without busy-looping.
 
 ## Git & Branch Workflow
 

@@ -28,7 +28,8 @@ export default defineConfig({
     {
       command: `node ${join(serverDist, 'test-main.js')}`,
       url: 'http://localhost:3002/api/env?token=test-token',
-      timeout: 30_000,
+      // ESM module loading from Windows/DrvFs in WSL2 is slow — allow up to 2 min.
+      timeout: 120_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: '3002',
