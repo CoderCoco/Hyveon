@@ -25,13 +25,15 @@ beforeEach(() => {
   localStorageMock.setItem.mockClear();
   localStorageMock.removeItem.mockClear();
   vi.stubGlobal('localStorage', localStorageMock);
-  // Clear any token left by a previous test
   setStoredApiToken('');
-  // Drain the pending-retry queue by making a no-op retry
   setUnauthorizedHandler(null);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Drain any requests that were parked by a 401 and not resolved by the test
+  // itself, so they don't leak into the next test's pendingRetries queue.
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 200, ok: true, json: () => Promise.resolve(null) }));
+  await retryPendingAfterAuth();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
