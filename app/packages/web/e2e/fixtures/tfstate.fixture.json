@@ -1,0 +1,25 @@
+{
+  "version": 4,
+  "terraform_version": "1.9.0",
+  "outputs": {
+    "aws_region":                     { "value": "us-east-1",          "type": "string" },
+    "ecs_cluster_name":               { "value": "test-cluster",        "type": "string" },
+    "ecs_cluster_arn":                { "value": "arn:aws:ecs:us-east-1:123456789012:cluster/test-cluster", "type": "string" },
+    "subnet_ids":                     { "value": "subnet-test1234",     "type": "string" },
+    "security_group_id":              { "value": "sg-test1234",         "type": "string" },
+    "file_manager_security_group_id": { "value": "sg-fm-test1234",      "type": "string" },
+    "efs_file_system_id":             { "value": "fs-test1234",         "type": "string" },
+    "efs_access_points": {
+      "value": { "minecraft": "fsap-mc1234", "valheim": "fsap-vh1234" },
+      "type": ["object", { "minecraft": "string", "valheim": "string" }]
+    },
+    "domain_name":                    { "value": "test.example.com",   "type": "string" },
+    "game_names":                     { "value": ["minecraft", "valheim"], "type": ["tuple", ["string", "string"]] },
+    "alb_dns_name":                   { "value": null,                  "type": "string" },
+    "acm_certificate_arn":            { "value": null,                  "type": "string" },
+    "discord_table_name":             { "value": "test-discord-table",  "type": "string" },
+    "discord_bot_token_secret_arn":   { "value": "arn:aws:secretsmanager:us-east-1:123456789012:secret/test/discord/bot-token",   "type": "string" },
+    "discord_public_key_secret_arn":  { "value": "arn:aws:secretsmanager:us-east-1:123456789012:secret/test/discord/public-key",  "type": "string" },
+    "interactions_invoke_url":        { "value": null,                  "type": "string" }
+  }
+}

@@ -7,33 +7,17 @@ import { EMBEDDED_TFSTATE } from '../generated/tfstate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/**
- * Probes candidate relative paths from __dirname in order and returns the
- * first that exists on disk.  Falls back to the first candidate when none
- * exist so callers get a deterministic (missing-file) path rather than
- * undefined behaviour.
- *
- * Needed because the depth from __dirname to the repo/workspace root differs
- * between environments:
- *   - local source tree  (src/services or dist/services inside repo): 5 levels up → repo root
- *   - Docker image       (dist/services inside /app):                  4 levels up → /app
- */
-function resolveRuntimePath(...relativeCandidates: string[]): string {
-  for (const rel of relativeCandidates) {
-    const resolved = join(__dirname, rel);
-    if (existsSync(resolved)) return resolved;
-  }
-  return join(__dirname, relativeCandidates[0]);
-}
+// dist/services/ → 4 hops up = app root (repo: app/, Docker: /workspace/app/)
+// 5 hops up = repo/workspace root, where terraform/ lives
+const APP_ROOT = join(__dirname, '..', '..', '..', '..');
 
-const TF_STATE_PATH = resolveRuntimePath(
-  '../../../../../terraform/terraform.tfstate',
-  '../../../../terraform/terraform.tfstate',
-);
-const CONFIG_PATH = resolveRuntimePath(
-  '../../../../../app/server_config.json',
-  '../../../../server_config.json',
-);
+const TF_STATE_PATH =
+  process.env['TF_STATE_PATH'] ??
+  join(APP_ROOT, '..', 'terraform', 'terraform.tfstate');
+
+const SERVER_CONFIG_PATH =
+  process.env['SERVER_CONFIG_PATH'] ??
+  join(APP_ROOT, 'server_config.json');
 
 /**
  * Shape of the subset of Terraform root outputs the management app consumes.
@@ -82,7 +66,8 @@ const DEFAULT_CONFIG: WatchdogConfig = {
  *    lazily and cached in-memory until {@link ConfigService.invalidateCache}
  *    is called.
  *  - `server_config.json` — the user-editable file holding the watchdog
- *    tunables and the optional API bearer token.
+ *    tunables and the optional API bearer token. Path resolved via
+ *    `SERVER_CONFIG_PATH` env var, defaulting to `<app-root>/server_config.json`.
  *  - A handful of process env vars (`AWS_DEFAULT_REGION`, `API_TOKEN`).
  *
  * Every other service injects this one instead of touching `process.env` or
@@ -196,9 +181,9 @@ export class ConfigService {
     if (env !== undefined) {
       return env.length > 0 ? env : null;
     }
-    if (!existsSync(CONFIG_PATH)) return null;
+    if (!existsSync(SERVER_CONFIG_PATH)) return null;
     try {
-      const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as { api_token?: unknown };
+      const raw = JSON.parse(readFileSync(SERVER_CONFIG_PATH, 'utf-8')) as { api_token?: unknown };
       return typeof raw.api_token === 'string' && raw.api_token.length > 0 ? raw.api_token : null;
     } catch (err) {
       logger.warn('Could not read api_token from config file', { err });
@@ -225,9 +210,9 @@ export class ConfigService {
    * fresh object on every call — safe for callers to mutate.
    */
   getConfig(): WatchdogConfig {
-    if (!existsSync(CONFIG_PATH)) return { ...DEFAULT_CONFIG };
+    if (!existsSync(SERVER_CONFIG_PATH)) return { ...DEFAULT_CONFIG };
     try {
-      const saved = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as Partial<WatchdogConfig>;
+      const saved = JSON.parse(readFileSync(SERVER_CONFIG_PATH, 'utf-8')) as Partial<WatchdogConfig>;
       return { ...DEFAULT_CONFIG, ...saved };
     } catch (err) {
       logger.warn('Could not read config file, using defaults', { err });
@@ -241,7 +226,7 @@ export class ConfigService {
    * save here is not effective until the next `terraform apply`.
    */
   saveConfig(config: WatchdogConfig): void {
-    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    writeFileSync(SERVER_CONFIG_PATH, JSON.stringify(config, null, 2));
     logger.info('Config saved', config);
   }
 }

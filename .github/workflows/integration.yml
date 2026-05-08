@@ -1,0 +1,36 @@
+name: Integration Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+        working-directory: app/packages/web
+
+      - run: npm run app:test:integration
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-playwright-report
+          path: app/packages/web/playwright-report/
+          retention-days: 30

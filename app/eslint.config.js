@@ -28,6 +28,11 @@ export default tseslint.config(
       tsdoc,
     },
     rules: {
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
       'tsdoc/syntax': 'error',
       'jsdoc/require-jsdoc': ['error', {
         publicOnly: true,
