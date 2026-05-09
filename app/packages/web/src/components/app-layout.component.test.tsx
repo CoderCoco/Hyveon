@@ -2,8 +2,13 @@ import { useEffect } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { LiveIndicator, RefreshAllButton } from './app-layout.component.js';
+import { MemoryRouter } from 'react-router-dom';
+import { AppLayout, LiveIndicator, RefreshAllButton } from './app-layout.component.js';
 import { PollingProvider, usePollingActions } from '../polling/polling-provider.component.js';
+
+vi.mock('../api.service.js', () => ({
+  api: { env: () => Promise.resolve(null) },
+}));
 
 /**
  * Mounts a child component that registers a poller in `useEffect` so the
@@ -59,6 +64,35 @@ describe('AppLayout — RefreshAllButton', () => {
       await Promise.resolve();
     });
     expect(fn.mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+describe('AppLayout — skip link and nav landmarks', () => {
+  it('should render a skip-to-main-content link as the first focusable element', () => {
+    render(
+      <PollingProvider>
+        <MemoryRouter>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' });
+    expect(skipLink).toBeInTheDocument();
+    expect(skipLink).toHaveAttribute('href', '#main');
+  });
+
+  it('should mark the active route link with aria-current="page"', () => {
+    render(
+      <PollingProvider>
+        <MemoryRouter initialEntries={['/logs']}>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+
+    expect(screen.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
   });
 });
 

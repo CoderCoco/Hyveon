@@ -173,7 +173,7 @@ function KpiTile({ accent, label, Icon, value, delta, spark }: TileSpec) {
         <span className="text-[0.7rem] font-medium uppercase tracking-wider text-[var(--color-muted-foreground)]">
           {label}
         </span>
-        <Icon className={cn('size-4', ACCENT.icon[accent])} />
+        <Icon className={cn('size-4', ACCENT.icon[accent])} aria-hidden="true" />
       </div>
 
       <div className="font-[var(--font-ui)] text-2xl font-bold leading-none mb-2 text-[var(--color-foreground)]">

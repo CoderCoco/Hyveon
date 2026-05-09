@@ -55,12 +55,20 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen bg-background">
+      {/* Skip-to-content link — first focusable element, revealed on focus */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-card focus:text-foreground focus:rounded-[var(--radius-md)] focus:ring-2 focus:ring-[var(--color-primary)] focus:outline-none"
+      >
+        Skip to main content
+      </a>
+
       {/* Sidebar */}
       <aside className="w-60 border-r border-border bg-card flex flex-col">
         {/* Brand */}
         <div className="px-4 py-5 border-b border-border">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center">
+            <div className="w-8 h-8 rounded bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center" aria-hidden="true">
               <Server className="w-5 h-5 text-white" />
             </div>
             <span className="font-semibold text-foreground">Game Servers</span>
@@ -68,29 +76,33 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </div>
 
         {/* Nav sections */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
+        <nav aria-label="Main navigation" className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
           {/* Monitoring */}
           <div>
-            <div className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            <p id="nav-monitoring" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Monitoring
-            </div>
-            <div className="space-y-1">
+            </p>
+            <ul aria-labelledby="nav-monitoring" className="space-y-1 list-none">
               {monitoringItems.map((item) => (
-                <NavLink key={item.to + item.label} item={item} active={location.pathname === item.to} />
+                <li key={item.to + item.label}>
+                  <NavLink item={item} active={location.pathname === item.to} />
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
 
           {/* Configuration */}
           <div>
-            <div className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            <p id="nav-configuration" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Configuration
-            </div>
-            <div className="space-y-1">
+            </p>
+            <ul aria-labelledby="nav-configuration" className="space-y-1 list-none">
               {configItems.map((item) => (
-                <NavLink key={item.to + item.label} item={item} active={location.pathname === item.to} />
+                <li key={item.to + item.label}>
+                  <NavLink item={item} active={location.pathname === item.to} />
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         </nav>
       </aside>
@@ -107,28 +119,32 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Search placeholder */}
-            <div className="relative">
+            {/* Search placeholder — not yet functional; hidden from keyboard/screen readers */}
+            <div className="relative" aria-hidden="true">
               <input
                 type="text"
                 placeholder="Search... ⌘K"
                 className="w-64 px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-2 focus:ring-purple-500/50"
                 readOnly
+                tabIndex={-1}
               />
             </div>
 
             <RefreshAllButton />
             <LiveIndicator />
 
-            {/* Avatar placeholder */}
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center">
+            {/* Avatar placeholder — decorative */}
+            <div
+              className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center"
+              aria-hidden="true"
+            >
               <span className="text-xs font-medium text-white">OP</span>
             </div>
           </div>
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-auto p-8">
+        <main id="main" className="flex-1 overflow-auto p-8">
           {children}
         </main>
       </div>
@@ -151,9 +167,10 @@ export function RefreshAllButton() {
       size="sm"
       onClick={() => void refreshAll()}
       aria-label="Refresh all"
+      aria-busy={anyLoading}
       disabled={Object.keys(pollers).length === 0}
     >
-      <RefreshCw className={cn('size-3.5', anyLoading && 'animate-spin')} />
+      <RefreshCw className={cn('size-3.5', anyLoading && 'motion-safe:animate-spin')} aria-hidden="true" />
       Refresh
     </Button>
   );
@@ -172,17 +189,22 @@ export function LiveIndicator() {
   const anyFresh = entries.some((p) => p.lastSuccessAt !== null && !isStale(p, now));
   const allStale = entries.length > 0 && entries.every((p) => isStale(p, now));
   const dotClass = anyFresh
-    ? 'bg-[var(--color-cyan)] animate-pulse'
+    ? 'bg-[var(--color-cyan)] motion-safe:animate-pulse'
     : allStale
       ? 'bg-[var(--color-muted-foreground)]/60'
       : 'bg-[var(--color-muted-foreground)]/40';
   const labelClass = allStale
     ? 'text-[var(--color-muted-foreground)]/60'
     : 'text-muted-foreground';
+  const statusLabel = anyFresh ? 'Live — data is current' : allStale ? 'Stale — data may be out of date' : 'Connecting';
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded border border-border">
-      <div className={cn('w-2 h-2 rounded-full', dotClass)} />
-      <span className={cn('text-xs font-medium', labelClass)}>LIVE</span>
+    <div
+      className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded border border-border"
+      role="status"
+      aria-label={statusLabel}
+    >
+      <div className={cn('w-2 h-2 rounded-full', dotClass)} aria-hidden="true" />
+      <span className={cn('text-xs font-medium', labelClass)} aria-hidden="true">LIVE</span>
     </div>
   );
 }
@@ -197,15 +219,15 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   );
   if (item.disabled) {
     return (
-      <span className={className}>
-        <Icon className="w-4 h-4" />
+      <span className={className} aria-disabled="true">
+        <Icon className="w-4 h-4" aria-hidden="true" />
         {item.label}
       </span>
     );
   }
   return (
-    <Link to={item.to} className={className}>
-      <Icon className="w-4 h-4" />
+    <Link to={item.to} className={className} aria-current={active ? 'page' : undefined}>
+      <Icon className="w-4 h-4" aria-hidden="true" />
       {item.label}
     </Link>
   );

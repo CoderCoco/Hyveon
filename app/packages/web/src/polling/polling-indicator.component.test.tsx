@@ -91,6 +91,19 @@ describe('PollingIndicator', () => {
     expect(screen.getByText('Not polling')).toBeInTheDocument();
   });
 
+  it('should have role="status" so screen readers announce updates', async () => {
+    render(
+      <PollingProvider>
+        <PollerSeed name="status" intervalMs={20_000} />
+        <PollingIndicator />
+      </PollingProvider>,
+    );
+
+    await flushPolls();
+
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
   it('should expose the next-poll countdown via the tooltip on hover', async () => {
     const user = userEvent.setup();
     render(

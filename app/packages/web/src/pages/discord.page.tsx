@@ -525,7 +525,7 @@ function SecretField({
           type="button"
           onClick={() => setReveal((r) => !r)}
           aria-label={reveal ? 'Hide value' : 'Show value'}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
         >
           {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
         </button>

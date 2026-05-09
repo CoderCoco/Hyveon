@@ -37,12 +37,14 @@ export function PollingIndicator({ name = 'status', className }: Props) {
   if (stale) {
     return (
       <div
+        role="status"
+        aria-live="polite"
         className={cn(
           'inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-red)]/40 bg-[var(--color-red)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-red)]',
           className,
         )}
       >
-        <span className="size-1.5 rounded-full bg-[var(--color-red)]" />
+        <span className="size-1.5 rounded-full bg-[var(--color-red)]" aria-hidden="true" />
         Stale · last updated {formatAgo(state.lastSuccessAt, now)}
       </div>
     );
@@ -53,6 +55,8 @@ export function PollingIndicator({ name = 'status', className }: Props) {
       <Tooltip>
         <TooltipTrigger asChild>
           <div
+            role="status"
+            aria-live="polite"
             className={cn(
               'inline-flex items-center gap-1.5 text-xs text-[var(--color-muted-foreground)]',
               className,
@@ -61,8 +65,9 @@ export function PollingIndicator({ name = 'status', className }: Props) {
             <RefreshCw
               className={cn(
                 'size-3 text-[var(--color-cyan)]',
-                state.loading && 'animate-spin',
+                state.loading && 'motion-safe:animate-spin',
               )}
+              aria-hidden="true"
             />
             <span>Updated {formatAgo(state.lastSuccessAt, now)}</span>
           </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Copy,
@@ -47,15 +47,15 @@ function badgeVariant(state: ServerState): 'success' | 'warning' | 'destructive'
   }
 }
 
-/** Map a server state to the icon shown next to the badge text. */
+/** Map a server state to the icon shown next to the badge text. Always aria-hidden — the text label already conveys the state. */
 function StateIcon({ state, className }: { state: ServerState; className?: string }) {
   const cls = cn('size-3', className);
   switch (state) {
-    case 'running':      return <CircleCheck     className={cls} />;
-    case 'starting':     return <Loader2         className={cn(cls, 'animate-spin')} />;
-    case 'stopped':      return <PowerOff        className={cls} />;
-    case 'not_deployed': return <CircleX         className={cls} />;
-    case 'error':        return <AlertTriangle   className={cls} />;
+    case 'running':      return <CircleCheck     className={cls} aria-hidden="true" />;
+    case 'starting':     return <Loader2         className={cn(cls, 'motion-safe:animate-spin')} aria-hidden="true" />;
+    case 'stopped':      return <PowerOff        className={cls} aria-hidden="true" />;
+    case 'not_deployed': return <CircleX         className={cls} aria-hidden="true" />;
+    case 'error':        return <AlertTriangle   className={cls} aria-hidden="true" />;
   }
 }
 
@@ -136,6 +136,15 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
   const { game, state } = status;
   const [busy, setBusy] = useState(false);
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
+  const [stateAnnouncement, setStateAnnouncement] = useState('');
+  const prevStateRef = useRef(state);
+
+  useEffect(() => {
+    if (prevStateRef.current !== state) {
+      setStateAnnouncement(`${game} server is now ${STATE_LABELS[state].toLowerCase()}`);
+      prevStateRef.current = state;
+    }
+  }, [state, game]);
 
   const canStart = state === 'stopped' || state === 'not_deployed';
   const canStop  = state === 'running'  || state === 'starting';
@@ -200,8 +209,11 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
         onConfirm={() => { void handleStop(); }}
       />
       <Card className="relative overflow-hidden p-0 flex flex-col">
+        {/* Screen-reader announcement for state transitions */}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{stateAnnouncement}</span>
+
         {/* Top gradient accent rule */}
-        <div className={cn('h-0.5 w-full', accentRuleClass(state))} />
+        <div className={cn('h-0.5 w-full', accentRuleClass(state))} aria-hidden="true" />
 
         {/* Header */}
         <div className="px-5 pt-4 pb-4 flex items-start justify-between gap-3">
@@ -259,6 +271,8 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
               size="sm"
               onClick={() => void handleStart()}
               disabled={!canStart || busy}
+              aria-busy={busy}
+              aria-label={`Start ${game} server`}
               className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-green)] to-[var(--color-cyan)] hover:brightness-110"
             >
               Start
@@ -275,6 +289,8 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
                 }
               }}
               disabled={!canStop || busy}
+              aria-busy={busy}
+              aria-label={`Stop ${game} server`}
               className="flex-1 min-w-[6rem] bg-gradient-to-r from-[var(--color-red)] to-[var(--color-pink)] hover:brightness-110"
             >
               Stop
