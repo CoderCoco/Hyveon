@@ -44,8 +44,12 @@ export function PollingIndicator({ name = 'status', className }: Props) {
           className,
         )}
       >
+        {/* Stable text for AT — only changes on stale transition, not every tick */}
+        <span className="sr-only">
+          {`Polling data is stale${state.lastSuccessAt ? ` — last updated at ${new Date(state.lastSuccessAt).toLocaleTimeString()}` : ''}`}
+        </span>
         <span className="size-1.5 rounded-full bg-[var(--color-red)]" aria-hidden="true" />
-        Stale · last updated {formatAgo(state.lastSuccessAt, now)}
+        <span aria-hidden="true">Stale · last updated {formatAgo(state.lastSuccessAt, now)}</span>
       </div>
     );
   }
@@ -62,6 +66,12 @@ export function PollingIndicator({ name = 'status', className }: Props) {
               className,
             )}
           >
+            {/* Stable text for AT — only changes when lastSuccessAt changes, not every tick */}
+            <span className="sr-only">
+              {state.lastSuccessAt
+                ? `Data updated at ${new Date(state.lastSuccessAt).toLocaleTimeString()}`
+                : 'Awaiting first poll'}
+            </span>
             <RefreshCw
               className={cn(
                 'size-3 text-[var(--color-cyan)]',
@@ -69,7 +79,7 @@ export function PollingIndicator({ name = 'status', className }: Props) {
               )}
               aria-hidden="true"
             />
-            <span>Updated {formatAgo(state.lastSuccessAt, now)}</span>
+            <span aria-hidden="true">Updated {formatAgo(state.lastSuccessAt, now)}</span>
           </div>
         </TooltipTrigger>
         <TooltipContent side="bottom">
