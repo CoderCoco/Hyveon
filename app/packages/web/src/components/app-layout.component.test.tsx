@@ -126,3 +126,49 @@ describe('AppLayout — LiveIndicator', () => {
     expect(dot?.className).toMatch(/var\(--color-cyan\)/);
   });
 });
+
+describe('AppLayout — mobile navigation', () => {
+  it('should render a hamburger button that opens the mobile nav', async () => {
+    const user = userEvent.setup();
+    render(
+      <PollingProvider>
+        <MemoryRouter>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+    const hamburger = screen.getByRole('button', { name: 'Open navigation' });
+    expect(hamburger).toBeInTheDocument();
+    await user.click(hamburger);
+    expect(screen.getByRole('button', { name: 'Close navigation' })).toBeInTheDocument();
+  });
+
+  it('should close the mobile nav when the close button is clicked', async () => {
+    const user = userEvent.setup();
+    render(
+      <PollingProvider>
+        <MemoryRouter>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+    await user.click(screen.getByRole('button', { name: 'Close navigation' }));
+    expect(screen.queryByRole('button', { name: 'Close navigation' })).not.toBeInTheDocument();
+  });
+
+  it('should close the mobile nav when a nav link is clicked', async () => {
+    const user = userEvent.setup();
+    render(
+      <PollingProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+    const logsLinks = screen.getAllByRole('link', { name: 'Logs' });
+    await user.click(logsLinks[0]!);
+    expect(screen.queryByRole('button', { name: 'Close navigation' })).not.toBeInTheDocument();
+  });
+});

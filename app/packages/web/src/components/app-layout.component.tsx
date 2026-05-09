@@ -13,6 +13,8 @@ import {
   MessageSquare,
   Settings,
   RefreshCw,
+  Menu,
+  X,
 } from 'lucide-react';
 
 interface NavItem {
@@ -36,22 +38,78 @@ const configItems: NavItem[] = [
 ];
 
 /**
+ * Shared nav sections used by both the desktop sidebar and the mobile drawer.
+ * Accepts an optional `onNavigate` callback that fires when a nav link is clicked,
+ * allowing the mobile drawer to close itself on navigation.
+ */
+function NavSections({
+  currentPath,
+  onNavigate,
+}: {
+  currentPath: string;
+  onNavigate?: () => void;
+}) {
+  return (
+    <nav aria-label="Main navigation" className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
+      {/* Monitoring */}
+      <div>
+        <p id="nav-monitoring" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Monitoring
+        </p>
+        <ul aria-labelledby="nav-monitoring" className="space-y-1 list-none">
+          {monitoringItems.map((item) => (
+            <li key={item.to + item.label}>
+              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Configuration */}
+      <div>
+        <p id="nav-configuration" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Configuration
+        </p>
+        <ul aria-labelledby="nav-configuration" className="space-y-1 list-none">
+          {configItems.map((item) => (
+            <li key={item.to + item.label}>
+              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+            </li>
+          ))}
+        </ul>
+      </div>
+    </nav>
+  );
+}
+
+/**
  * Navigation shell — persistent sidebar + top bar that wraps all routed pages.
  * Sidebar shows "Monitoring" and "Configuration" sections with active-route
  * highlighting (purple gradient + 2px left accent). Top bar displays env pill
  * (e.g. "PROD · us-east-1"), search placeholder, and LIVE indicator.
+ *
+ * On mobile (< md), the sidebar is replaced by an off-canvas drawer that slides
+ * in from the left when the hamburger button in the top bar is clicked.
  */
 export function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const [env, setEnv] = useState<EnvInfo | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     api.env().then(setEnv).catch(console.error);
   }, []);
 
+  // Close mobile menu whenever the route changes (e.g. browser back/forward).
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
   const envLabel = env
     ? `${env.environment} · ${env.region}`
     : 'local';
+
+  const closeMobileMenu = () => setMobileMenuOpen(false);
 
   return (
     <div className="flex h-screen bg-background">
@@ -63,8 +121,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
         Skip to main content
       </a>
 
-      {/* Sidebar */}
-      <aside className="w-60 border-r border-border bg-card flex flex-col">
+      {/* Desktop sidebar — hidden on mobile */}
+      <aside className="hidden md:flex w-60 border-r border-border bg-card flex-col">
         {/* Brand */}
         <div className="px-4 py-5 border-b border-border">
           <div className="flex items-center gap-2">
@@ -75,56 +133,72 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        {/* Nav sections */}
-        <nav aria-label="Main navigation" className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-          {/* Monitoring */}
-          <div>
-            <p id="nav-monitoring" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Monitoring
-            </p>
-            <ul aria-labelledby="nav-monitoring" className="space-y-1 list-none">
-              {monitoringItems.map((item) => (
-                <li key={item.to + item.label}>
-                  <NavLink item={item} active={location.pathname === item.to} />
-                </li>
-              ))}
-            </ul>
+        <NavSections currentPath={location.pathname} />
+      </aside>
+
+      {/* Mobile drawer backdrop */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          onClick={closeMobileMenu}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Mobile off-canvas drawer */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-y-0 left-0 z-40 w-60 bg-card border-r border-border flex flex-col md:hidden">
+          {/* Drawer header with close button */}
+          <div className="px-4 py-5 border-b border-border flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center" aria-hidden="true">
+                <Server className="w-5 h-5 text-white" />
+              </div>
+              <span className="font-semibold text-foreground">Game Servers</span>
+            </div>
+            <button
+              type="button"
+              onClick={closeMobileMenu}
+              aria-label="Close navigation"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
           </div>
 
-          {/* Configuration */}
-          <div>
-            <p id="nav-configuration" className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Configuration
-            </p>
-            <ul aria-labelledby="nav-configuration" className="space-y-1 list-none">
-              {configItems.map((item) => (
-                <li key={item.to + item.label}>
-                  <NavLink item={item} active={location.pathname === item.to} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        </nav>
-      </aside>
+          <NavSections currentPath={location.pathname} onNavigate={closeMobileMenu} />
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="h-14 border-b border-border bg-card flex items-center justify-between px-6">
+        <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4 md:px-6">
           <div className="flex items-center gap-4">
-            <h1 className="text-lg font-semibold text-foreground">Game Server Manager</h1>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
+            {/* Hamburger button — only visible on mobile */}
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Open navigation"
+              aria-expanded={mobileMenuOpen}
+              className="shrink-0 md:hidden min-h-11 min-w-11 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <Menu className="w-5 h-5" aria-hidden="true" />
+            </button>
+
+            <h1 className="hidden sm:block text-lg font-semibold text-foreground shrink-0">Game Server Manager</h1>
+            <span className="inline-flex shrink-0 items-center px-2.5 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
               {envLabel}
             </span>
           </div>
 
           <div className="flex items-center gap-4">
             {/* Search placeholder — not yet functional; hidden from keyboard/screen readers */}
-            <div className="relative" aria-hidden="true">
+            <div className="relative hidden sm:block" aria-hidden="true">
               <input
                 type="text"
                 placeholder="Search... ⌘K"
-                className="w-64 px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                className="w-48 lg:w-64 px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-2 focus:ring-purple-500/50"
                 readOnly
                 tabIndex={-1}
               />
@@ -135,7 +209,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
             {/* Avatar placeholder — decorative */}
             <div
-              className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center"
+              className="shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center"
               aria-hidden="true"
             >
               <span className="text-xs font-medium text-white">OP</span>
@@ -144,7 +218,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main id="main" tabIndex={-1} className="flex-1 overflow-auto p-8">
+        <main id="main" tabIndex={-1} className="flex-1 overflow-auto p-4 md:p-8">
           {children}
         </main>
       </div>
@@ -171,7 +245,7 @@ export function RefreshAllButton() {
       disabled={Object.keys(pollers).length === 0}
     >
       <RefreshCw className={cn('size-3.5', anyLoading && 'motion-safe:animate-spin')} aria-hidden="true" />
-      Refresh
+      <span className="hidden sm:inline">Refresh</span>
     </Button>
   );
 }
@@ -204,12 +278,20 @@ export function LiveIndicator() {
       aria-label={statusLabel}
     >
       <div className={cn('w-2 h-2 rounded-full', dotClass)} aria-hidden="true" />
-      <span className={cn('text-xs font-medium', labelClass)} aria-hidden="true">LIVE</span>
+      <span className={cn('hidden sm:inline text-xs font-medium', labelClass)} aria-hidden="true">LIVE</span>
     </div>
   );
 }
 
-function NavLink({ item, active }: { item: NavItem; active: boolean }) {
+function NavLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
   const Icon = item.icon;
   const className = cn(
     'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
@@ -226,7 +308,12 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
     );
   }
   return (
-    <Link to={item.to} className={className} aria-current={active ? 'page' : undefined}>
+    <Link
+      to={item.to}
+      className={className}
+      aria-current={active ? 'page' : undefined}
+      onClick={onNavigate}
+    >
       <Icon className="w-4 h-4" aria-hidden="true" />
       {item.label}
     </Link>
