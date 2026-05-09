@@ -218,9 +218,9 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
         {/* Header */}
         <div className="px-5 pt-4 pb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="font-[var(--font-ui)] text-[17px] font-bold capitalize leading-tight text-[var(--color-foreground)]">
+            <h2 className="font-[var(--font-ui)] text-[17px] font-bold capitalize leading-tight text-[var(--color-foreground)]">
               {game}
-            </h3>
+            </h2>
             <div className="mt-1 flex items-center gap-1.5 min-w-0">
               <span
                 className={cn(

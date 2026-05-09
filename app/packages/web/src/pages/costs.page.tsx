@@ -334,7 +334,7 @@ function DeltaPill({
   const ArrowIcon = decreased ? ArrowDown : ArrowUp;
   return (
     <Badge variant={decreased ? 'success' : 'destructive'} className="font-[var(--font-mono)] gap-1">
-      <ArrowIcon className="size-3" />
+      <ArrowIcon className="size-3" aria-hidden="true" />
       {formatUsd(Math.abs(delta))}
       {deltaPct !== null && ` (${Math.abs(deltaPct).toFixed(1)}%)`}
       <span className="opacity-80 ml-1">vs prior</span>
@@ -404,6 +404,7 @@ function StackedBarChart({
                     <Tooltip key={g}>
                       <TooltipTrigger asChild>
                         <div
+                          role="img"
                           className="w-full transition-opacity hover:opacity-80"
                           style={{
                             height: `${segmentPct}%`,
@@ -496,7 +497,7 @@ function EstimatesTable({
           Per-game estimates
         </CardTitle>
         <div className="relative w-64">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-[var(--color-muted-foreground)]" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-[var(--color-muted-foreground)]" aria-hidden="true" />
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -590,7 +591,7 @@ function SortableHeader({
         )}
       >
         {label}
-        <Icon className="size-3" />
+        <Icon className="size-3" aria-hidden="true" />
       </Button>
     </TableHead>
   );

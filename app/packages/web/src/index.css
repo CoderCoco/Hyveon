@@ -11,7 +11,7 @@
 
   /* Foreground */
   --color-foreground:     #e1e4ed;
-  --color-muted-foreground: #8b90a5;
+  --color-muted-foreground: #9398ad;
 
   /* Accent palette */
   --color-primary:       #7c3aed;
@@ -43,7 +43,7 @@
   --surface2: #252a40;
   --border:   #2e3350;
   --text:     #e1e4ed;
-  --text-dim: #8b90a5;
+  --text-dim: #9398ad;
   --accent:   #7c3aed;
   --accent-h: #a78bfa;
   --green:    #4ade80;
