@@ -73,14 +73,14 @@ bootstrap() {
   # Each Lambda is an esbuild-produced single-file bundle at
   # packages/lambda/<name>/dist/handler.cjs. Terraform's `archive_file` resources
   # zip that up at apply time, so the bundles must exist on disk BEFORE
-  # `terraform apply` can run. `npm run build:lambdas` does exactly that.
+  # `terraform apply` can run. `npm run app:build:lambdas` does exactly that.
   echo ""
   echo "📦  Installing Node dependencies..."
-  cd "$SCRIPT_DIR/app"
+  cd "$SCRIPT_DIR"
   npm ci
   echo ""
   echo "🧱  Building Lambda bundles..."
-  npm run build:lambdas
+  npm run app:build:lambdas
 
   # 3. Bootstrap S3 backend, then Terraform init
   echo ""
@@ -177,7 +177,7 @@ bootstrap() {
   echo "    2. Run: ./setup.sh deploy   # rebuilds lambdas + terraform plan"
   echo "    3. Run: cd terraform && terraform apply"
   echo "    4. Run the management app:"
-  echo "         Dev:     cd app && npm run dev"
+  echo "         Dev:     npm run app:dev"
   echo "         Docker:  docker compose up --build"
   echo "    5. Open http://localhost:5173 (dev) or http://localhost:5000 (docker)"
   echo ""
@@ -300,9 +300,9 @@ deploy() {
   echo "  🚀  Build Lambdas + terraform plan"
   echo "  ──────────────────────────────────────"
   echo ""
-  cd "$SCRIPT_DIR/app"
+  cd "$SCRIPT_DIR"
   echo "🧱  Building Lambda bundles..."
-  npm run build:lambdas
+  npm run app:build:lambdas
   echo ""
   cd "$SCRIPT_DIR/terraform"
   echo "📋  Running terraform plan..."
