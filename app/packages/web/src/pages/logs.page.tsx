@@ -122,6 +122,7 @@ export function LogsPage() {
   const [autoscroll, setAutoscroll] = useState(true);
   const [search, setSearch] = useState('');
   const [hiddenLevels, setHiddenLevels] = useState<Set<LogLevel>>(new Set());
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [bufferedCount, setBufferedCount] = useState(0);
@@ -289,41 +290,91 @@ export function LogsPage() {
       </div>
 
       {/* Controls row */}
-      <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-        <GameCombobox games={games} value={selectedGame} onChange={setSelectedGame} />
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+          {/* Game selector — always visible */}
+          <GameCombobox games={games} value={selectedGame} onChange={setSelectedGame} />
 
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50" />
-          <Input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search visible buffer…"
-            className="pl-8"
-          />
+          {/* Filter toggle — only on mobile (md:hidden) */}
+          <Button
+            variant="secondary"
+            size="sm"
+            className="md:hidden"
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            aria-controls="logs-filters"
+          >
+            <Filter className="h-3.5 w-3.5" />
+            Filters
+            {hiddenLevels.size > 0 && (
+              <span className="ml-1 text-[var(--color-primary-light)]">({hiddenLevels.size} hidden)</span>
+            )}
+          </Button>
+
+          {/* Desktop: inline filter controls — hidden on mobile (hidden md:contents) */}
+          <div className="hidden md:contents">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50" />
+              <Input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search visible buffer…"
+                className="pl-8"
+              />
+            </div>
+            <LevelFilterMenu hidden={hiddenLevels} onToggle={toggleLevel} />
+            <label className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-sm text-[var(--color-foreground)]">
+              <input
+                type="checkbox"
+                checked={autoscroll}
+                onChange={(e) => setAutoscroll(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--color-primary)]"
+              />
+              Autoscroll
+            </label>
+          </div>
+
+          {/* Pause/Resume — always visible, pushed to the right */}
+          <Button
+            variant={paused ? 'default' : 'secondary'}
+            size="sm"
+            onClick={handlePauseToggle}
+            className="ml-auto"
+          >
+            {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+            {paused ? 'Resume' : 'Pause'}
+          </Button>
         </div>
 
-        <LevelFilterMenu hidden={hiddenLevels} onToggle={toggleLevel} />
-
-        <label className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-sm text-[var(--color-foreground)]">
-          <input
-            type="checkbox"
-            checked={autoscroll}
-            onChange={(e) => setAutoscroll(e.target.checked)}
-            className="h-3.5 w-3.5 accent-[var(--color-primary)]"
-          />
-          Autoscroll
-        </label>
-
-        <Button
-          variant={paused ? 'default' : 'secondary'}
-          size="sm"
-          onClick={handlePauseToggle}
-          className="ml-auto"
-        >
-          {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-          {paused ? 'Resume' : 'Pause'}
-        </Button>
+        {/* Mobile collapsible filter drawer */}
+        {filtersOpen && (
+          <div
+            id="logs-filters"
+            className="md:hidden flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+          >
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50" />
+              <Input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search visible buffer…"
+                className="pl-8 w-full"
+              />
+            </div>
+            <LevelFilterMenu hidden={hiddenLevels} onToggle={toggleLevel} />
+            <label className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-sm text-[var(--color-foreground)]">
+              <input
+                type="checkbox"
+                checked={autoscroll}
+                onChange={(e) => setAutoscroll(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--color-primary)]"
+              />
+              Autoscroll
+            </label>
+          </div>
+        )}
       </div>
 
       {error && (
