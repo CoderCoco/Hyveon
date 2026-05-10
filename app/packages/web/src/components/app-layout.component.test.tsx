@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppLayout, LiveIndicator, RefreshAllButton } from './app-layout.component.js';
@@ -167,9 +167,7 @@ describe('AppLayout — mobile navigation', () => {
       </PollingProvider>,
     );
     await user.click(screen.getByRole('button', { name: 'Open navigation' }));
-    const logsLinks = screen.getAllByRole('link', { name: 'Logs' });
-    // Click the drawer's Logs link (index 1 — desktop sidebar's link is rendered first in DOM)
-    await user.click(logsLinks[1]!);
+    await user.click(within(document.getElementById('mobile-nav')!).getByRole('link', { name: 'Logs' }));
     expect(screen.queryByRole('button', { name: 'Close navigation' })).not.toBeInTheDocument();
   });
 });
