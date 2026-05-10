@@ -234,7 +234,7 @@ export function GameCard({ status, estimate, onRefresh, onOpenFiles }: Props) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-5 w-5 p-0 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                  className="min-h-11 min-w-11 p-0 text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
                   onClick={() => void navigator.clipboard.writeText(connectStr)}
                   aria-label="Copy connect string"
                 >
