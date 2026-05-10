@@ -299,10 +299,9 @@ export function LogsPage() {
           <Button
             variant="secondary"
             size="sm"
-            className="md:hidden"
+            className="md:hidden min-h-11"
             onClick={() => setFiltersOpen((o) => !o)}
             aria-expanded={filtersOpen}
-            aria-controls="logs-filters"
           >
             <Filter className="h-3.5 w-3.5" />
             Filters

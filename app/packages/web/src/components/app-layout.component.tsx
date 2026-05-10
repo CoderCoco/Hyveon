@@ -94,7 +94,7 @@ function NavSections({
  * highlighting (purple gradient + 2px left accent). Top bar displays env pill
  * (e.g. "PROD · us-east-1"), search placeholder, and LIVE indicator.
  *
- * On mobile (< md), the sidebar is replaced by an off-canvas drawer that slides
+ * On mobile (below the `md` breakpoint), the sidebar is replaced by an off-canvas drawer that slides
  * in from the left when the hamburger button in the top bar is clicked.
  */
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -151,9 +151,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
         />
       )}
 
-      {/* Mobile off-canvas drawer */}
-      {mobileMenuOpen && (
-        <aside id="mobile-nav" className="fixed inset-y-0 left-0 z-40 w-60 bg-card border-r border-border flex flex-col md:hidden">
+      {/* Mobile off-canvas drawer — always in DOM so aria-controls="mobile-nav" has a valid target */}
+      <aside
+        id="mobile-nav"
+        aria-hidden={!mobileMenuOpen}
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 w-60 bg-card border-r border-border flex flex-col md:hidden',
+          !mobileMenuOpen && 'hidden',
+        )}
+      >
           {/* Drawer header with close button */}
           <div className="px-4 py-5 border-b border-border flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -174,7 +180,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
           <NavSections currentPath={location.pathname} onNavigate={closeMobileMenu} prefix="mobile" />
         </aside>
-      )}
 
       {/* Main content */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
