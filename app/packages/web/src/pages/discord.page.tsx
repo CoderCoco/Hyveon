@@ -697,6 +697,7 @@ function GuildsSection({
                 Register commands in all guilds
               </Button>
             </div>
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -748,6 +749,7 @@ function GuildsSection({
                 ))}
               </TableBody>
             </Table>
+            </div>
           </div>
         )}
       </CardContent>
@@ -1029,6 +1031,7 @@ function PermissionsSection({
         </CardDescription>
       </CardHeader>
       <CardContent>
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -1060,6 +1063,7 @@ function PermissionsSection({
             })}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
     </Card>
   );
