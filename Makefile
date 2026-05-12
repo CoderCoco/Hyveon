@@ -11,7 +11,7 @@ LAMBDAS_STAMP  := $(STAMP)/lambdas.stamp
 
 # ── Source globs for change detection ───────────────────────────────────────
 SHARED_SRCS  := $(shell find $(APP_DIR)/packages/shared/src  -name '*.ts'  2>/dev/null)
-SERVER_SRCS  := $(shell find $(APP_DIR)/packages/server/src  -name '*.ts'  2>/dev/null)
+SERVER_SRCS  := $(shell find $(APP_DIR)/packages/desktop-main/src  -name '*.ts'  2>/dev/null)
 WEB_SRCS     := $(shell find $(APP_DIR)/packages/web/src     -name '*.ts' -o -name '*.tsx' -o -name '*.css' 2>/dev/null) \
                 $(APP_DIR)/packages/web/index.html \
                 $(APP_DIR)/packages/web/vite.config.ts
@@ -41,25 +41,25 @@ install: $(INSTALL_STAMP)
 
 # ── Shared ───────────────────────────────────────────────────────────────────
 $(SHARED_STAMP): $(INSTALL_STAMP) $(SHARED_SRCS) $(TS_CONFIGS)
-	cd $(APP_DIR) && npm run build -w @gsd/shared
+	cd $(APP_DIR) && npm run build -w @hyveon/shared
 	touch $@
 
 # ── Server ───────────────────────────────────────────────────────────────────
 $(SERVER_STAMP): $(SHARED_STAMP) $(SERVER_SRCS) $(TS_CONFIGS)
-	cd $(APP_DIR) && npm run build -w @gsd/server
+	cd $(APP_DIR) && npm run build -w @hyveon/desktop-main
 	touch $@
 
 # ── Web ──────────────────────────────────────────────────────────────────────
 $(WEB_STAMP): $(SHARED_STAMP) $(WEB_SRCS) $(TS_CONFIGS)
-	cd $(APP_DIR) && npm run build -w @gsd/web
+	cd $(APP_DIR) && npm run build -w @hyveon/web
 	touch $@
 
 # ── Lambdas ──────────────────────────────────────────────────────────────────
 $(LAMBDAS_STAMP): $(SHARED_STAMP) $(LAMBDA_SRCS) $(TS_CONFIGS)
-	cd $(APP_DIR) && npm run build -w @gsd/lambda-interactions \
-	                               -w @gsd/lambda-followup \
-	                               -w @gsd/lambda-update-dns \
-	                               -w @gsd/lambda-watchdog
+	cd $(APP_DIR) && npm run build -w @hyveon/lambda-interactions \
+	                               -w @hyveon/lambda-followup \
+	                               -w @hyveon/lambda-update-dns \
+	                               -w @hyveon/lambda-watchdog
 	touch $@
 
 # ── Composite build targets ───────────────────────────────────────────────────
@@ -117,7 +117,7 @@ tf-destroy: tf-init
 # ── Clean ──────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(APP_DIR)/packages/shared/dist \
-	       $(APP_DIR)/packages/server/dist \
+	       $(APP_DIR)/packages/desktop-main/dist \
 	       $(APP_DIR)/packages/web/dist
 	find $(APP_DIR)/packages/lambda -type d -name dist -exec rm -rf {} +
 	rm -rf $(STAMP)

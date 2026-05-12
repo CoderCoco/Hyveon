@@ -10,7 +10,7 @@ COPY package.json package-lock.json ./
 # Copy every workspace member's package.json so npm ci can resolve them.
 COPY app/package.json app/
 COPY app/packages/shared/package.json app/packages/shared/
-COPY app/packages/server/package.json app/packages/server/
+COPY app/packages/desktop-main/package.json app/packages/desktop-main/
 COPY app/packages/web/package.json app/packages/web/
 COPY app/packages/lambda/interactions/package.json app/packages/lambda/interactions/
 COPY app/packages/lambda/followup/package.json app/packages/lambda/followup/
@@ -36,4 +36,4 @@ EXPOSE 3001
 
 ENV NODE_ENV=production
 
-CMD ["node", "packages/server/dist/main.js"]
+CMD ["node", "packages/desktop-main/dist/main.js"]

@@ -25,7 +25,7 @@ Hyveon/
 │   ├── vitest.config.ts
 │   └── packages/
 │       ├── shared/                      # @hyveon/shared — pure TS + DDB/Secrets helpers
-│       ├── server/                      # @hyveon/desktop-main — Nest.js API
+│       ├── desktop-main/                # @hyveon/desktop-main — Nest.js API
 │       ├── web/                         # @hyveon/web   — React + Vite dashboard
 │       └── lambda/
 │           ├── interactions/            # esbuild → dist/handler.cjs

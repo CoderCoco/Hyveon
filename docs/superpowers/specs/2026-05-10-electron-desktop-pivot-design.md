@@ -369,7 +369,7 @@ Each closed with: `Closed as obsolete by the Electron desktop pivot — see <lin
 
 | Epic | Scope summary |
 |---|---|
-| **A — Electron shell + build pipeline** | Add `@hyveon/desktop-main` (rename of `@hyveon/desktop-main`) and `@hyveon/desktop-preload`. Adopt `electron-vite` + `electron-builder`. Three-target CI matrix. `asarUnpack` for Lambda bundles + `terraform/`. `userData` paths for caches and logs. `fix-path` at boot. Main-process Winston logger. |
+| **A — Electron shell + build pipeline** | Add `@hyveon/desktop-main` (rename of `@gsd/server`) and `@hyveon/desktop-preload`. Adopt `electron-vite` + `electron-builder`. Three-target CI matrix. `asarUnpack` for Lambda bundles + `terraform/`. `userData` paths for caches and logs. `fix-path` at boot. Main-process Winston logger. |
 | **B — IPC migration of Nest controllers** | Adopt `nestjs-electron-ipc-transport`. Convert every `@Controller` route to `@MessagePattern`. Drop `ApiTokenGuard` and the HTTP bootstrap. Replace SSE with IPC streaming. Rewrite `api.service.ts` over `window.gsd.*`. Replace `EventSource` log consumer with IPC subscription. Decommission `embed-tfstate.mjs`. |
 | **C — Cloud provider abstraction + AWS impl** | Define `CloudProvider`, `SecretsStore`, `RemoteFileStore`, `DiscordEventReceiver` in `@hyveon/shared`. Extract AWS-specific code from server services into new `@hyveon/cloud-aws`. Bind impls in `CloudProviderModule`. Split `terraform/` into `terraform/aws/` + a top-level composer. |
 | **D — Local terraform orchestration** | `TerraformService`, IPC-driven plan/apply/destroy/output. Run records in DynamoDB. Mutex + tf state lock. Plan/Apply page, Apply-history page, rollback flow. Inherits #105, #106, #110, #111, #112. |
