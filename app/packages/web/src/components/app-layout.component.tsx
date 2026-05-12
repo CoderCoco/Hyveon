@@ -198,7 +198,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <Menu className="w-5 h-5" aria-hidden="true" />
             </button>
 
-            <h1 className="hidden sm:block text-lg font-semibold text-foreground shrink-0">Game Server Manager</h1>
+            <h1 className="hidden sm:block text-lg font-semibold text-foreground shrink-0">Hyveon</h1>
             <span className="inline-flex shrink-0 items-center px-2.5 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
               {envLabel}
             </span>

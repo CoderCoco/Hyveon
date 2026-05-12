@@ -4,7 +4,7 @@ import type { Page, Locator } from '@playwright/test';
 export type LogLevelLabel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
 /**
- * Page object for the `/logs` route added in CoderCoco/game-server-deploy#63.
+ * Page object for the `/logs` route added in CoderCoco/Hyveon#63.
  * Wraps the LIVE/PAUSED pill, the searchable game combobox, the in-stream
  * search input, the Levels multi-select, the autoscroll toggle, the
  * Pause/Resume button, the log box, and the footer line-count summary so

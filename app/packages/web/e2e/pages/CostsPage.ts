@@ -4,7 +4,7 @@ import type { Page, Locator } from '@playwright/test';
 export type CostsRangeLabel = '7d' | '30d';
 
 /**
- * Page object for the `/costs` route added in CoderCoco/game-server-deploy#61.
+ * Page object for the `/costs` route added in CoderCoco/Hyveon#61.
  * Wraps the headline KPI, the stacked bar chart, the per-game estimates
  * table, and the time-range selector so spec files read as test logic
  * rather than locator soup.

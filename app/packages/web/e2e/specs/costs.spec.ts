@@ -1,7 +1,7 @@
 import { test, expect, stubApis, MULTI_GAME_COST_DATA } from '../fixtures/index.js';
 
 /**
- * Specs for the `/costs` route added in CoderCoco/game-server-deploy#61.
+ * Specs for the `/costs` route added in CoderCoco/Hyveon#61.
  * Filter / sort exercises pass `MULTI_GAME_COST_DATA` so the table has more
  * than one row to interact with; the default `COST_DATA` only contains
  * `minecraft`.

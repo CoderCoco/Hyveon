@@ -339,7 +339,7 @@ function SetupWizard({ cfg }: { cfg: DiscordConfigRedacted }) {
         <p className="text-xs text-[var(--color-muted-foreground)] border-t border-[var(--color-border)] mt-4 pt-4">
           Full walkthrough:{' '}
           <a
-            href="https://codercoco.github.io/game-server-deploy/setup"
+            href="https://codercoco.github.io/Hyveon/setup"
             target="_blank"
             rel="noreferrer"
             className="text-[var(--color-primary-light)] underline-offset-4 hover:underline"

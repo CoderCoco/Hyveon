@@ -10,8 +10,8 @@ import { renderMakefile, renderTfvars, renderEnv, renderGitignore } from './init
 
 const a = {
   parentDir: '/tmp/parent',
-  submoduleDir: 'game-server-deploy',
-  submoduleName: 'game-server-deploy',
+  submoduleDir: 'Hyveon',
+  submoduleName: 'Hyveon',
   projectName: 'mygames',
   awsRegion: 'us-west-2',
   hostedZone: 'example.com',
@@ -25,7 +25,7 @@ const expect = (label: string, ok: boolean): void => {
 };
 
 const mk = renderMakefile(a);
-expect('Makefile sets SUBMODULE', mk.includes('SUBMODULE   := $(REPO_ROOT)/game-server-deploy'));
+expect('Makefile sets SUBMODULE', mk.includes('SUBMODULE   := $(REPO_ROOT)/Hyveon'));
 expect('Makefile reads .env', mk.includes('include $(REPO_ROOT)/.env'));
 expect('Makefile delegates plan', mk.includes('$(MAKE) -C $(SUBMODULE) tf-plan'));
 expect('Makefile delegates apply', mk.includes('$(MAKE) -C $(SUBMODULE) tf-apply'));

@@ -178,7 +178,7 @@ function useCostsData(days: number): {
  * with a delta-vs-prior pill, and a time-range selector.
  *
  * Per-game split for the historical chart is currently a uniform fallback
- * because `/api/costs/actual` only returns daily totals — see CoderCoco/game-server-deploy#61.
+ * because `/api/costs/actual` only returns daily totals — see CoderCoco/Hyveon#61.
  */
 export function CostsPage() {
   const [range, setRange] = useState<RangeKey>('7d');
@@ -272,7 +272,7 @@ export function CostsPage() {
             {games.length > 0 && (
               <p className="mt-3 text-[0.7rem] text-[var(--color-muted-foreground)]">
                 Per-game split is a uniform approximation — Cost Explorer returns
-                daily totals only. See CoderCoco/game-server-deploy#61.
+                daily totals only. See CoderCoco/Hyveon#61.
               </p>
             )}
           </CardContent>

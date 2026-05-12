@@ -9,15 +9,15 @@ You're here to change the code. This page is the shortest path from "clean
 clone" to "PR merged" plus the invariants that are load-bearing enough that
 CI can't always catch you breaking them.
 
-Read [`CLAUDE.md`](https://github.com/codercoco/game-server-deploy/blob/main/CLAUDE.md)
-and [`CONTRIBUTING.md`](https://github.com/codercoco/game-server-deploy/blob/main/CONTRIBUTING.md)
+Read [`CLAUDE.md`](https://github.com/CoderCoco/Hyveon/blob/main/CLAUDE.md)
+and [`CONTRIBUTING.md`](https://github.com/CoderCoco/Hyveon/blob/main/CONTRIBUTING.md)
 first. They are the source of truth for test/lint conventions and PR titles.
 This page is documentation over the top of them, not a replacement.
 
 ## Repository layout
 
 ```text
-game-server-deploy/
+Hyveon/
 ├── app/                                 # npm-workspaces monorepo
 │   ├── package.json                     # workspaces root; `npm run` scripts fan out
 │   ├── eslint.config.js                 # flat config; recommended TS + React presets
@@ -277,9 +277,9 @@ pattern we recommend for anyone running this for real — see the
 
 ## Useful references
 
-- [`CLAUDE.md`](https://github.com/codercoco/game-server-deploy/blob/main/CLAUDE.md) —
+- [`CLAUDE.md`](https://github.com/CoderCoco/Hyveon/blob/main/CLAUDE.md) —
   project instructions in full, including the "why" for every invariant.
-- [`CONTRIBUTING.md`](https://github.com/codercoco/game-server-deploy/blob/main/CONTRIBUTING.md) —
+- [`CONTRIBUTING.md`](https://github.com/CoderCoco/Hyveon/blob/main/CONTRIBUTING.md) —
   PR rules, review policy, local-check commands.
 - [Architecture](/architecture) —
   component and sequence diagrams.

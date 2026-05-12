@@ -35,10 +35,10 @@ flowchart LR
     PTF["terraform.tfvars"]:::priv
     PENV[".env<br/>API_TOKEN=…"]:::priv
     PSTAMP[".make/<br/>setup.stamp, tfstate.json"]:::priv
-    PSUB["game-server-deploy/<br/>→ submodule"]:::priv
+    PSUB["Hyveon/<br/>→ submodule"]:::priv
   end
 
-  subgraph Upstream["game-server-deploy (public)"]
+  subgraph Upstream["Hyveon (public)"]
     direction TB
     UAPP["app/"]:::public
     UTF["terraform/*.tf"]:::public
@@ -66,7 +66,7 @@ your-private-games/                 # private repo you own
 ├── Makefile                        # wrapper — see "What the wrapper does" below
 ├── terraform.tfvars                # YOUR copy; checked in (private repo)
 ├── .make/                          # stamp dir (sha of submodule setup.sh, cached tfstate)
-└── game-server-deploy/             # submodule → CoderCoco/game-server-deploy
+└── Hyveon/             # submodule → CoderCoco/Hyveon
 ```
 
 That's the whole shape. No `config/` directory, no symlinks, no
@@ -84,11 +84,11 @@ git clone git@github.com:you/your-private-games.git
 cd your-private-games
 
 # 2. Add the submodule.
-git submodule add https://github.com/CoderCoco/game-server-deploy.git
+git submodule add https://github.com/CoderCoco/Hyveon.git
 
 # 3. Install all deps and run the scaffolder.
-(cd game-server-deploy && npm install)
-(cd game-server-deploy && npm run scripts:init-parent)
+(cd Hyveon && npm install)
+(cd Hyveon && npm run scripts:init-parent)
 ```
 
 The script prompts for project name, AWS region, hosted zone, and
@@ -112,11 +112,11 @@ Five targets, no surprises:
 
 | Target | What it does |
 |---|---|
-| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `game-server-deploy/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. |
-| `make plan` | Copies `terraform.tfvars` into `game-server-deploy/terraform/terraform.tfvars`, then runs `make -C game-server-deploy tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. |
+| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `Hyveon/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. |
+| `make plan` | Copies `terraform.tfvars` into `Hyveon/terraform/terraform.tfvars`, then runs `make -C Hyveon tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. |
 | `make apply` | Same as `plan`, but delegates to `tf-apply`. The submodule's `tf-apply` recipe prints a post-deploy checklist with the Discord interactions URL when it finishes. |
 | `make update` | Bumps the submodule to the tip of `main` (`git submodule update --remote --merge`). If the new `setup.sh` differs from the recorded sha, clears `.terraform/` and re-runs `setup.sh` automatically; otherwise leaves it alone. Reminds you to commit the new submodule pointer. |
-| `make dev` | Pulls live tfstate into `.make/tfstate.json` (so the embed step has something to read), wipes stale TS build info under the submodule's `app/packages/*/`, then runs `make -C game-server-deploy dev`, exporting `API_TOKEN` and `TF_STATE_PATH` to the child make. |
+| `make dev` | Pulls live tfstate into `.make/tfstate.json` (so the embed step has something to read), wipes stale TS build info under the submodule's `app/packages/*/`, then runs `make -C Hyveon dev`, exporting `API_TOKEN` and `TF_STATE_PATH` to the child make. |
 
 The `tfvars` copy is **always fresh** on plan/apply — the recipe `cp`s
 unconditionally, not just when the file is older than the destination. This
@@ -125,7 +125,7 @@ parent's `terraform.tfvars` between runs.
 
 ## Submodule update with idempotent setup.sh re-run
 
-`make update` records `sha256sum game-server-deploy/setup.sh` in
+`make update` records `sha256sum Hyveon/setup.sh` in
 `.make/setup.stamp` after each successful setup. On every subsequent
 `update`, it compares the new file's sha against the stamp:
 
@@ -133,7 +133,7 @@ parent's `terraform.tfvars` between runs.
   npm dependencies are still valid.
 - **Changed** → upstream tweaked the bootstrap (new tool version, S3 backend
   config change, Lambda build step, …). The recipe wipes
-  `game-server-deploy/terraform/.terraform/` and re-runs `setup.sh`, then
+  `Hyveon/terraform/.terraform/` and re-runs `setup.sh`, then
   records the new sha.
 
 You don't have to remember whether the bootstrap moved. The stamp file is
@@ -159,7 +159,7 @@ to keep the same token across rebuilds.
 
 ## tfstate lives in S3 by default
 
-`game-server-deploy/setup.sh` provisions an S3 bucket
+`Hyveon/setup.sh` provisions an S3 bucket
 (`{project_name}-tf-state`) and a DynamoDB lock table
 (`{project_name}-tf-locks`) on first run, then `terraform init`s with the
 S3 backend pointing at them. The parent repo never holds `terraform.tfstate`
@@ -198,8 +198,8 @@ make apply
 
 ```bash
 make update
-git add game-server-deploy
-git commit -m "chore: bump game-server-deploy to $(git -C game-server-deploy rev-parse --short HEAD)"
+git add Hyveon
+git commit -m "chore: bump Hyveon to $(git -C Hyveon rev-parse --short HEAD)"
 make plan        # eyeball the diff
 make apply       # if it looks right
 ```
@@ -212,7 +212,7 @@ Things that tend to need attention after a bump:
 
 - New or renamed Terraform variables → add them to your
   `terraform.tfvars`. Compare against
-  `game-server-deploy/terraform/terraform.tfvars.example`.
+  `Hyveon/terraform/terraform.tfvars.example`.
 - New environment variables on the Lambdas → typically Terraform handles
   this automatically, but verify in the plan output.
 - Changes to the four slash-command descriptors → re-click **Register
@@ -276,7 +276,7 @@ than stashing long-lived keys. The role's policy is the same
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `make plan` says "No such file or directory" pointing at `game-server-deploy/` | Submodule wasn't initialised | `make setup` (or `git submodule update --init --recursive`). |
+| `make plan` says "No such file or directory" pointing at `Hyveon/` | Submodule wasn't initialised | `make setup` (or `git submodule update --init --recursive`). |
 | `make apply` runs against an old `terraform.tfvars` | You edited the parent's tfvars but ran terraform inside the submodule directly | Always run `make apply` from the parent — the `copy-tfvars` recipe forces a fresh copy. |
 | `make update` silently pulls main and breaks apply | Upstream changed something incompatible | The stamp file's job is to flag setup.sh changes; for non-bootstrap breakage, run `make plan` and read the diff. Pin to a SHA in `.gitmodules` if you want stricter control. |
 | After bumping upstream, Discord commands have wrong arguments | Descriptors in `@hyveon/shared/commands.ts` changed | Click **Register commands** for each guild in the dashboard. |

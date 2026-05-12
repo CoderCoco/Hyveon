@@ -1,10 +1,10 @@
-# Game Server Manager
+# Hyveon
 
 A cost-efficient multi-game dedicated server platform on **AWS Fargate** with a
-local web UI and a fully serverless Discord bot. Servers only run — and only
-cost money — while someone is playing.
+local management UI and a fully serverless Discord bot. Servers only run — and
+only cost money — while someone is playing.
 
-> 📚 Full documentation lives at **[codercoco.github.io/game-server-deploy](https://codercoco.github.io/game-server-deploy/)**
+> 📚 Full documentation lives at **[codercoco.github.io/Hyveon](https://codercoco.github.io/Hyveon/)**
 > (built from [`docs/`](./docs) by GitHub Pages). The rest of this README is a
 > quick tour; deep-dives, setup steps, and architecture diagrams are on the
 > site.
@@ -31,22 +31,22 @@ cost money — while someone is playing.
 
 ## Documentation
 
-The [docs site](https://codercoco.github.io/game-server-deploy/) is
+The [docs site](https://codercoco.github.io/Hyveon/) is
 organised around three roles. Pick the one that matches what you need to do.
 
 | Guide | You are… |
 |---|---|
-| [**Setup guide**](https://codercoco.github.io/game-server-deploy/setup/) | Going from a blank AWS account to a running Fargate task. |
-| [**User guide**](https://codercoco.github.io/game-server-deploy/guides/user/) | Driving an already-provisioned deployment — the dashboard, Discord commands, day-to-day ops. |
-| [**Maintainer guide**](https://codercoco.github.io/game-server-deploy/guides/maintainer/) | Working on this codebase. |
-| [**Private parent + submodule guide**](https://codercoco.github.io/game-server-deploy/guides/submodule/) | Wrapping this repo in a private repo that holds `terraform.tfvars` and tfstate. Includes an interactive scaffolder ([`scripts/init-parent.ts`](./scripts/init-parent.ts)) that generates the wrapper Makefile, tfvars, and `.env`. |
+| [**Setup guide**](https://codercoco.github.io/Hyveon/setup/) | Going from a blank AWS account to a running Fargate task. |
+| [**User guide**](https://codercoco.github.io/Hyveon/guides/user/) | Driving an already-provisioned deployment — the dashboard, Discord commands, day-to-day ops. |
+| [**Maintainer guide**](https://codercoco.github.io/Hyveon/guides/maintainer/) | Working on this codebase. |
+| [**Private parent + submodule guide**](https://codercoco.github.io/Hyveon/guides/submodule/) | Wrapping this repo in a private repo that holds `terraform.tfvars` and tfstate. Includes an interactive scaffolder ([`scripts/init-parent.ts`](./scripts/init-parent.ts)) that generates the wrapper Makefile, tfvars, and `.env`. |
 
 Component deep-dives:
 
-- [**Architecture**](https://codercoco.github.io/game-server-deploy/architecture/) — full diagram + `/server-start` sequence.
-- [**Terraform**](https://codercoco.github.io/game-server-deploy/components/terraform/) — every `.tf` file, variables, outputs, gotchas.
-- [**Management app**](https://codercoco.github.io/game-server-deploy/components/management-app/) — Nest.js API, React dashboard, `@hyveon/shared`.
-- [**Lambdas**](https://codercoco.github.io/game-server-deploy/components/lambdas/) — interactions, followup, update-dns, watchdog.
+- [**Architecture**](https://codercoco.github.io/Hyveon/architecture/) — full diagram + `/server-start` sequence.
+- [**Terraform**](https://codercoco.github.io/Hyveon/components/terraform/) — every `.tf` file, variables, outputs, gotchas.
+- [**Management app**](https://codercoco.github.io/Hyveon/components/management-app/) — Nest.js API, React dashboard, `@hyveon/shared`.
+- [**Lambdas**](https://codercoco.github.io/Hyveon/components/lambdas/) — interactions, followup, update-dns, watchdog.
 
 ## Quick start
 
@@ -73,7 +73,7 @@ docker compose up --build
 #     http://localhost:5000  (dashboard prompts for $API_TOKEN)
 ```
 
-See the [setup guide](https://codercoco.github.io/game-server-deploy/setup/)
+See the [setup guide](https://codercoco.github.io/Hyveon/setup/)
 for the full walkthrough, including the IAM policy, Discord bot setup, and
 troubleshooting.
 
@@ -114,7 +114,7 @@ pennies/month. Playing 4 hours/day, 5 days/week ≈ **$10–12/month**, vs.
 ## Repository structure
 
 ```text
-game-server-deploy/
+Hyveon/
 ├── app/                       # Nest.js + React monorepo (npm workspaces)
 │   └── packages/
 │       ├── shared/            # @hyveon/shared

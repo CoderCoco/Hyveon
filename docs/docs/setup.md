@@ -38,7 +38,7 @@ On the AWS side you need:
 ## 1. Create and authorise an IAM user
 
 1. In the **[AWS IAM console](https://console.aws.amazon.com/iam/)** →
-   **Users → Create user**, give it a name like `game-server-deploy`.
+   **Users → Create user**, give it a name like `hyveon`.
 2. On the permissions step, choose **Attach policies directly** and skip
    through without selecting any managed policy. Create the user.
 3. Open the new user → **Permissions → Add permissions → Create inline
@@ -127,8 +127,8 @@ instead — the management app will pick them up too.
 **Linux / macOS:**
 
 ```bash
-git clone https://github.com/codercoco/game-server-deploy.git
-cd game-server-deploy
+git clone https://github.com/CoderCoco/Hyveon.git
+cd Hyveon
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -136,8 +136,8 @@ chmod +x setup.sh
 **Windows (PowerShell 5.1+):**
 
 ```powershell
-git clone https://github.com/codercoco/game-server-deploy.git
-cd game-server-deploy
+git clone https://github.com/CoderCoco/Hyveon.git
+cd Hyveon
 .\setup.ps1
 ```
 

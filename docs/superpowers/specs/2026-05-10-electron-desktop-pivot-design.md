@@ -6,7 +6,7 @@
 
 ## Goal
 
-Convert game-server-deploy from a Nest+React web app (operator runs Docker, hand-runs `terraform apply`) into a single-binary cross-platform Electron desktop application that owns the full deploy lifecycle — config editing, plan/apply/destroy, log streaming — while keeping the existing AWS infrastructure intact and leaving room for non-AWS clouds in the future.
+Convert Hyveon from a Nest+React web app (operator runs Docker, hand-runs `terraform apply`) into a single-binary cross-platform Electron desktop application that owns the full deploy lifecycle — config editing, plan/apply/destroy, log streaming — while keeping the existing AWS infrastructure intact and leaving room for non-AWS clouds in the future.
 
 ## Non-goals
 
@@ -292,7 +292,7 @@ npm run desktop:package    # electron-builder → release/{*.exe, *.dmg, *.AppIm
 
 ```yaml
 appId: dev.gsd.desktop
-productName: Game Server Deploy
+productName: Hyveon
 asar: true
 extraResources:
   # placed in process.resourcesPath at runtime, OUTSIDE app.asar.

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
-Game Server Manager — setup helper
+Hyveon — setup helper
 
 Usage:
   ./setup.sh              First-time bootstrap (default).
@@ -30,7 +30,7 @@ EOF
 
 bootstrap() {
   echo ""
-  echo "  🎮  Game Server Manager — Setup"
+  echo "  🎮  Hyveon — Setup"
   echo "  ──────────────────────────────────────"
   echo ""
 

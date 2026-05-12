@@ -1,5 +1,5 @@
 {
-  "name": "game-server-deploy",
+  "name": "hyveon",
   "private": true,
   "workspaces": [
     "app",

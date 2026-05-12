@@ -15,7 +15,7 @@ import { Button } from './ui/button.component';
 
 const MIN_TOKEN_LENGTH = 16;
 const DOCS_URL =
-  'https://codercoco.github.io/game-server-deploy/setup#api-token';
+  'https://codercoco.github.io/Hyveon/setup#api-token';
 
 /**
  * Blocking dialog shown when the API rejects a request with 401. The operator

@@ -3,13 +3,13 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: 'Game Server Deploy',
+  title: 'Hyveon',
   tagline: 'Cost-efficient multi-game dedicated server platform on AWS Fargate',
   url: 'https://codercoco.github.io',
-  baseUrl: '/game-server-deploy/',
+  baseUrl: '/Hyveon/',
 
-  organizationName: 'codercoco',
-  projectName: 'game-server-deploy',
+  organizationName: 'CoderCoco',
+  projectName: 'Hyveon',
 
   onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',
@@ -33,7 +33,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           routeBasePath: '/',
           editUrl:
-            'https://github.com/codercoco/game-server-deploy/tree/main/docs/',
+            'https://github.com/CoderCoco/Hyveon/tree/main/docs/',
         },
         blog: false,
         theme: {
@@ -51,7 +51,7 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Game Server Deploy',
+      title: 'Hyveon',
       items: [
         {
           type: 'docSidebar',
@@ -60,7 +60,7 @@ const config: Config = {
           label: 'Docs',
         },
         {
-          href: 'https://github.com/codercoco/game-server-deploy',
+          href: 'https://github.com/CoderCoco/Hyveon',
           label: 'GitHub',
           position: 'right',
         },
@@ -83,12 +83,12 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://github.com/codercoco/game-server-deploy',
+              href: 'https://github.com/CoderCoco/Hyveon',
             },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Game Server Deploy. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Hyveon. Built with Docusaurus.`,
     },
     prism: {
       theme: prismThemes.github,

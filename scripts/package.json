@@ -2,7 +2,7 @@
   "name": "@hyveon/scripts",
   "private": true,
   "version": "0.0.0",
-  "description": "Helper scripts for game-server-deploy. Not part of the app workspace — install from this directory.",
+  "description": "Helper scripts for Hyveon. Not part of the app workspace — install from this directory.",
   "type": "module",
   "scripts": {
     "init-parent": "tsx init-parent.ts",

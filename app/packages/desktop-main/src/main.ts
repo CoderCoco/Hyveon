@@ -50,7 +50,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.listen(PORT);
-  logger.info(`Game Server Manager API running on http://localhost:${PORT}`, {
+  logger.info(`Hyveon API running on http://localhost:${PORT}`, {
     mode: isDev ? 'development' : 'production',
     port: PORT,
   });

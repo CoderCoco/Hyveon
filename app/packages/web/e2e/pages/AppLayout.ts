@@ -10,7 +10,7 @@ export class AppLayout {
 
   /** Top-bar product heading — used as a "the dashboard mounted" smoke check. */
   brandHeading(): Locator {
-    return this.page.getByRole('heading', { name: 'Game Server Manager' });
+    return this.page.getByRole('heading', { name: 'Hyveon' });
   }
 
   /** Sidebar nav link by visible label (e.g. "Logs", "Discord", "Settings"). */

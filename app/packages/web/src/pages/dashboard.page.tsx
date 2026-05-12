@@ -123,7 +123,7 @@ function NoGamesCard() {
       </CardHeader>
       <CardContent className="flex flex-wrap gap-4">
         <a
-          href="https://codercoco.github.io/game-server-deploy/setup"
+          href="https://codercoco.github.io/Hyveon/setup"
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 text-sm text-[var(--color-primary-light)] underline-offset-4 hover:underline"
@@ -132,7 +132,7 @@ function NoGamesCard() {
           <ExternalLink className="size-3.5" />
         </a>
         <a
-          href="https://github.com/CoderCoco/game-server-deploy/blob/main/terraform/terraform.tfvars.example"
+          href="https://github.com/CoderCoco/Hyveon/blob/main/terraform/terraform.tfvars.example"
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 text-sm text-[var(--color-primary-light)] underline-offset-4 hover:underline"

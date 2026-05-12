@@ -4,7 +4,7 @@ sidebar_position: 1
 slug: /
 ---
 
-# Game Server Deploy
+# Hyveon
 
 A cost-efficient, multi-game dedicated server platform on **AWS Fargate** with a
 local management UI and a fully serverless Discord bot. Servers only run — and
@@ -70,7 +70,7 @@ the `/server-start` sequence) see the
 ## Repository map
 
 ```text
-game-server-deploy/
+Hyveon/
 ├── app/                       # Nest.js + React monorepo (npm workspaces)
 │   └── packages/
 │       ├── shared/            # @hyveon/shared

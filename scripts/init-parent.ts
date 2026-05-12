@@ -2,16 +2,16 @@
 /**
  * init-parent.ts
  *
- * Interactive scaffolder for the "private parent repo + game-server-deploy
+ * Interactive scaffolder for the "private parent repo + Hyveon
  * submodule" deployment pattern documented at
- * https://codercoco.github.io/game-server-deploy/guides/submodule/.
+ * https://codercoco.github.io/Hyveon/guides/submodule/.
  *
  * Run from the parent (private) repo root:
  *
  *   cd your-private-games
- *   git submodule add https://github.com/CoderCoco/game-server-deploy.git
- *   (cd game-server-deploy/scripts && npm install)
- *   npx --prefix game-server-deploy/scripts tsx game-server-deploy/scripts/init-parent.ts
+ *   git submodule add https://github.com/CoderCoco/Hyveon.git
+ *   (cd Hyveon/scripts && npm install)
+ *   npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts
  *
  * The script writes (or refuses to overwrite without --force):
  *   - Makefile           wrapper around the submodule's Makefile
@@ -74,7 +74,7 @@ function detectSubmodulePath(parentDir: string, scriptDir: string): string {
     const m = readFileSync(gm, 'utf8').match(/path\s*=\s*(\S+)/);
     if (m) return m[1];
   }
-  return 'game-server-deploy';
+  return 'Hyveon';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +345,7 @@ async function main(): Promise<void> {
   const guessedParent = findParentRepoRoot(cwd()) ?? findParentRepoRoot(scriptDir) ?? cwd();
 
   output.write('\n');
-  output.write('  game-server-deploy — submodule deployment scaffolder\n');
+  output.write('  Hyveon — submodule deployment scaffolder\n');
   output.write('  ────────────────────────────────────────────────────\n');
   output.write('\n');
   output.write(`  Parent repo:  ${guessedParent}\n`);
@@ -369,7 +369,7 @@ async function main(): Promise<void> {
       'Submodule path (relative to parent repo)',
       detectSubmodulePath(parentDir, scriptDir),
     );
-    const submoduleName = submoduleDir.split('/').pop() || 'game-server-deploy';
+    const submoduleName = submoduleDir.split('/').pop() || 'Hyveon';
 
     let projectName = '';
     while (!isValidProjectName(projectName)) {
@@ -435,11 +435,11 @@ async function main(): Promise<void> {
       const gm = readFileSync(join(parentDir, '.gitmodules'), 'utf8');
       if (!gm.includes(submoduleDir)) {
         output.write(`  Note: ${submoduleDir} is not in .gitmodules. Add it with:\n`);
-        output.write(`    git submodule add https://github.com/CoderCoco/game-server-deploy.git ${submoduleDir}\n\n`);
+        output.write(`    git submodule add https://github.com/CoderCoco/Hyveon.git ${submoduleDir}\n\n`);
       }
     } else {
       output.write(`  Note: no .gitmodules found. Add the submodule with:\n`);
-      output.write(`    git submodule add https://github.com/CoderCoco/game-server-deploy.git ${submoduleDir}\n\n`);
+      output.write(`    git submodule add https://github.com/CoderCoco/Hyveon.git ${submoduleDir}\n\n`);
     }
   } finally {
     rl.close();
