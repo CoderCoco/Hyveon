@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /*
  * Declare spy variables via vi.hoisted() so they are initialised before the
@@ -45,6 +45,18 @@ describe('main bootstrap', () => {
     ElectronIPCTransportMock.mockImplementation(() => ({}));
     createMicroserviceMock.mockResolvedValue(fakeApp);
     fakeApp.listen.mockResolvedValue(undefined);
+    // Simulate an Electron main-process environment so the module-level guard passes.
+    vi.stubGlobal('process', { ...process, versions: { ...process.versions, electron: '36.0.0' } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('should throw a clear error when not running inside an Electron main process', async () => {
+    vi.stubGlobal('process', { ...process, versions: {} });
+    vi.resetModules();
+    await expect(import('./main.js')).rejects.toThrow('Electron main process');
   });
 
   it('should bootstrap as a NestJS microservice using ElectronIPCTransport', async () => {
