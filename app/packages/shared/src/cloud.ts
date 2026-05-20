@@ -131,3 +131,20 @@ export interface RemoteFileStore {
    */
   listVersions(path: string): Promise<Array<{ versionId: string; lastModified: Date }>>;
 }
+
+/**
+ * Cloud-agnostic interface for resolving the Discord interactions endpoint URL
+ * from provider-managed configuration (e.g. an API Gateway invoke URL stored in
+ * infrastructure state or a secrets store). Callers depend only on this contract;
+ * no `@aws-sdk/*` shapes appear in this interface or its parameter/return types.
+ */
+export interface DiscordEventReceiver {
+  /**
+   * Resolves the public HTTPS URL that Discord will POST interaction events to.
+   *
+   * @returns The fully-qualified interactions endpoint URL (e.g. the API Gateway
+   *   invoke URL for the interactions Lambda), or `null` if no endpoint has been
+   *   configured or provisioned yet.
+   */
+  getInteractionEndpointUrl(): Promise<string | null>;
+}
