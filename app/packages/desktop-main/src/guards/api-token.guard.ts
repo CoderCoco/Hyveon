@@ -9,17 +9,17 @@ import { logger } from '../logger.js';
 import { ConfigService } from '../services/ConfigService.js';
 
 /**
- * Global guard that gates every request behind a bearer token.
+ * Global guard that gates HTTP requests behind a bearer token.
  *
  * The token is resolved **on every request** via {@link ConfigService.getApiToken}
  * so rotating the token (e.g. by editing `server_config.json`) takes effect
  * without a server restart.
  *
  * Behavior:
+ * - Non-HTTP context (e.g. IPC microservice) → passes through unconditionally;
+ *   the IPC transport is the trust boundary for those calls.
  * - `getApiToken()` returns `null` → the app has no token configured. Logs a
- *   warning once and allows the request through (dev convenience). This is
- *   only reachable in production when the startup check in `main.ts` has
- *   been bypassed deliberately; normally production boot refuses to start.
+ *   warning once and allows the request through (dev convenience).
  * - `getApiToken()` returns a string → require an `Authorization: Bearer <token>`
  *   header whose token matches exactly. A timing-safe comparison isn't used
  *   because the token lives on the local dashboard and the risk model doesn't
@@ -35,10 +35,10 @@ export class ApiTokenGuard implements CanActivate {
   constructor(private readonly config: ConfigService) {}
 
   /**
-   * Nest invokes this for every `/api/*` request. Returns `true` to allow,
-   * throws `UnauthorizedException` to reject. Dev convenience: when no token
-   * is configured we log once and let the request through — production boot
-   * refuses to start in that state, so this branch is dev-only in practice.
+   * Returns `true` to allow the request, throws `UnauthorizedException` to
+   * reject it. Non-HTTP contexts (IPC) are always allowed. When no token is
+   * configured, logs a one-time warning and lets HTTP requests through as a
+   * dev convenience.
    */
   canActivate(context: ExecutionContext): boolean {
     // IPC microservice calls arrive as 'rpc' context — no HTTP headers to check.
