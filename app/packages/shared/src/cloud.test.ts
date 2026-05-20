@@ -6,6 +6,7 @@ import type {
   CloudProvider,
   CostBreakdown,
   DateRange,
+  DiscordEventReceiver,
   LogChunk,
   RemoteFileStore,
   SecretsStore,
@@ -95,5 +96,21 @@ describe('RemoteFileStore', () => {
     } satisfies RemoteFileStore;
 
     expect(store).toBeDefined();
+  });
+});
+
+describe('DiscordEventReceiver', () => {
+  it('should be implementable with a plain object satisfying getInteractionEndpointUrl', () => {
+    /**
+     * Compile-time check: this object must satisfy DiscordEventReceiver or tsc/vitest
+     * will fail. The runtime assertion just confirms the object is truthy.
+     */
+    const receiver = {
+      async getInteractionEndpointUrl(): Promise<string | null> {
+        return 'https://example.execute-api.us-east-1.amazonaws.com/interactions';
+      },
+    } satisfies DiscordEventReceiver;
+
+    expect(receiver).toBeDefined();
   });
 });
