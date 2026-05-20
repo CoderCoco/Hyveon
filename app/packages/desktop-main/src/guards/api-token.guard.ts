@@ -41,6 +41,11 @@ export class ApiTokenGuard implements CanActivate {
    * refuses to start in that state, so this branch is dev-only in practice.
    */
   canActivate(context: ExecutionContext): boolean {
+    // IPC microservice calls arrive as 'rpc' context — no HTTP headers to check.
+    if (context.getType() !== 'http') {
+      return true;
+    }
+
     const req = context.switchToHttp().getRequest<Request>();
     const configured = this.config.getApiToken();
 

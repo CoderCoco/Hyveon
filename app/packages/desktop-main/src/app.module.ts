@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
@@ -8,10 +9,15 @@ import { LogsController } from './controllers/logs.controller.js';
 import { FilesController } from './controllers/files.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
 import { EnvController } from './controllers/env.controller.js';
+import { ApiTokenGuard } from './guards/api-token.guard.js';
 
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`) to
  * the IPC controllers.
+ *
+ * `ApiTokenGuard` is registered as a global guard so every HTTP route requires
+ * a bearer token. The guard is context-aware and passes through IPC (non-HTTP)
+ * calls without token enforcement.
  */
 @Module({
   imports: [AwsModule, DiscordModule],
@@ -24,6 +30,6 @@ import { EnvController } from './controllers/env.controller.js';
     DiscordController,
     EnvController,
   ],
-  providers: [],
+  providers: [{ provide: APP_GUARD, useClass: ApiTokenGuard }],
 })
 export class AppModule {}
