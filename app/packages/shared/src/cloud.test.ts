@@ -7,6 +7,8 @@ import type {
   CostBreakdown,
   DateRange,
   LogChunk,
+  RemoteFileStore,
+  SecretsStore,
   StartOpts,
   WorkloadHandle,
   WorkloadStatus,
@@ -45,5 +47,53 @@ describe('CloudProvider', () => {
     } satisfies CloudProvider;
 
     expect(provider).toBeDefined();
+  });
+});
+
+describe('SecretsStore', () => {
+  it('should be implementable with a plain object satisfying all three methods', () => {
+    /**
+     * Compile-time check: this object must satisfy SecretsStore or tsc/vitest
+     * will fail. The runtime assertion just confirms the object is truthy.
+     */
+    const store = {
+      async get(_name: string): Promise<string | undefined> {
+        return 'secret-value';
+      },
+      async put(_name: string, _value: string): Promise<void> {},
+      async exists(_name: string): Promise<boolean> {
+        return true;
+      },
+    } satisfies SecretsStore;
+
+    expect(store).toBeDefined();
+  });
+});
+
+describe('RemoteFileStore', () => {
+  it('should be implementable with a plain object satisfying all three methods', () => {
+    /**
+     * Compile-time check: this object must satisfy RemoteFileStore or tsc/vitest
+     * will fail. The runtime assertion just confirms the object is truthy.
+     */
+    const store = {
+      async get(_path: string): Promise<{ body: Uint8Array; etag: string } | undefined> {
+        return { body: new Uint8Array([1, 2, 3]), etag: 'abc123' };
+      },
+      async put(
+        _path: string,
+        _body: Uint8Array,
+        _opts?: { ifMatch?: string },
+      ): Promise<{ etag: string }> {
+        return { etag: 'def456' };
+      },
+      async listVersions(
+        _path: string,
+      ): Promise<Array<{ versionId: string; lastModified: Date }>> {
+        return [{ versionId: 'v1', lastModified: new Date('2026-01-01T00:00:00Z') }];
+      },
+    } satisfies RemoteFileStore;
+
+    expect(store).toBeDefined();
   });
 });

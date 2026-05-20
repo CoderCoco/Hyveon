@@ -88,3 +88,46 @@ export interface SecretsStore {
    */
   exists(name: string): Promise<boolean>;
 }
+
+/**
+ * Cloud-agnostic interface for reading and writing versioned binary files in a
+ * remote object store. Implementations may target AWS S3, Azure Blob Storage,
+ * GCP Cloud Storage, or any other backend — callers depend only on this contract.
+ * No `@aws-sdk/*` shapes appear in this interface or its parameter/return types.
+ */
+export interface RemoteFileStore {
+  /**
+   * Retrieves the current version of a file by path.
+   *
+   * @param path - The store-relative path of the file to retrieve.
+   * @returns An object containing the raw file contents (`body`) and the
+   *   provider-assigned entity tag (`etag`), or `undefined` if no file
+   *   exists at the given path.
+   */
+  get(path: string): Promise<{ body: Uint8Array; etag: string } | undefined>;
+
+  /**
+   * Writes a file to the store at the given path, creating or overwriting it.
+   * Supports optimistic concurrency via an optional `ifMatch` etag guard — if
+   * provided, the write is rejected (provider throws) when the stored etag no
+   * longer matches, preventing lost-update races.
+   *
+   * @param path - The store-relative path to write the file to.
+   * @param body - The raw file contents to store.
+   * @param opts - Optional write options. When `opts.ifMatch` is set, the write
+   *   only succeeds when the current stored etag matches this value (optimistic
+   *   concurrency guard).
+   * @returns An object containing the provider-assigned etag for the newly
+   *   stored version.
+   */
+  put(path: string, body: Uint8Array, opts?: { ifMatch?: string }): Promise<{ etag: string }>;
+
+  /**
+   * Lists all available versions of a file in reverse-chronological order.
+   *
+   * @param path - The store-relative path of the file to query.
+   * @returns An array of version descriptors, each containing a provider-
+   *   assigned `versionId` and the `lastModified` timestamp for that version.
+   */
+  listVersions(path: string): Promise<Array<{ versionId: string; lastModified: Date }>>;
+}
