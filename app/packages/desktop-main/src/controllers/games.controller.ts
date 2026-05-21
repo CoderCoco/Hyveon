@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Post } from '@nestjs/common';
+import { MessagePattern } from '@nestjs/microservices';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
 
@@ -16,6 +17,7 @@ export class GamesController {
    * to restart the server.
    */
   @Get('games')
+  @MessagePattern('games.list')
   listGames(): { games: string[] } {
     this.config.invalidateCache();
     const outputs = this.config.getTfOutputs();

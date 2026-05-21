@@ -22,9 +22,13 @@ function makeConfig(token: string | null | (() => string | null)): ConfigService
  * guard's behavioral assertions — the guard only touches `headers`, `path`,
  * and `method`.
  */
-function makeContext(headers: Record<string, string | undefined> = {}): ExecutionContext {
+function makeContext(
+  headers: Record<string, string | undefined> = {},
+  type: 'http' | 'rpc' = 'http',
+): ExecutionContext {
   const req = { headers, path: '/api/status', method: 'GET' };
   return {
+    getType: () => type,
     switchToHttp: () => ({
       getRequest: () => req,
       getResponse: () => ({}),
@@ -36,6 +40,13 @@ function makeContext(headers: Record<string, string | undefined> = {}): Executio
 describe('ApiTokenGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('non-HTTP context (IPC microservice)', () => {
+    it('should pass through without checking headers when context type is rpc', () => {
+      const guard = new ApiTokenGuard(makeConfig('secret'));
+      expect(guard.canActivate(makeContext({}, 'rpc'))).toBe(true);
+    });
   });
 
   describe('no token configured', () => {

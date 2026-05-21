@@ -19,7 +19,11 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/**/*.test.{ts,tsx}'],
+    include: [
+      'packages/**/*.test.{ts,tsx}',
+      // Explicitly include desktop-preload specs so they are always discovered.
+      'packages/desktop-preload/**/*.test.{ts,tsx}',
+    ],
     // Default environment for server-side and shared tests is Node.
     // React component tests under @hyveon/web override this via
     // `environmentMatchGlobs` so they get a real DOM.
@@ -35,7 +39,11 @@ export default defineConfig({
       // Scoped to src/ trees so Playwright e2e files, Vite/Playwright configs,
       // and other non-unit-tested support files are excluded by default.
       // Double-star is needed because lambda packages nest under packages/lambda/*.
-      include: ['packages/**/src/**/*.{ts,tsx}'],
+      include: [
+        'packages/**/src/**/*.{ts,tsx}',
+        // Explicitly include desktop-preload source for coverage measurement.
+        'packages/desktop-preload/**/*.{ts,tsx}',
+      ],
       exclude: [
         'packages/**/*.test.{ts,tsx}',
         'packages/**/*.d.ts',

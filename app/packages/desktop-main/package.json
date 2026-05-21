@@ -5,9 +5,9 @@
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
-    "dev": "tsc -b && concurrently -k -n tsc,node \"tsc -b --watch --preserveWatchOutput\" \"node --enable-source-maps --watch dist/main.js\"",
+    "dev": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1",
     "build": "tsc -b",
-    "start": "node dist/main.js"
+    "start": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.600.0",
@@ -20,14 +20,17 @@
     "@hyveon/shared": "*",
     "@nestjs/common": "^10.4.0",
     "@nestjs/core": "^10.4.0",
+    "@nestjs/microservices": "^10.4.0",
     "@nestjs/platform-express": "^10.4.0",
     "express": "^4.19.2",
+    "nestjs-electron-ipc-transport": "^1.0.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "winston": "^3.13.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "electron": "^36.0.0",
     "tsx": "^4.15.7"
   }
 }

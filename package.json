@@ -4,6 +4,7 @@
   "workspaces": [
     "app",
     "app/packages/*",
+    "app/packages/desktop-preload",
     "app/packages/lambda/*",
     "scripts"
   ],
