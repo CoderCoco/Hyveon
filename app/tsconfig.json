@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/desktop-main" },
+    { "path": "./packages/desktop-preload" },
     { "path": "./packages/web" },
     { "path": "./packages/lambda/interactions" },
     { "path": "./packages/lambda/followup" },
