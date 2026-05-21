@@ -5,9 +5,9 @@
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
-    "dev": "tsc -b && concurrently -k -n tsc,node \"tsc -b --watch --preserveWatchOutput\" \"node --enable-source-maps --watch dist/main.js\"",
+    "dev": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1",
     "build": "tsc -b",
-    "start": "node dist/main.js"
+    "start": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.600.0",
