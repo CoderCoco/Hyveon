@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { logger } from '../logger.js';
 import { EMBEDDED_TFSTATE } from '../generated/tfstate.js';
 
@@ -184,8 +185,8 @@ export class ConfigService {
   protected readUserDataPath(): string | null {
     if (!process.versions['electron']) return null;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const electron = require('electron') as { app: { getPath(name: string): string } };
+      const _require = createRequire(import.meta.url);
+      const electron = _require('electron') as { app: { getPath(name: string): string } };
       return electron.app.getPath('userData');
     } catch {
       return null;
