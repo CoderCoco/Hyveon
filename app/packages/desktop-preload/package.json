@@ -2,7 +2,10 @@
   "name": "@hyveon/desktop-preload",
   "version": "1.0.0",
   "private": true,
-  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./preload": "./dist/preload.js"
+  },
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
