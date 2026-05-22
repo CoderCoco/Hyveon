@@ -60,13 +60,17 @@ const DEFAULT_CONFIG: WatchdogConfig = {
 
 /**
  * Owns every runtime configuration source the management app reads:
- *  - `terraform.tfstate` (outputs of the last `terraform apply`) — parsed
- *    lazily and cached in-memory until {@link ConfigService.invalidateCache}
- *    is called. Path resolved by {@link ConfigService.getTfStatePath}.
- *  - `server_config.json` — the user-editable file holding the watchdog
- *    tunables and the optional API bearer token. Path resolved by
- *    {@link ConfigService.getServerConfigPath}.
+ *  - `terraform.tfstate` — parsed lazily and cached until
+ *    {@link ConfigService.invalidateCache} is called. Path resolved by
+ *    {@link ConfigService.getTfStatePath}.
+ *  - `server_config.json` — user-editable watchdog tunables and optional API
+ *    bearer token. Path resolved by {@link ConfigService.getServerConfigPath}.
  *  - A handful of process env vars (`AWS_DEFAULT_REGION`, `API_TOKEN`).
+ *
+ * Both path resolvers follow the same three-tier priority:
+ *  1. Env var override (`TF_STATE_PATH` / `SERVER_CONFIG_PATH`) — always wins.
+ *  2. `process.resourcesPath` — used when running inside an Electron packaged app.
+ *  3. Dev-mode repo fallback — when `process.resourcesPath` is unset.
  *
  * Every other service injects this one instead of touching `process.env` or
  * reading files directly, so tests can stub env/file access cleanly.
@@ -192,12 +196,9 @@ export class ConfigService {
    * Resolve the absolute path to `terraform.tfstate`.
    *
    * Resolution order:
-   *  1. `TF_STATE_PATH` env var — wins when set (useful for CI / Docker volume
-   *     mounts).
-   *  2. Electron packaged app — `<resourcesPath>/terraform/aws/terraform.tfstate`
-   *     (the Electron build copies the Terraform bundle there).
-   *  3. Dev/test fallback — repo root `terraform/terraform.tfstate` (same path
-   *     the old module-level constant resolved to).
+   *  1. `TF_STATE_PATH` env var — wins when set.
+   *  2. Electron packaged app — `<resourcesPath>/terraform/aws/terraform.tfstate`.
+   *  3. Dev/test fallback — repo root `terraform/terraform.tfstate`.
    */
   getTfStatePath(): string {
     const envOverride = process.env['TF_STATE_PATH'];
@@ -219,8 +220,7 @@ export class ConfigService {
    *  1. `SERVER_CONFIG_PATH` env var — wins when set.
    *  2. Electron packaged app — `<userData>/server_config.json` (user-writable
    *     location that survives app updates).
-   *  3. Dev/test fallback — `<APP_ROOT>/server_config.json` (same path the old
-   *     module-level constant resolved to).
+   *  3. Dev/test fallback — `<APP_ROOT>/server_config.json`.
    */
   getServerConfigPath(): string {
     const envOverride = process.env['SERVER_CONFIG_PATH'];
