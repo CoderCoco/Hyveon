@@ -6,14 +6,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * vi.mock() factory functions run (vi.mock calls are hoisted to the top of the
  * compiled output, above regular const/let declarations).
  */
-const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock } = vi.hoisted(() => {
+const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock } = vi.hoisted(() => {
   /** Fake NestJS microservice app returned by `NestFactory.createMicroservice`. */
   const fakeApp = { listen: vi.fn().mockResolvedValue(undefined) };
   /** Spy constructor for ElectronIPCTransport — tracks `new` invocations. */
   const ElectronIPCTransportMock = vi.fn().mockImplementation(() => ({}));
   /** Spy for `NestFactory.createMicroservice`. */
   const createMicroserviceMock = vi.fn().mockResolvedValue(fakeApp);
-  return { ElectronIPCTransportMock, fakeApp, createMicroserviceMock };
+  /** Spy for `applyFixPath` — verifies the fix-path bootstrap is called during startup. */
+  const applyFixPathMock = vi.fn();
+  return { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock };
 });
 
 vi.mock('nestjs-electron-ipc-transport', () => ({
@@ -35,6 +37,10 @@ vi.mock('./app.module.js', () => ({
   AppModule: class AppModule {},
 }));
 
+vi.mock('./fix-path-bootstrap.js', () => ({
+  applyFixPath: applyFixPathMock,
+}));
+
 describe('main bootstrap', () => {
   beforeEach(() => {
     /*
@@ -45,6 +51,7 @@ describe('main bootstrap', () => {
     ElectronIPCTransportMock.mockImplementation(() => ({}));
     createMicroserviceMock.mockResolvedValue(fakeApp);
     fakeApp.listen.mockResolvedValue(undefined);
+    applyFixPathMock.mockImplementation(() => undefined);
     // Simulate an Electron main-process environment so the module-level guard passes.
     vi.stubGlobal('process', { ...process, versions: { ...process.versions, electron: '36.0.0' } });
   });
@@ -91,5 +98,16 @@ describe('main bootstrap', () => {
 
     // listen() should have been called on the fake app.
     expect(fakeApp.listen).toHaveBeenCalledOnce();
+  });
+
+  it('should call applyFixPath during bootstrap', async () => {
+    vi.resetModules();
+    await import('./main.js');
+
+    // Flush the event loop so the async bootstrap chain fully resolves.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // applyFixPath must be invoked exactly once before NestFactory.createMicroservice.
+    expect(applyFixPathMock).toHaveBeenCalledTimes(1);
   });
 });
