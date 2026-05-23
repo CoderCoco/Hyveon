@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import path from 'node:path';
-import { app } from 'electron';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions } from '@nestjs/microservices';
 import { ElectronIPCTransport } from 'nestjs-electron-ipc-transport';
@@ -21,6 +20,7 @@ if (!process.versions['electron']) {
   );
 }
 
+const { app } = await import('electron') as unknown as { app: { getPath(name: string): string } };
 createLogger(path.join(app.getPath('userData'), 'logs'));
 
 async function bootstrap(): Promise<void> {
