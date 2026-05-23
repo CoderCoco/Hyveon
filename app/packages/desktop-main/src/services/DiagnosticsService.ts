@@ -2,6 +2,9 @@ import { Injectable, Inject } from '@nestjs/common';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
+/** Maximum bytes read from the end of the log file per tail call (~200 KB covers ~500 typical log lines). */
+const TAIL_READ_BYTES = 200 * 1024;
+
 /** Injection token for the directory where DailyRotateFile writes logs. */
 export const DIAGNOSTICS_LOG_DIR = 'DIAGNOSTICS_LOG_DIR';
 
@@ -38,23 +41,26 @@ export class DiagnosticsService {
    */
   async readTail(maxLines = 500): Promise<string[]> {
     const filePath = this.getTodayLogPath();
-    let content: string;
+    let fh: fs.FileHandle | undefined;
     try {
-      content = await fs.readFile(filePath, 'utf-8');
+      fh = await fs.open(filePath, 'r');
+      const { size } = await fh.stat();
+      const offset = Math.max(0, size - TAIL_READ_BYTES);
+      const buf = Buffer.alloc(size - offset);
+      await fh.read(buf, 0, buf.length, offset);
+      const content = buf.toString('utf-8');
+      const lines = content.split('\n');
+      // When reading from a mid-file offset the first line is likely a partial line — drop it.
+      const trimmed = offset > 0 ? lines.slice(1) : lines;
+      if (trimmed.at(-1) === '') trimmed.pop();
+      return trimmed.slice(-maxLines);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
       }
       throw err;
+    } finally {
+      await fh?.close();
     }
-
-    const lines = content.split('\n').filter((line, idx, arr) => {
-      // Drop trailing empty strings that arise from a trailing newline,
-      // but only at the very end of the array.
-      if (line === '' && idx === arr.length - 1) return false;
-      return true;
-    });
-
-    return lines.slice(-maxLines);
   }
 }
