@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 
@@ -51,10 +51,6 @@ describe('createLogger', () => {
 });
 
 describe('logger singleton', () => {
-  beforeEach(() => {
-    // Reset to console-only by re-creating; each test starts fresh.
-  });
-
   it('should reassign the exported logger binding when createLogger is called', async () => {
     // Capture the initial (console-only) reference.
     const beforeCall = initialLogger;
