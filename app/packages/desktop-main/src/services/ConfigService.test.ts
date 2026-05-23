@@ -254,15 +254,17 @@ describe('ConfigService', () => {
       delete process.env['SERVER_CONFIG_PATH'];
     });
 
-    it('should return packaged tfstate path when readResourcesPath returns a value', () => {
-      vi.spyOn(service as unknown as { readResourcesPath: () => string | undefined }, 'readResourcesPath').mockReturnValue('/fake/resources');
+    it('should return packaged tfstate path when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
       expect(service.getTfStatePath()).toBe(
         path.join('/fake/resources', 'terraform', 'aws', 'terraform.tfstate'),
       );
     });
 
-    it('should return the repo-relative fallback when readResourcesPath returns undefined', () => {
-      vi.spyOn(service as unknown as { readResourcesPath: () => string | undefined }, 'readResourcesPath').mockReturnValue(undefined);
+    it('should return the repo-relative fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
       const result = service.getTfStatePath();
       expect(result).toMatch(/terraform[/\\]terraform\.tfstate$/);
       expect(path.isAbsolute(result)).toBe(true);

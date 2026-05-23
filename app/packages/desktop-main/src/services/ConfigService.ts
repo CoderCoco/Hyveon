@@ -175,6 +175,24 @@ export class ConfigService {
   }
 
   /**
+   * Return whether the app is running as a packaged Electron build
+   * (`electron.app.isPackaged`). `process.resourcesPath` is set in both dev
+   * and packaged Electron processes, so it cannot be used as a packaged-build
+   * guard — this method is the reliable alternative. Extracted as a protected
+   * method so tests can stub it via `vi.spyOn`.
+   */
+  protected readIsPackaged(): boolean {
+    if (!process.versions['electron']) return false;
+    try {
+      const _require = createRequire(import.meta.url);
+      const electron = _require('electron') as { app: { isPackaged: boolean } };
+      return electron.app.isPackaged;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Return the Electron `userData` directory when running inside an Electron
    * process, or `null` otherwise. The `electron` module is required lazily at
    * call-time (keyed on `process.versions['electron']` being truthy) so that
@@ -198,16 +216,16 @@ export class ConfigService {
    *
    * Resolution order:
    *  1. `TF_STATE_PATH` env var — wins when set.
-   *  2. Electron packaged app — `<resourcesPath>/terraform/aws/terraform.tfstate`.
+   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform/aws/terraform.tfstate`.
    *  3. Dev/test fallback — repo root `terraform/terraform.tfstate`.
    */
   getTfStatePath(): string {
     const envOverride = process.env['TF_STATE_PATH'];
     if (envOverride) return envOverride;
 
-    const resourcesPath = this.readResourcesPath();
-    if (resourcesPath) {
-      return join(resourcesPath, 'terraform', 'aws', 'terraform.tfstate');
+    if (this.readIsPackaged()) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      return join(this.readResourcesPath()!, 'terraform', 'aws', 'terraform.tfstate');
     }
 
     // Dev fallback: repo root is one level above _APP_ROOT (app/)
