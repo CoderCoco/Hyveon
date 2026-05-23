@@ -275,15 +275,17 @@ describe('ConfigService', () => {
       expect(service.getTfStatePath()).toBe('/custom/state/terraform.tfstate');
     });
 
-    it('should return packaged server_config path when readUserDataPath returns a value', () => {
-      vi.spyOn(service as unknown as { readUserDataPath: () => string | null }, 'readUserDataPath').mockReturnValue('/fake/userData');
+    it('should return packaged server_config path when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readUserDataPath: () => string | null };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readUserDataPath').mockReturnValue('/fake/userData');
       expect(service.getServerConfigPath()).toBe(
         path.join('/fake/userData', 'server_config.json'),
       );
     });
 
-    it('should return the repo-relative fallback when readUserDataPath returns null', () => {
-      vi.spyOn(service as unknown as { readUserDataPath: () => string | null }, 'readUserDataPath').mockReturnValue(null);
+    it('should return the repo-relative fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
       const result = service.getServerConfigPath();
       expect(result).toMatch(/server_config\.json$/);
       expect(path.isAbsolute(result)).toBe(true);

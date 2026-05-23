@@ -70,8 +70,9 @@ const DEFAULT_CONFIG: WatchdogConfig = {
  *
  * Both path resolvers follow the same three-tier priority:
  *  1. Env var override (`TF_STATE_PATH` / `SERVER_CONFIG_PATH`) — always wins.
- *  2. `process.resourcesPath` — used when running inside an Electron packaged app.
- *  3. Dev-mode repo fallback — when `process.resourcesPath` is unset.
+ *  2. Electron packaged build (`electron.app.isPackaged`) — uses Electron-specific
+ *     paths (`resourcesPath` for tfstate, `userData` for server config).
+ *  3. Dev/test fallback — repo-relative paths when not in a packaged build.
  *
  * Every other service injects this one instead of touching `process.env` or
  * reading files directly, so tests can stub env/file access cleanly.
@@ -237,17 +238,19 @@ export class ConfigService {
    *
    * Resolution order:
    *  1. `SERVER_CONFIG_PATH` env var — wins when set.
-   *  2. Electron packaged app — `<userData>/server_config.json` (user-writable
-   *     location that survives app updates).
+   *  2. Electron packaged app (`app.isPackaged`) — `<userData>/server_config.json`
+   *     (user-writable location that survives app updates).
    *  3. Dev/test fallback — `<APP_ROOT>/server_config.json`.
    */
   getServerConfigPath(): string {
     const envOverride = process.env['SERVER_CONFIG_PATH'];
     if (envOverride) return envOverride;
 
-    const userData = this.readUserDataPath();
-    if (userData) {
-      return join(userData, 'server_config.json');
+    if (this.readIsPackaged()) {
+      const userData = this.readUserDataPath();
+      if (userData) {
+        return join(userData, 'server_config.json');
+      }
     }
 
     return join(_APP_ROOT, 'server_config.json');
