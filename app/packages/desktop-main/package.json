@@ -23,6 +23,7 @@
     "@nestjs/microservices": "^10.4.0",
     "@nestjs/platform-express": "^10.4.0",
     "express": "^4.19.2",
+    "fix-path": "^4.0.0",
     "nestjs-electron-ipc-transport": "^1.0.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
