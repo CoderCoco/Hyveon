@@ -46,12 +46,16 @@ export class DiagnosticsService {
       fh = await fs.open(filePath, 'r');
       const { size } = await fh.stat();
       const offset = Math.max(0, size - TAIL_READ_BYTES);
-      const buf = Buffer.alloc(size - offset);
-      const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+      // Peek one byte before the window so the first split element is always either
+      // an empty string (offset landed on a newline) or a partial fragment (offset
+      // landed mid-line) — both are safe to drop, eliminating the risk of discarding
+      // a complete first line when the offset coincides with a line boundary.
+      const readFrom = Math.max(0, offset - 1);
+      const buf = Buffer.alloc(size - readFrom);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, readFrom);
       const content = buf.subarray(0, bytesRead).toString('utf-8');
       const lines = content.split('\n');
-      // When reading from a mid-file offset the first line is likely a partial line — drop it.
-      const trimmed = offset > 0 ? lines.slice(1) : lines;
+      const trimmed = readFrom > 0 ? lines.slice(1) : lines;
       if (trimmed.at(-1) === '') trimmed.pop();
       return trimmed.slice(-maxLines);
     } catch (err) {

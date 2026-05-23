@@ -130,4 +130,17 @@ describe('DiagnosticsService.readTail', () => {
     // the window and must survive.
     expect(result).toEqual(['first-full-line', 'second-full-line']);
   });
+
+  it('should not drop the first line when the offset lands exactly on a newline boundary', async () => {
+    // Place the offset precisely at a newline so the peek-back byte is '\n'.
+    // The first line after the boundary ('boundary-line') is complete and must not be dropped.
+    const head = 'x'.repeat(TAIL_READ_BYTES) + '\n';
+    const tail = 'boundary-line\nnext-line\n';
+    const handle = makeMockHandle(head + tail);
+    mockOpen.mockResolvedValueOnce(handle as unknown as fsPromises.FileHandle);
+
+    const result = await service.readTail(10);
+    expect(result).toContain('boundary-line');
+    expect(result).toContain('next-line');
+  });
 });
