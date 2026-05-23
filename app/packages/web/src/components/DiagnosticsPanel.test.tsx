@@ -27,7 +27,6 @@ describe('DiagnosticsPanel', () => {
   });
 
   afterEach(() => {
-    vi.clearAllTimers();
     vi.clearAllMocks();
   });
 
