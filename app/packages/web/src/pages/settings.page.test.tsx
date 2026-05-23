@@ -6,8 +6,13 @@ const apiMock = vi.hoisted(() => ({
   costsEstimate: vi.fn(),
   config: vi.fn(),
   saveConfig: vi.fn(),
+  diagnosticsTail: vi.fn(),
+  diagnosticsLogPath: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
+vi.mock('../components/DiagnosticsPanel.js', () => ({
+  DiagnosticsPanel: () => <div data-testid="diagnostics-panel">DiagnosticsPanel</div>,
+}));
 
 import { SettingsPage } from './settings.page.js';
 import { renderPage } from '../test-utils/render-page.utils.js';
@@ -36,5 +41,15 @@ describe('SettingsPage', () => {
   it('should render the polling indicator once the status poll resolves', async () => {
     renderPage(<SettingsPage />, { initialEntries: ['/settings'] });
     expect(await screen.findByText(/^Updated\b/)).toBeInTheDocument();
+  });
+
+  it('should render the Diagnostics section heading', () => {
+    renderPage(<SettingsPage />, { initialEntries: ['/settings'] });
+    expect(screen.getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+  });
+
+  it('should render the DiagnosticsPanel inside the Diagnostics section', () => {
+    renderPage(<SettingsPage />, { initialEntries: ['/settings'] });
+    expect(screen.getByTestId('diagnostics-panel')).toBeInTheDocument();
   });
 });

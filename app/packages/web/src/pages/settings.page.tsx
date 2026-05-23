@@ -1,3 +1,4 @@
+import { DiagnosticsPanel } from '../components/DiagnosticsPanel.js';
 import { WatchdogPanel } from '../components/watchdog-panel.component.js';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
 
@@ -20,11 +21,17 @@ export function SettingsPage() {
       </div>
 
       {/* General settings placeholder */}
-      <div>
+      <div className="mb-8">
         <h3 className="text-lg font-medium mb-4">General</h3>
         <p className="text-muted-foreground text-sm">
           Additional configuration options will appear here in future updates.
         </p>
+      </div>
+
+      {/* Diagnostics section */}
+      <div>
+        <h3 className="text-lg font-medium mb-4">Diagnostics</h3>
+        <DiagnosticsPanel />
       </div>
     </div>
   );
