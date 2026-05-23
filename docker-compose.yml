@@ -4,20 +4,6 @@ services:
     ports:
       - "5000:3001"
     volumes:
-      # Makes terraform.tfstate readable by the app
-      - ./terraform:/workspace/terraform:ro
-      # Persists server_config.json across container restarts.
-      # NOTE: the host file must exist before `docker compose up` — create it with
-      #       `touch app/server_config.json` on first run. With
-      #       `bind.create_host_path: false`, Compose fails fast with a clear error
-      #       if the file is missing; that's the whole point of the long-syntax
-      #       bind mount, which avoids the silent-directory/EISDIR issue Docker's
-      #       default short-syntax mounts would otherwise cause.
-      - type: bind
-        source: ./app/server_config.json
-        target: /workspace/app/server_config.json
-        bind:
-          create_host_path: false
       # AWS credentials — remove if using env vars instead
       - ~/.aws:/root/.aws:ro
     environment:

@@ -2,22 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { logger } from '../logger.js';
 import { EMBEDDED_TFSTATE } from '../generated/tfstate.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+/** Absolute path to the `dist/services/` directory at runtime. */
+const _dirname = dirname(fileURLToPath(import.meta.url));
 
-// dist/services/ → 4 hops up = app root (repo: app/, Docker: /workspace/app/)
-// 5 hops up = repo/workspace root, where terraform/ lives
-const APP_ROOT = join(__dirname, '..', '..', '..', '..');
-
-const TF_STATE_PATH =
-  process.env['TF_STATE_PATH'] ??
-  join(APP_ROOT, '..', 'terraform', 'terraform.tfstate');
-
-const SERVER_CONFIG_PATH =
-  process.env['SERVER_CONFIG_PATH'] ??
-  join(APP_ROOT, 'server_config.json');
+/**
+ * Absolute path to the app root (`app/` in the repo, `/workspace/app/` in Docker).
+ * Derived by walking 4 levels up from `dist/services/`.
+ * Used only as a private dev-mode fallback inside instance methods — callers
+ * should use `getTfStatePath()` / `getServerConfigPath()` instead.
+ */
+const _APP_ROOT = join(_dirname, '..', '..', '..', '..');
 
 /**
  * Shape of the subset of Terraform root outputs the management app consumes.
@@ -63,13 +61,18 @@ const DEFAULT_CONFIG: WatchdogConfig = {
 
 /**
  * Owns every runtime configuration source the management app reads:
- *  - `terraform.tfstate` (outputs of the last `terraform apply`) — parsed
- *    lazily and cached in-memory until {@link ConfigService.invalidateCache}
- *    is called.
- *  - `server_config.json` — the user-editable file holding the watchdog
- *    tunables and the optional API bearer token. Path resolved via
- *    `SERVER_CONFIG_PATH` env var, defaulting to `<app-root>/server_config.json`.
+ *  - `terraform.tfstate` — parsed lazily and cached until
+ *    {@link ConfigService.invalidateCache} is called. Path resolved by
+ *    {@link ConfigService.getTfStatePath}.
+ *  - `server_config.json` — user-editable watchdog tunables and optional API
+ *    bearer token. Path resolved by {@link ConfigService.getServerConfigPath}.
  *  - A handful of process env vars (`AWS_DEFAULT_REGION`, `API_TOKEN`).
+ *
+ * Both path resolvers follow the same three-tier priority:
+ *  1. Env var override (`TF_STATE_PATH` / `SERVER_CONFIG_PATH`) — always wins.
+ *  2. Electron packaged build (`electron.app.isPackaged`) — uses Electron-specific
+ *     paths (`resourcesPath` for tfstate, `userData` for server config).
+ *  3. Dev/test fallback — repo-relative paths when not in a packaged build.
  *
  * Every other service injects this one instead of touching `process.env` or
  * reading files directly, so tests can stub env/file access cleanly.
@@ -100,18 +103,19 @@ export class ConfigService {
     type RawState = { outputs?: Record<string, { value: unknown }> };
     let raw: RawState;
 
-    if (existsSync(TF_STATE_PATH)) {
+    const tfStatePath = this.getTfStatePath();
+    if (existsSync(tfStatePath)) {
       try {
-        raw = JSON.parse(readFileSync(TF_STATE_PATH, 'utf-8')) as RawState;
+        raw = JSON.parse(readFileSync(tfStatePath, 'utf-8')) as RawState;
       } catch (err) {
-        logger.error('Failed to parse Terraform state', { err, path: TF_STATE_PATH });
+        logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
         return null;
       }
     } else if (EMBEDDED_TFSTATE) {
       logger.debug('Using build-time embedded Terraform state');
       raw = EMBEDDED_TFSTATE as unknown as RawState;
     } else {
-      logger.warn('Terraform state not found', { path: TF_STATE_PATH });
+      logger.warn('Terraform state not found', { path: tfStatePath });
       return null;
     }
 
@@ -163,6 +167,96 @@ export class ConfigService {
   }
 
   /**
+   * Return `process.resourcesPath` when running inside an Electron packaged app,
+   * or `undefined` otherwise. Extracted as a protected method so tests can stub
+   * it via `vi.spyOn` without touching `process.resourcesPath` directly.
+   */
+  protected readResourcesPath(): string | undefined {
+    return (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  }
+
+  /**
+   * Return whether the app is running as a packaged Electron build
+   * (`electron.app.isPackaged`). `process.resourcesPath` is set in both dev
+   * and packaged Electron processes, so it cannot be used as a packaged-build
+   * guard — this method is the reliable alternative. Extracted as a protected
+   * method so tests can stub it via `vi.spyOn`.
+   */
+  protected readIsPackaged(): boolean {
+    if (!process.versions['electron']) return false;
+    try {
+      const _require = createRequire(import.meta.url);
+      const electron = _require('electron') as { app: { isPackaged: boolean } };
+      return electron.app.isPackaged;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Return the Electron `userData` directory when running inside an Electron
+   * process, or `null` otherwise. The `electron` module is required lazily at
+   * call-time (keyed on `process.versions['electron']` being truthy) so that
+   * importing this module in a plain Node/test context never triggers an
+   * unresolved-module error. Extracted as a protected method so tests can stub
+   * it via `vi.spyOn`.
+   */
+  protected readUserDataPath(): string | null {
+    if (!process.versions['electron']) return null;
+    try {
+      const _require = createRequire(import.meta.url);
+      const electron = _require('electron') as { app: { getPath(name: string): string } };
+      return electron.app.getPath('userData');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Resolve the absolute path to `terraform.tfstate`.
+   *
+   * Resolution order:
+   *  1. `TF_STATE_PATH` env var — wins when set.
+   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform/aws/terraform.tfstate`.
+   *  3. Dev/test fallback — repo root `terraform/terraform.tfstate`.
+   */
+  getTfStatePath(): string {
+    const envOverride = process.env['TF_STATE_PATH'];
+    if (envOverride) return envOverride;
+
+    if (this.readIsPackaged()) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      return join(this.readResourcesPath()!, 'terraform', 'aws', 'terraform.tfstate');
+    }
+
+    // Dev fallback: repo root is one level above _APP_ROOT (app/)
+    return join(_APP_ROOT, '..', 'terraform', 'terraform.tfstate');
+  }
+
+  /**
+   * Resolve the absolute path to `server_config.json`.
+   *
+   * Resolution order:
+   *  1. `SERVER_CONFIG_PATH` env var — wins when set.
+   *  2. Electron packaged app (`app.isPackaged`) — `<userData>/server_config.json`
+   *     (user-writable location that survives app updates).
+   *  3. Dev/test fallback — `<APP_ROOT>/server_config.json`.
+   */
+  getServerConfigPath(): string {
+    const envOverride = process.env['SERVER_CONFIG_PATH'];
+    if (envOverride) return envOverride;
+
+    if (this.readIsPackaged()) {
+      const userData = this.readUserDataPath();
+      if (userData) {
+        return join(userData, 'server_config.json');
+      }
+    }
+
+    return join(_APP_ROOT, 'server_config.json');
+  }
+
+  /**
    * Token required on every `/api/*` request's `Authorization: Bearer <token>` header.
    *
    * Resolution order:
@@ -183,9 +277,10 @@ export class ConfigService {
     if (env !== undefined) {
       return env.length > 0 ? env : null;
     }
-    if (!existsSync(SERVER_CONFIG_PATH)) return null;
+    const serverConfigPath = this.getServerConfigPath();
+    if (!existsSync(serverConfigPath)) return null;
     try {
-      const raw = JSON.parse(readFileSync(SERVER_CONFIG_PATH, 'utf-8')) as { api_token?: unknown };
+      const raw = JSON.parse(readFileSync(serverConfigPath, 'utf-8')) as { api_token?: unknown };
       return typeof raw.api_token === 'string' && raw.api_token.length > 0 ? raw.api_token : null;
     } catch (err) {
       logger.warn('Could not read api_token from config file', { err });
@@ -212,9 +307,10 @@ export class ConfigService {
    * fresh object on every call — safe for callers to mutate.
    */
   getConfig(): WatchdogConfig {
-    if (!existsSync(SERVER_CONFIG_PATH)) return { ...DEFAULT_CONFIG };
+    const serverConfigPath = this.getServerConfigPath();
+    if (!existsSync(serverConfigPath)) return { ...DEFAULT_CONFIG };
     try {
-      const saved = JSON.parse(readFileSync(SERVER_CONFIG_PATH, 'utf-8')) as Partial<WatchdogConfig>;
+      const saved = JSON.parse(readFileSync(serverConfigPath, 'utf-8')) as Partial<WatchdogConfig>;
       return { ...DEFAULT_CONFIG, ...saved };
     } catch (err) {
       logger.warn('Could not read config file, using defaults', { err });
@@ -228,7 +324,7 @@ export class ConfigService {
    * save here is not effective until the next `terraform apply`.
    */
   saveConfig(config: WatchdogConfig): void {
-    writeFileSync(SERVER_CONFIG_PATH, JSON.stringify(config, null, 2));
+    writeFileSync(this.getServerConfigPath(), JSON.stringify(config, null, 2));
     logger.info('Config saved', config);
   }
 }

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'path';
 
 vi.mock('fs', () => ({
   readFileSync: vi.fn(),
@@ -243,6 +244,51 @@ describe('ConfigService', () => {
       expect(mockWrite).toHaveBeenCalledTimes(1);
       const [, payload] = mockWrite.mock.calls[0]!;
       expect(JSON.parse(payload as string)).toEqual(config);
+    });
+  });
+
+  describe('path resolution', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env['TF_STATE_PATH'];
+      delete process.env['SERVER_CONFIG_PATH'];
+    });
+
+    it('should return packaged tfstate path when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
+      expect(service.getTfStatePath()).toBe(
+        path.join('/fake/resources', 'terraform', 'aws', 'terraform.tfstate'),
+      );
+    });
+
+    it('should return the repo-relative fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
+      const result = service.getTfStatePath();
+      expect(result).toMatch(/terraform[/\\]terraform\.tfstate$/);
+      expect(path.isAbsolute(result)).toBe(true);
+    });
+
+    it('should return the TF_STATE_PATH env var value when set', () => {
+      process.env['TF_STATE_PATH'] = '/custom/state/terraform.tfstate';
+      expect(service.getTfStatePath()).toBe('/custom/state/terraform.tfstate');
+    });
+
+    it('should return packaged server_config path when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readUserDataPath: () => string | null };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readUserDataPath').mockReturnValue('/fake/userData');
+      expect(service.getServerConfigPath()).toBe(
+        path.join('/fake/userData', 'server_config.json'),
+      );
+    });
+
+    it('should return the repo-relative fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
+      const result = service.getServerConfigPath();
+      expect(result).toMatch(/server_config\.json$/);
+      expect(path.isAbsolute(result)).toBe(true);
     });
   });
 });

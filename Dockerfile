@@ -28,8 +28,6 @@ RUN npm ci --ignore-scripts
 COPY app/ app/
 RUN npm run build -w game-server-manager
 
-# Switch to the app directory so ConfigService path probing and process.cwd()
-# behave the same as in the previous single-WORKDIR setup.
 WORKDIR /workspace/app
 
 EXPOSE 3001
