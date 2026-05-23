@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'module';
 import { Module } from '@nestjs/common';
@@ -41,7 +42,7 @@ import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsS
       provide: DIAGNOSTICS_LOG_DIR,
       useFactory: () => {
         if (!process.versions['electron']) {
-          return process.env['DIAGNOSTICS_LOG_DIR'] ?? '';
+          return process.env['DIAGNOSTICS_LOG_DIR'] ?? os.tmpdir();
         }
         const _require = createRequire(import.meta.url);
         const { app } = _require('electron') as { app: { getPath(name: string): string } };
