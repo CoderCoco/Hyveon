@@ -1,7 +1,7 @@
 import * as path from 'node:path';
+import { createRequire } from 'module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { app as electronApp } from 'electron';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
@@ -39,7 +39,14 @@ import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsS
     { provide: APP_GUARD, useClass: ApiTokenGuard },
     {
       provide: DIAGNOSTICS_LOG_DIR,
-      useFactory: () => path.join(electronApp.getPath('userData'), 'logs'),
+      useFactory: () => {
+        if (!process.versions['electron']) {
+          return process.env['DIAGNOSTICS_LOG_DIR'] ?? '';
+        }
+        const _require = createRequire(import.meta.url);
+        const { app } = _require('electron') as { app: { getPath(name: string): string } };
+        return path.join(app.getPath('userData'), 'logs');
+      },
     },
     DiagnosticsService,
   ],

@@ -47,8 +47,8 @@ export class DiagnosticsService {
       const { size } = await fh.stat();
       const offset = Math.max(0, size - TAIL_READ_BYTES);
       const buf = Buffer.alloc(size - offset);
-      await fh.read(buf, 0, buf.length, offset);
-      const content = buf.toString('utf-8');
+      const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+      const content = buf.subarray(0, bytesRead).toString('utf-8');
       const lines = content.split('\n');
       // When reading from a mid-file offset the first line is likely a partial line — drop it.
       const trimmed = offset > 0 ? lines.slice(1) : lines;
