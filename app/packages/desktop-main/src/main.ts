@@ -1,11 +1,15 @@
 import 'reflect-metadata';
+import path from 'node:path';
+import { app } from 'electron';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions } from '@nestjs/microservices';
 import { ElectronIPCTransport } from 'nestjs-electron-ipc-transport';
 import { AppModule } from './app.module.js';
 import { applyFixPath } from './fix-path-bootstrap.js';
+import { createLogger } from './logger.js';
 
 applyFixPath();
+createLogger(path.join(app.getPath('userData'), 'logs'));
 
 // ElectronIPCTransport requires ipcMain, which is only available inside an
 // Electron main process. Fail fast with a readable message rather than a
