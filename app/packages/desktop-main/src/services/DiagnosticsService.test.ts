@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
 
 vi.mock('node:fs/promises', () => ({
   open: vi.fn(),
@@ -46,13 +47,14 @@ describe('DiagnosticsService.getTodayLogPath', () => {
     const dd = String(now.getDate()).padStart(2, '0');
     const expectedFilename = `main-${yyyy}-${mm}-${dd}.log`;
 
-    expect(logPath).toBe(`/var/log/hyveon/${expectedFilename}`);
+    expect(logPath).toBe(path.join('/var/log/hyveon', expectedFilename));
   });
 
   it('should use the logDir supplied via the injection token', () => {
-    const service = makeService('/custom/logs');
+    const logDir = '/custom/logs';
+    const service = makeService(logDir);
     const logPath = service.getTodayLogPath();
-    expect(logPath.startsWith('/custom/logs/')).toBe(true);
+    expect(path.dirname(logPath)).toBe(logDir);
   });
 });
 
