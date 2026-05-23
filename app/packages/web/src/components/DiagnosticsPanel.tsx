@@ -16,22 +16,20 @@ export function DiagnosticsPanel() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  /** Fetch lines (and path on the first call), skipping state updates if cancelled. */
-  async function fetchData(isFirstFetch: boolean, isCancelled: () => boolean) {
+  /** Fetch tail lines and log path, skipping state updates if cancelled. */
+  async function fetchData(isCancelled: () => boolean) {
     try {
       const [tailResult, pathResult] = await Promise.all([
         api.diagnosticsTail(),
-        isFirstFetch ? api.diagnosticsLogPath() : Promise.resolve(null),
+        api.diagnosticsLogPath(),
       ]);
       if (isCancelled()) return;
       setLines(tailResult.lines);
-      if (pathResult) setLogPath(pathResult.path);
+      setLogPath(pathResult.path);
       setError(null);
     } catch (err) {
       if (isCancelled()) return;
       setError(err instanceof Error ? err.message : 'Failed to load diagnostics');
-    } finally {
-      if (isFirstFetch && !isCancelled()) setLoading(false);
     }
   }
 
@@ -40,11 +38,12 @@ export function DiagnosticsPanel() {
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
     void (async () => {
-      await fetchData(true, () => cancelled);
+      await fetchData(() => cancelled);
       if (cancelled) return;
+      setLoading(false);
 
       intervalId = setInterval(() => {
-        if (!cancelled) void fetchData(false, () => cancelled);
+        if (!cancelled) void fetchData(() => cancelled);
       }, POLL_INTERVAL_MS);
     })();
 
