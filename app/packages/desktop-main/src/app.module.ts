@@ -1,5 +1,7 @@
+import * as path from 'node:path';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { app as electronApp } from 'electron';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
@@ -9,7 +11,9 @@ import { LogsController } from './controllers/logs.controller.js';
 import { FilesController } from './controllers/files.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
 import { EnvController } from './controllers/env.controller.js';
+import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { ApiTokenGuard } from './guards/api-token.guard.js';
+import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`) to
@@ -29,7 +33,15 @@ import { ApiTokenGuard } from './guards/api-token.guard.js';
     FilesController,
     DiscordController,
     EnvController,
+    DiagnosticsController,
   ],
-  providers: [{ provide: APP_GUARD, useClass: ApiTokenGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ApiTokenGuard },
+    {
+      provide: DIAGNOSTICS_LOG_DIR,
+      useFactory: () => path.join(electronApp.getPath('userData'), 'logs'),
+    },
+    DiagnosticsService,
+  ],
 })
 export class AppModule {}
