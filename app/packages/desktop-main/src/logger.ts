@@ -3,23 +3,25 @@ import DailyRotateFile from 'winston-daily-rotate-file';
 
 const isDev = process.env['NODE_ENV'] !== 'production';
 
-/** Shared format used by all transports. */
-const sharedFormat = isDev
+const devPrintf = winston.format.printf((info) => {
+  const { timestamp, level, message, ...meta } = info as Record<string, unknown>;
+  const metaStr = Object.keys(meta).length ? '\n' + JSON.stringify(meta, null, 2) : '';
+  return `${timestamp} [${level}] ${message}${metaStr}`;
+});
+
+/** Format for the Console transport — colorized in dev for readability. */
+const consoleFormat = isDev
   ? winston.format.combine(
       winston.format.colorize(),
       winston.format.timestamp({ format: 'HH:mm:ss' }),
-      winston.format.printf((info) => {
-        const { timestamp, level, message, ...meta } = info as Record<string, unknown>;
-        const metaStr = Object.keys(meta).length
-          ? '\n' + JSON.stringify(meta, null, 2)
-          : '';
-        return `${timestamp} [${level}] ${message}${metaStr}`;
-      }),
+      devPrintf,
     )
-  : winston.format.combine(
-      winston.format.timestamp(),
-      winston.format.json(),
-    );
+  : winston.format.combine(winston.format.timestamp(), winston.format.json());
+
+/** Format for file transports — no ANSI escape codes, safe for log parsers. */
+const fileFormat = isDev
+  ? winston.format.combine(winston.format.timestamp({ format: 'HH:mm:ss' }), devPrintf)
+  : winston.format.combine(winston.format.timestamp(), winston.format.json());
 
 /**
  * Creates a console-only fallback logger used as the initial singleton value
@@ -28,7 +30,7 @@ const sharedFormat = isDev
 function createConsoleOnlyLogger(): winston.Logger {
   return winston.createLogger({
     level: isDev ? 'debug' : 'info',
-    format: sharedFormat,
+    format: consoleFormat,
     transports: [new winston.transports.Console()],
   });
 }
@@ -52,10 +54,10 @@ export let logger: winston.Logger = createConsoleOnlyLogger();
 export function createLogger(logDir: string): winston.Logger {
   const newLogger = winston.createLogger({
     level: isDev ? 'debug' : 'info',
-    format: sharedFormat,
     transports: [
-      new winston.transports.Console(),
+      new winston.transports.Console({ format: consoleFormat }),
       new DailyRotateFile({
+        format: fileFormat,
         dirname: logDir,
         filename: 'main-%DATE%.log',
         datePattern: 'YYYY-MM-DD',
