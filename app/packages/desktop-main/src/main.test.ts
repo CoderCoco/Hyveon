@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * vi.mock() factory functions run (vi.mock calls are hoisted to the top of the
  * compiled output, above regular const/let declarations).
  */
-const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock } = vi.hoisted(() => {
+const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock, mockApp, createLoggerMock } = vi.hoisted(() => {
   /** Fake NestJS microservice app returned by `NestFactory.createMicroservice`. */
   const fakeApp = { listen: vi.fn().mockResolvedValue(undefined) };
   /** Spy constructor for ElectronIPCTransport — tracks `new` invocations. */
@@ -15,8 +15,20 @@ const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathM
   const createMicroserviceMock = vi.fn().mockResolvedValue(fakeApp);
   /** Spy for `applyFixPath` — verifies the fix-path bootstrap is called during startup. */
   const applyFixPathMock = vi.fn();
-  return { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock };
+  /** Fake Electron `app` object with a `getPath` spy. */
+  const mockApp = { getPath: vi.fn().mockReturnValue('/fake/userData') };
+  /** Spy for `createLogger` — verifies the file logger is initialised before bootstrap. */
+  const createLoggerMock = vi.fn();
+  return { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock, mockApp, createLoggerMock };
 });
+
+vi.mock('electron', () => ({
+  app: mockApp,
+}));
+
+vi.mock('./logger.js', () => ({
+  createLogger: createLoggerMock,
+}));
 
 vi.mock('nestjs-electron-ipc-transport', () => ({
   ElectronIPCTransport: ElectronIPCTransportMock,
@@ -52,6 +64,8 @@ describe('main bootstrap', () => {
     createMicroserviceMock.mockResolvedValue(fakeApp);
     fakeApp.listen.mockResolvedValue(undefined);
     applyFixPathMock.mockImplementation(() => undefined);
+    mockApp.getPath.mockReturnValue('/fake/userData');
+    createLoggerMock.mockImplementation(() => undefined);
     // Simulate an Electron main-process environment so the module-level guard passes.
     vi.stubGlobal('process', { ...process, versions: { ...process.versions, electron: '36.0.0' } });
   });
@@ -109,5 +123,19 @@ describe('main bootstrap', () => {
 
     // applyFixPath must be invoked exactly once before NestFactory.createMicroservice.
     expect(applyFixPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should resolve userData path and initialise the file logger before bootstrap', async () => {
+    vi.resetModules();
+    await import('./main.js');
+
+    // Flush the event loop so the async bootstrap chain fully resolves.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // Electron app.getPath should have been called with 'userData' to derive the log directory.
+    expect(mockApp.getPath).toHaveBeenCalledWith('userData');
+
+    // createLogger must have been called with the userData/logs path before NestFactory boots.
+    expect(createLoggerMock).toHaveBeenCalledWith('/fake/userData/logs');
   });
 });

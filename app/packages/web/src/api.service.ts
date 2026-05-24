@@ -272,4 +272,7 @@ export const api = {
       `/api/discord/permissions/${game}`,
       { method: 'DELETE' },
     ),
+
+  diagnosticsTail: () => request<{ lines: string[] }>('/api/diagnostics/tail'),
+  diagnosticsLogPath: () => request<{ path: string }>('/api/diagnostics/path'),
 };
