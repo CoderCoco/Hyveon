@@ -15,6 +15,8 @@ import { EnvController } from './controllers/env.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { ApiTokenGuard } from './guards/api-token.guard.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
+import { SafeStorageService } from './services/SafeStorageService.js';
+import { ElectronStoreService } from './services/ElectronStoreService.js';
 
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`) to
@@ -50,6 +52,8 @@ import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsS
       },
     },
     DiagnosticsService,
+    SafeStorageService,
+    ElectronStoreService,
   ],
 })
 export class AppModule {}
