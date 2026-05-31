@@ -18,8 +18,8 @@ export interface AppStoreSchema {
   /** Locked to `'aws'` for v1. */
   activeCloud: 'aws';
   aws: {
-    region: string;
-    profile: string;
+    region?: string;
+    profile?: string;
     /** Stored as an encrypted base64 blob — do not read this field directly. */
     accessKeyId?: string;
     /** Stored as an encrypted base64 blob — do not read this field directly. */
@@ -109,7 +109,7 @@ export class ElectronStoreService {
    */
   setSecretAccessKeyId(value: string): void {
     const encrypted = this.safeStorage.encrypt(value);
-    const current = this.get('aws') ?? ({} as AppStoreSchema['aws']);
+    const current = this.get('aws') ?? {};
     this.set('aws', { ...current, accessKeyId: encrypted });
     logger.debug('ElectronStoreService: aws.accessKeyId written (encrypted)');
   }
@@ -135,7 +135,7 @@ export class ElectronStoreService {
    */
   setSecretAccessKey(value: string): void {
     const encrypted = this.safeStorage.encrypt(value);
-    const current = this.get('aws') ?? ({} as AppStoreSchema['aws']);
+    const current = this.get('aws') ?? {};
     this.set('aws', { ...current, secretAccessKey: encrypted });
     logger.debug('ElectronStoreService: aws.secretAccessKey written (encrypted)');
   }
