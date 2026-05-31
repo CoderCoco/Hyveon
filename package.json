@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=20"
   },
+  "devDependencies": {
+    "electron-vite": "^5.0.0"
+  },
   "scripts": {
     "app:dev": "npm run dev            -w game-server-manager",
     "app:build": "npm run build          -w game-server-manager",
