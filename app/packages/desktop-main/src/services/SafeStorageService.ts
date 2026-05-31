@@ -43,8 +43,8 @@ export class SafeStorageService {
    *   encryption is unavailable.
    */
   encrypt(plaintext: string): string {
-    if (!this.readIsElectron()) {
-      logger.warn('SafeStorageService: Electron not available — returning plaintext unchanged');
+    if (!this.isAvailable()) {
+      logger.warn('SafeStorageService: encryption not available — returning plaintext unchanged');
       return plaintext;
     }
     const buf = this.encryptString(plaintext);
@@ -62,9 +62,15 @@ export class SafeStorageService {
    *   produced outside Electron.
    * @returns Decrypted plaintext, or the original `ciphertext` when decryption
    *   is unavailable.
+   *
+   * @remarks
+   * The caller must ensure that values written via `encrypt()` and read via
+   * `decrypt()` are always processed in the same context (Electron with
+   * keychain, or non-Electron). A ciphertext blob written in Electron cannot
+   * be decrypted in a non-Electron process, and vice versa.
    */
   decrypt(ciphertext: string): string {
-    if (!this.readIsElectron()) {
+    if (!this.isAvailable()) {
       return ciphertext;
     }
     const buf = Buffer.from(ciphertext, 'base64');

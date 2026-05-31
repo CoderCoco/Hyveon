@@ -80,10 +80,27 @@ describe('SafeStorageService', () => {
   // ---------------------------------------------------------------------------
 
   describe('encrypt() inside Electron', () => {
-    /** Spy that makes the service believe it is running inside Electron. */
+    /** Spy that makes the service believe it is running inside Electron with keychain available. */
     function stubElectron() {
       vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
     }
+
+    it('should return plaintext unchanged when keychain is unavailable inside Electron', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(false);
+
+      expect(service.encrypt('my-secret')).toBe('my-secret');
+    });
+
+    it('should log a warning when keychain is unavailable inside Electron', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(false);
+
+      service.encrypt('my-secret');
+
+      expect(logger.warn).toHaveBeenCalled();
+    });
 
     it('should return a base64-encoded string when Electron is available', () => {
       stubElectron();
@@ -126,10 +143,19 @@ describe('SafeStorageService', () => {
   // ---------------------------------------------------------------------------
 
   describe('decrypt() inside Electron', () => {
-    /** Spy that makes the service believe it is running inside Electron. */
+    /** Spy that makes the service believe it is running inside Electron with keychain available. */
     function stubElectron() {
       vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
     }
+
+    it('should return ciphertext unchanged when keychain is unavailable inside Electron', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(false);
+
+      const ciphertext = Buffer.from('some-data').toString('base64');
+      expect(service.decrypt(ciphertext)).toBe(ciphertext);
+    });
 
     it('should decrypt base64 ciphertext back to plaintext', () => {
       stubElectron();
@@ -159,6 +185,7 @@ describe('SafeStorageService', () => {
   describe('round-trip', () => {
     it('should encrypt and decrypt back to the original value', () => {
       vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
 
       // encryptString wraps the plaintext bytes in a Buffer (real encode step for testing)
       vi.spyOn(
