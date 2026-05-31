@@ -64,10 +64,13 @@ export class SafeStorageService {
    *   is unavailable.
    *
    * @remarks
-   * The caller must ensure that values written via `encrypt()` and read via
-   * `decrypt()` are always processed in the same context (Electron with
-   * keychain, or non-Electron). A ciphertext blob written in Electron cannot
-   * be decrypted in a non-Electron process, and vice versa.
+   * The caller must ensure that `isAvailable()` returns the same value at
+   * both write time (`encrypt`) and read time (`decrypt`). A ciphertext blob
+   * written when the OS keychain was available cannot be safely round-tripped
+   * if `isAvailable()` later returns `false` (e.g. keychain locked between
+   * writes and reads within the same Electron process, or data shared across
+   * Electron and non-Electron contexts). In that scenario `decrypt()` returns
+   * the raw base64 blob unchanged — treat the output as untrusted.
    */
   decrypt(ciphertext: string): string {
     if (!this.isAvailable()) {
