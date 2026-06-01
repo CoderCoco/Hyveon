@@ -20,6 +20,11 @@ npm run app:dev
 # Production build (shared → server → web)
 npm run app:build && npm run app:start  # http://localhost:3001
 
+# Electron desktop app — electron-vite drives three pipelines (main/preload/renderer)
+# configured in electron.vite.config.ts; outputs land in out/main, out/preload, out/renderer
+npm run desktop:dev    # electron-vite dev: HMR on renderer saves, auto-restarts main+preload
+npm run desktop:build  # electron-vite build: produces out/main, out/preload, out/renderer
+
 # Build all Lambda bundles (required before `terraform apply`)
 npm run app:build:lambdas
 
