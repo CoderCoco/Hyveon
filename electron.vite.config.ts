@@ -33,7 +33,7 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: 'app/packages/web/index.html',
+        input: 'index.html',
       },
     },
   },

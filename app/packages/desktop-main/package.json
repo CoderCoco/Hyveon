@@ -5,9 +5,9 @@
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --config ../../../electron.vite.config.ts",
     "build": "tsc -b",
-    "start": "electron-vite build"
+    "start": "electron ../../../out/main/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.600.0",

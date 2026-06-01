@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/embed-tfstate.mjs",
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --config ../electron.vite.config.ts",
     "prebuild": "node scripts/embed-tfstate.mjs",
     "build": "npm run build -w @hyveon/shared && npm run build -w @hyveon/desktop-main && npm run build -w @hyveon/web",
     "build:lambdas": "npm run build -w @hyveon/shared && npm run build -w @hyveon/lambda-interactions -w @hyveon/lambda-followup -w @hyveon/lambda-update-dns -w @hyveon/lambda-watchdog -w @hyveon/lambda-efs-seeder",
-    "start": "electron-vite build",
+    "start": "electron ../out/main/index.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
