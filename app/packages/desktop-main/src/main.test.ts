@@ -115,7 +115,7 @@ describe('main bootstrap', () => {
     expect(fakeApp.listen).toHaveBeenCalledOnce();
   });
 
-  it('should call applyFixPath during bootstrap', async () => {
+  it('should call applyFixPath on module initialisation', async () => {
     vi.resetModules();
     const { bootstrap } = await import('./main.js');
     await bootstrap();
@@ -127,7 +127,7 @@ describe('main bootstrap', () => {
     expect(applyFixPathMock).toHaveBeenCalledTimes(1);
   });
 
-  it('should resolve userData path and initialise the file logger before bootstrap', async () => {
+  it('should resolve userData path and initialise the file logger on module initialisation', async () => {
     vi.resetModules();
     const { bootstrap } = await import('./main.js');
     await bootstrap();
