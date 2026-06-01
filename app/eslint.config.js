@@ -10,6 +10,7 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      '**/out/**',
       '**/node_modules/**',
       '**/*.d.ts',
       'packages/web/vite.config.ts',
