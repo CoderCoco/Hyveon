@@ -221,4 +221,21 @@ describe('electron-entry', () => {
 
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
   });
+
+  it('should call app.quit() and not open a window when bootstrap() rejects', async () => {
+    vi.resetModules();
+    delete process.env['ELECTRON_RENDERER_URL'];
+
+    bootstrapMock.mockRejectedValueOnce(new Error('IPC init failure'));
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    expect(mockQuit).toHaveBeenCalledOnce();
+    expect(MockBrowserWindow).not.toHaveBeenCalled();
+  });
 });

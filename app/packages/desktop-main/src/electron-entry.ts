@@ -32,14 +32,20 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  void bootstrap();
-  createWindow();
+  bootstrap()
+    .then(() => {
+      createWindow();
 
-  // On macOS re-create the window when the dock icon is clicked and there are
-  // no other windows open (standard macOS behaviour).
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+      // On macOS re-create the window when the dock icon is clicked and there
+      // are no other windows open (standard macOS behaviour).
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    })
+    .catch((err: unknown) => {
+      console.error('[desktop-main] NestJS IPC bootstrap failed — quitting:', err);
+      app.quit();
+    });
 });
 
 // Quit the app when all windows are closed, except on macOS where the app and
