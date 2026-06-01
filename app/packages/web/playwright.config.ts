@@ -12,7 +12,8 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     trace: 'retain-on-failure',
-    video: 'retain-on-failure',
+    // Video requires ffmpeg which hangs on install in CI; traces are sufficient
+    video: process.env.CI ? 'off' : 'retain-on-failure',
   },
   projects: [
     {

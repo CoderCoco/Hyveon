@@ -28,10 +28,6 @@ jobs:
         working-directory: app/packages/web
         timeout-minutes: 5
 
-      - name: Install Playwright ffmpeg
-        run: npx playwright install ffmpeg
-        working-directory: app/packages/web
-        timeout-minutes: 3
 
       - run: npm run app:test:e2e
 
