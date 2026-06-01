@@ -26,6 +26,8 @@
     "app:lint:fix": "npm run lint:fix       -w game-server-manager",
     "app:test:e2e": "npm run test:e2e       -w @hyveon/web",
     "app:test:integration": "node app/scripts/embed-tfstate.mjs && npm run build -w @hyveon/desktop-main && npm run test:integration -w @hyveon/web",
-    "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts"
+    "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts",
+    "desktop:dev": "electron-vite dev",
+    "desktop:build": "electron-vite build"
   }
 }

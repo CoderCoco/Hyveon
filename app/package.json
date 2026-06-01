@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/embed-tfstate.mjs",
-    "dev": "echo 'app:dev requires the Electron launcher from Epic A (#136). Run npm run dev -w @hyveon/web for the web-only dev server.' && exit 1",
+    "dev": "electron-vite dev",
     "prebuild": "node scripts/embed-tfstate.mjs",
     "build": "npm run build -w @hyveon/shared && npm run build -w @hyveon/desktop-main && npm run build -w @hyveon/web",
     "build:lambdas": "npm run build -w @hyveon/shared && npm run build -w @hyveon/lambda-interactions -w @hyveon/lambda-followup -w @hyveon/lambda-update-dns -w @hyveon/lambda-watchdog -w @hyveon/lambda-efs-seeder",
-    "start": "echo 'app:start requires the Electron launcher from Epic A (#136).' && exit 1",
+    "start": "electron-vite build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
