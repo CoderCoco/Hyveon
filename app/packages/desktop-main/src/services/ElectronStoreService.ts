@@ -1,6 +1,9 @@
+import { createRequire } from 'node:module';
 import { Injectable } from '@nestjs/common';
-import Store from 'electron-store';
+import type Store from 'electron-store';
 import { logger } from '../logger.js';
+
+const _require = createRequire(import.meta.url);
 import { SafeStorageService } from './SafeStorageService.js';
 
 /**
@@ -147,7 +150,10 @@ export class ElectronStoreService {
    * directory.
    */
   protected createStore(): Store<AppStoreSchema> {
-    return new Store<AppStoreSchema>({ name: 'electron-store' });
+    // Lazy-require so electron-store (which imports electron at the top level)
+    // is only loaded inside a real Electron process, never in plain-Node tests.
+    const StoreClass = (_require('electron-store') as { default: typeof Store }).default;
+    return new StoreClass({ name: 'electron-store' });
   }
 
   /**
