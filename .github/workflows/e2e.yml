@@ -26,6 +26,7 @@ jobs:
       - name: Install Playwright system dependencies
         run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium
         working-directory: app/packages/web
+        timeout-minutes: 5
 
       - run: npm run app:test:e2e
 
