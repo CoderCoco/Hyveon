@@ -22,7 +22,14 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // In CI use the pre-installed system Chrome to avoid downloading Chromium
+        ...(process.env.CI ? { channel: 'chrome' } : {}),
+      },
+    },
   ],
   webServer: [
     {
