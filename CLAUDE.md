@@ -14,11 +14,18 @@ The repo uses a single **npm-workspaces** tree rooted at the repo root. Workspac
 # Install all workspaces in one go (run from repo root)
 npm install
 
-# Run the dev servers (Nest on 3001, Vite on 5173 with /api proxy)
-npm run app:dev
+# Launch the Electron desktop app in dev mode (HMR on renderer saves, auto-restarts main+preload)
+npm run app:dev          # delegates to desktop:dev — equivalent to: npm run desktop:dev
 
-# Production build (shared → server → web)
-npm run app:build && npm run app:start  # http://localhost:3001
+# Production build then launch
+npm run app:build        # compiles shared → desktop-main → web TypeScript (not the Electron bundle)
+npm run desktop:build    # electron-vite build → produces out/main, out/preload, out/renderer
+npm run app:start        # starts the built Electron app (requires desktop:build to have run first)
+
+# Electron desktop app — electron-vite drives three pipelines (main/preload/renderer)
+# configured in electron.vite.config.ts; outputs land in out/main, out/preload, out/renderer
+npm run desktop:dev    # electron-vite dev: HMR on renderer saves, auto-restarts main+preload
+npm run desktop:build  # electron-vite build: produces out/main, out/preload, out/renderer
 
 # Build all Lambda bundles (required before `terraform apply`)
 npm run app:build:lambdas

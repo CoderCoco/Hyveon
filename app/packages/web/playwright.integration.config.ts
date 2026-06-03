@@ -19,10 +19,18 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4174',
     trace: 'retain-on-failure',
-    video: 'retain-on-failure',
+    // Video requires ffmpeg which hangs on install in CI; traces are sufficient
+    video: process.env.CI ? 'off' : 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // In CI use the pre-installed system Chrome to avoid downloading Chromium
+        ...(process.env.CI ? { channel: 'chrome' } : {}),
+      },
+    },
   ],
   webServer: [
     {

@@ -88,7 +88,8 @@ describe('main bootstrap', () => {
      * all stubs remain active.
      */
     vi.resetModules();
-    await import('./main.js');
+    const { bootstrap } = await import('./main.js');
+    await bootstrap();
 
     // Flush the event loop so the async bootstrap chain fully resolves.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -114,9 +115,10 @@ describe('main bootstrap', () => {
     expect(fakeApp.listen).toHaveBeenCalledOnce();
   });
 
-  it('should call applyFixPath during bootstrap', async () => {
+  it('should call applyFixPath on module initialisation', async () => {
     vi.resetModules();
-    await import('./main.js');
+    const { bootstrap } = await import('./main.js');
+    await bootstrap();
 
     // Flush the event loop so the async bootstrap chain fully resolves.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -125,9 +127,10 @@ describe('main bootstrap', () => {
     expect(applyFixPathMock).toHaveBeenCalledTimes(1);
   });
 
-  it('should resolve userData path and initialise the file logger before bootstrap', async () => {
+  it('should resolve userData path and initialise the file logger on module initialisation', async () => {
     vi.resetModules();
-    await import('./main.js');
+    const { bootstrap } = await import('./main.js');
+    await bootstrap();
 
     // Flush the event loop so the async bootstrap chain fully resolves.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

@@ -1,7 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import Store from 'electron-store';
+import type Store from 'electron-store';
 import { logger } from '../logger.js';
 import { SafeStorageService } from './SafeStorageService.js';
+
+// electron-store@11 is ESM-only — require() would throw ERR_REQUIRE_ESM.
+// Load via dynamic import, but only inside Electron; in plain-Node test
+// environments process.versions.electron is undefined so this stays undefined
+// and createStore() (which is only called inside Electron) is never reached.
+const ElectronStoreModule = process.versions['electron']
+  ? await import('electron-store')
+  : undefined;
 
 /**
  * Typed schema for the application's persistent electron-store.
@@ -147,7 +155,10 @@ export class ElectronStoreService {
    * directory.
    */
   protected createStore(): Store<AppStoreSchema> {
-    return new Store<AppStoreSchema>({ name: 'electron-store' });
+    // ElectronStoreModule is always defined here: the constructor calls
+    // createStore() only when readIsElectron() is true.
+    const StoreClass = ElectronStoreModule!.default;
+    return new StoreClass({ name: 'electron-store' });
   }
 
   /**

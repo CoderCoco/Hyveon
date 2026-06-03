@@ -5,9 +5,9 @@
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
-    "dev": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1",
+    "dev": "electron-vite dev --config ../../../electron.vite.config.ts",
     "build": "tsc -b",
-    "start": "echo 'desktop-main now runs as an Electron IPC microservice. The Electron launcher is wired in Epic A (#136).' && exit 1"
+    "start": "electron ../../../out/main/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.600.0",

@@ -11,6 +11,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -22,9 +23,11 @@ jobs:
 
       - run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      - name: Install Playwright system dependencies
+        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium
         working-directory: app/packages/web
+        timeout-minutes: 5
+
 
       - run: npm run app:test:e2e
 

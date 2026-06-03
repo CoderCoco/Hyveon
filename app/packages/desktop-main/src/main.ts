@@ -23,12 +23,16 @@ if (!process.versions['electron']) {
 const { app } = await import('electron') as unknown as { app: { getPath(name: string): string } };
 createLogger(path.join(app.getPath('userData'), 'logs'));
 
-async function bootstrap(): Promise<void> {
+/**
+ * Bootstraps the NestJS IPC microservice.
+ *
+ * Called from `electron-entry.ts` after `app.whenReady()` so that
+ * `ipcMain` is available before the transport is initialised.
+ */
+export async function bootstrap(): Promise<void> {
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(AppModule, {
     strategy: new ElectronIPCTransport(),
   });
 
   await app.listen();
 }
-
-void bootstrap();
