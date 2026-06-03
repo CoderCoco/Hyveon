@@ -18,8 +18,9 @@ npm install
 npm run app:dev          # delegates to desktop:dev — equivalent to: npm run desktop:dev
 
 # Production build then launch
-npm run app:build        # compiles shared → desktop-main → web TypeScript
-npm run app:start        # starts the built Electron app
+npm run app:build        # compiles shared → desktop-main → web TypeScript (not the Electron bundle)
+npm run desktop:build    # electron-vite build → produces out/main, out/preload, out/renderer
+npm run app:start        # starts the built Electron app (requires desktop:build to have run first)
 
 # Electron desktop app — electron-vite drives three pipelines (main/preload/renderer)
 # configured in electron.vite.config.ts; outputs land in out/main, out/preload, out/renderer
