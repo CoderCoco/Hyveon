@@ -152,7 +152,7 @@ export class ElectronStoreService {
   protected createStore(): Store<AppStoreSchema> {
     // Lazy-require so electron-store (which imports electron at the top level)
     // is only loaded inside a real Electron process, never in plain-Node tests.
-    const StoreClass = (_require('electron-store') as { default: typeof Store }).default;
+    const StoreClass = (_require('electron-store') as typeof import('electron-store')).default;
     return new StoreClass({ name: 'electron-store' });
   }
 
