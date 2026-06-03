@@ -24,11 +24,14 @@ function createWindow(): void {
     },
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void win.loadFile(path.join(__dirname, '../renderer/index.html'));
-  }
+  const load = process.env.ELECTRON_RENDERER_URL
+    ? win.loadURL(process.env.ELECTRON_RENDERER_URL)
+    : win.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  load.catch((err: unknown) => {
+    console.error('[desktop-main] Renderer failed to load — quitting:', err);
+    app.quit();
+  });
 }
 
 app.whenReady().then(() => {

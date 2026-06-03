@@ -222,6 +222,22 @@ describe('electron-entry', () => {
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
   });
 
+  it('should call app.quit() when the renderer fails to load', async () => {
+    vi.resetModules();
+    delete process.env['ELECTRON_RENDERER_URL'];
+
+    mockLoadFile.mockRejectedValueOnce(new Error('renderer bundle missing'));
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    expect(mockQuit).toHaveBeenCalledOnce();
+  });
+
   it('should call app.quit() and not open a window when bootstrap() rejects', async () => {
     vi.resetModules();
     delete process.env['ELECTRON_RENDERER_URL'];
