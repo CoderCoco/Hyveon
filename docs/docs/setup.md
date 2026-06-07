@@ -366,13 +366,13 @@ npm run desktop:package
 ```
 
 This runs `desktop:build` (electron-vite) first, then electron-builder,
-which produces one output per platform in `dist/`:
+which produces one output per platform in `release/`:
 
 | Platform | Output |
 |---|---|
-| Windows | `dist/Hyveon Setup *.exe` (NSIS installer) |
-| macOS | `dist/Hyveon-*.dmg` (DMG image) |
-| Linux | `dist/Hyveon-*.AppImage` (AppImage) |
+| Windows | `release/Hyveon Setup *.exe` (NSIS installer) |
+| macOS | `release/Hyveon-*.dmg` (DMG image) |
+| Linux | `release/Hyveon-*.AppImage` (AppImage) |
 
 By default electron-builder targets only the host platform. To cross-compile,
 pass `--win`, `--mac`, or `--linux` explicitly:
