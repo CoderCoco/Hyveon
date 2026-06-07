@@ -37,12 +37,11 @@ jobs:
 
       - run: npm ci
 
-      - name: Restore @tailwindcss/oxide native binding for macOS ARM
-        # macos-latest resolves to macos-15-arm64. The lockfile was generated on
-        # a non-ARM host so npm ci omits the darwin-arm64 optional dep
-        # (@tailwindcss/oxide-darwin-arm64). Re-install so the correct platform
-        # binary is present for the Vite build step.
-        if: runner.os == 'macOS'
+      - name: Restore @tailwindcss/oxide native binding
+        # The lockfile was generated on a linux-x64 host, so the optional
+        # platform-specific binaries for darwin-arm64 (macos-15-arm64) and
+        # win32-x64-msvc are missing. Re-install to fetch the correct binary
+        # for the current runner before the Vite build step.
         run: npm install --no-save @tailwindcss/oxide@4.3.0
 
       - name: Ensure terraform.tfstate exists for packaging
