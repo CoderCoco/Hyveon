@@ -354,14 +354,10 @@ corresponding block in `docker-compose.yml`.
 ### Option C — packaged Electron app (distributable installer)
 
 `npm run desktop:package` produces a platform-native installer via
-electron-builder (config: `electron-builder.yml`). Run it from the repo root
-after building all Lambda bundles:
+electron-builder (config: `electron-builder.yml`). Run it from the repo root:
 
 ```bash
-# 1. Build Lambda bundles (required for extraResources copy)
-npm run app:build:lambdas
-
-# 2. Build the Electron bundle and package into an installer
+# Build the Electron bundle and package into an installer
 npm run desktop:package
 ```
 
@@ -380,13 +376,13 @@ pass `--win`, `--mac`, or `--linux` explicitly:
 
 **What gets bundled**: the Electron sources under `out/` are packed into an
 asar archive. Only `terraform/terraform.tfstate` (the single state file — not
-the `.tf` source files) and all five Lambda `dist/handler.cjs` bundles
-(interactions, followup, update-dns, watchdog, efs-seeder) are embedded via
-`extraResources` and land outside the asar at `process.resourcesPath` inside
-the installed app. At runtime the main process reads
-`<resourcesPath>/terraform/aws/terraform.tfstate` — the `to: terraform/aws`
-mapping in `electron-builder.yml` is why the sub-path includes `aws/`, and this
-is the same data `ConfigService` requires in dev mode.
+the `.tf` source files) is embedded via `extraResources` and lands outside the
+asar at `process.resourcesPath` inside the installed app. At runtime the main
+process reads `<resourcesPath>/terraform/aws/terraform.tfstate` — the
+`to: terraform/aws` mapping in `electron-builder.yml` is why the sub-path
+includes `aws/`, and this is the same data `ConfigService` requires in dev
+mode. Lambda bundles are deployed to AWS via Terraform and are not packaged
+into the installer.
 
 ## 7. (Optional) Wire up the Discord bot
 
