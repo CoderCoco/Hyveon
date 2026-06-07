@@ -1,0 +1,26 @@
+appId: dev.gsd.desktop
+productName: Hyveon
+asar: true
+
+directories:
+  output: release
+
+files:
+  - out/**
+
+extraResources:
+  - from: terraform/terraform.tfstate
+    to: terraform/aws/terraform.tfstate
+
+win:
+  target:
+    - nsis
+
+mac:
+  hardenedRuntime: false
+  target:
+    - dmg
+
+linux:
+  target:
+    - AppImage

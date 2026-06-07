@@ -14,6 +14,7 @@ export default defineConfig({
         input: r('app/packages/desktop-main/src/electron-entry.ts'),
         output: {
           format: 'es',
+          entryFileNames: 'index.js',
         },
       },
     },

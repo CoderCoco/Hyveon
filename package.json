@@ -1,6 +1,7 @@
 {
   "name": "hyveon",
   "private": true,
+  "main": "out/main/index.js",
   "workspaces": [
     "app",
     "app/packages/*",
@@ -12,6 +13,7 @@
     "node": ">=22.12.0"
   },
   "devDependencies": {
+    "electron-builder": "^25.0.0",
     "electron-vite": "^5.0.0"
   },
   "scripts": {
@@ -28,6 +30,8 @@
     "app:test:integration": "node app/scripts/embed-tfstate.mjs && npm run build -w @hyveon/desktop-main && npm run test:integration -w @hyveon/web",
     "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts",
     "desktop:dev": "electron-vite dev",
-    "desktop:build": "electron-vite build"
+    "desktop:build": "electron-vite build",
+    "predesktop:package": "node app/scripts/embed-tfstate.mjs",
+    "desktop:package": "npm run desktop:build && electron-builder --config electron-builder.yml"
   }
 }
