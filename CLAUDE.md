@@ -29,9 +29,9 @@ npm run desktop:build  # electron-vite build: produces out/main, out/preload, ou
 
 # Package the Electron app into a distributable installer (runs desktop:build first)
 # Produces three targets via electron-builder (electron-builder.yml):
-#   Windows  → dist/Hyveon Setup *.exe   (NSIS installer)
-#   macOS    → dist/Hyveon-*.dmg         (DMG image)
-#   Linux    → dist/Hyveon-*.AppImage    (AppImage)
+#   Windows  → release/Hyveon Setup *.exe   (NSIS installer)
+#   macOS    → release/Hyveon-*.dmg         (DMG image)
+#   Linux    → release/Hyveon-*.AppImage    (AppImage)
 # terraform/ and all lambda dist/handler.cjs bundles are embedded via extraResources
 # and land under process.resourcesPath at runtime (not inside the asar archive).
 # Run app:build:lambdas before desktop:package or the extraResources copy will fail.
