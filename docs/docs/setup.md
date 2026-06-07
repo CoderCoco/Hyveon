@@ -150,20 +150,16 @@ Both scripts are idempotent — safe to re-run at any time. They:
    (`setup.sh` uses apt on Debian/Ubuntu; `setup.ps1` uses winget + the AWS MSI
    installer on Windows; macOS users should install those tools manually first).
 2. Runs `npm ci` from `app/` so all workspaces are installed.
-3. Runs `npm run build:lambdas` to produce `app/packages/lambda/*/dist/handler.cjs`
-   — Terraform's `archive_file` data sources zip these at apply time, so
-   the bundles **must** exist on disk before `terraform apply` or init will
-   fail.
-4. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
+3. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
    if the latter doesn't exist yet.
-5. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
+4. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
    table (`{project_name}-tf-locks`) if they don't already exist. The bucket
    gets versioning, public-access blocking, and AES-256 encryption enabled.
    The script waits for the DynamoDB table to reach `ACTIVE` status before
    continuing. Both names are derived from `project_name` in
    `terraform.tfvars` (default: `game-servers`). This step requires the
    `s3:*` permissions in the inline policy above.
-6. Runs `terraform init` inside `terraform/`, passing the bucket and table
+5. Runs `terraform init` inside `terraform/`, passing the bucket and table
    as `-backend-config` flags. If a local `terraform.tfstate` is present
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
