@@ -2,12 +2,15 @@ appId: dev.gsd.desktop
 productName: Hyveon
 asar: true
 
+directories:
+  output: release
+
 files:
   - out/**
 
 extraResources:
-  - from: terraform/
-    to: terraform/aws
+  - from: terraform/terraform.tfstate
+    to: terraform/aws/terraform.tfstate
   - from: app/packages/lambda/interactions/dist/handler.cjs
     to: lambda/interactions/handler.cjs
   - from: app/packages/lambda/followup/dist/handler.cjs
