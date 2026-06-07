@@ -351,6 +351,40 @@ config), and `~/.aws` (credentials). If you prefer
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars, uncomment the
 corresponding block in `docker-compose.yml`.
 
+### Option C — packaged Electron app (distributable installer)
+
+`npm run desktop:package` produces a platform-native installer via
+electron-builder (config: `electron-builder.yml`). Run it from the repo root
+after building all Lambda bundles:
+
+```bash
+# 1. Build Lambda bundles (required for extraResources copy)
+npm run app:build:lambdas
+
+# 2. Build the Electron bundle and package into an installer
+npm run desktop:package
+```
+
+This runs `desktop:build` (electron-vite) first, then electron-builder,
+which produces one output per platform in `dist/`:
+
+| Platform | Output |
+|---|---|
+| Windows | `dist/Hyveon Setup *.exe` (NSIS installer) |
+| macOS | `dist/Hyveon-*.dmg` (DMG image) |
+| Linux | `dist/Hyveon-*.AppImage` (AppImage) |
+
+By default electron-builder targets only the host platform. To cross-compile,
+pass `--win`, `--mac`, or `--linux` explicitly:
+`npx electron-builder --config electron-builder.yml --linux`.
+
+**What gets bundled**: the Electron sources under `out/` are packed into an
+asar archive. The `terraform/` directory and all four Lambda
+`dist/handler.cjs` bundles are embedded via `extraResources` and land outside
+the asar at `process.resourcesPath` inside the installed app. At runtime the
+main process reads `path.join(process.resourcesPath, 'terraform')` for
+`terraform.tfstate` — the same data `ConfigService` requires in dev mode.
+
 ## 7. (Optional) Wire up the Discord bot
 
 The serverless bot is two Lambdas, one DynamoDB table, and two Secrets

@@ -27,6 +27,16 @@ npm run app:start        # starts the built Electron app (requires desktop:build
 npm run desktop:dev    # electron-vite dev: HMR on renderer saves, auto-restarts main+preload
 npm run desktop:build  # electron-vite build: produces out/main, out/preload, out/renderer
 
+# Package the Electron app into a distributable installer (runs desktop:build first)
+# Produces three targets via electron-builder (electron-builder.yml):
+#   Windows  → dist/Hyveon Setup *.exe   (NSIS installer)
+#   macOS    → dist/Hyveon-*.dmg         (DMG image)
+#   Linux    → dist/Hyveon-*.AppImage    (AppImage)
+# terraform/ and all lambda dist/handler.cjs bundles are embedded via extraResources
+# and land under process.resourcesPath at runtime (not inside the asar archive).
+# Run app:build:lambdas before desktop:package or the extraResources copy will fail.
+npm run desktop:package
+
 # Build all Lambda bundles (required before `terraform apply`)
 npm run app:build:lambdas
 
