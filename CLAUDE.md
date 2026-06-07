@@ -32,9 +32,9 @@ npm run desktop:build  # electron-vite build: produces out/main, out/preload, ou
 #   Windows  → release/Hyveon Setup *.exe   (NSIS installer)
 #   macOS    → release/Hyveon-*.dmg         (DMG image)
 #   Linux    → release/Hyveon-*.AppImage    (AppImage)
-# terraform/ and all lambda dist/handler.cjs bundles are embedded via extraResources
+# terraform/terraform.tfstate and all lambda dist/handler.cjs bundles are embedded via extraResources
 # and land under process.resourcesPath at runtime (not inside the asar archive).
-# Run app:build:lambdas before desktop:package or the extraResources copy will fail.
+# app:build:lambdas is chained automatically inside desktop:package — no separate step needed.
 npm run desktop:package
 
 # Build all Lambda bundles (required before `terraform apply`)

@@ -31,6 +31,6 @@
     "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts",
     "desktop:dev": "electron-vite dev",
     "desktop:build": "electron-vite build",
-    "desktop:package": "npm run desktop:build && electron-builder --config electron-builder.yml"
+    "desktop:package": "npm run app:build:lambdas && npm run desktop:build && electron-builder --config electron-builder.yml"
   }
 }
