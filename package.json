@@ -32,6 +32,6 @@
     "desktop:dev": "electron-vite dev",
     "desktop:build": "electron-vite build",
     "predesktop:package": "node app/scripts/embed-tfstate.mjs",
-    "desktop:package": "npm run app:build:lambdas && npm run desktop:build && electron-builder --config electron-builder.yml"
+    "desktop:package": "npm run desktop:build && electron-builder --config electron-builder.yml"
   }
 }
