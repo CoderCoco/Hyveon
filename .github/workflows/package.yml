@@ -60,6 +60,9 @@ jobs:
             echo '{}' > terraform/terraform.tfstate
           fi
 
+      - name: Build workspace packages
+        run: npm run app:build
+
       - name: Package desktop app
         run: npm run desktop:package
 
