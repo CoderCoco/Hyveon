@@ -379,11 +379,12 @@ pass `--win`, `--mac`, or `--linux` explicitly:
 `npx electron-builder --config electron-builder.yml --linux`.
 
 **What gets bundled**: the Electron sources under `out/` are packed into an
-asar archive. The `terraform/` directory and all five Lambda
-`dist/handler.cjs` bundles (interactions, followup, update-dns, watchdog,
-efs-seeder) are embedded via `extraResources` and land outside the asar at
-`process.resourcesPath` inside the installed app. At runtime the main process
-reads `<resourcesPath>/terraform/aws/terraform.tfstate` — the `to: terraform/aws`
+asar archive. Only `terraform/terraform.tfstate` (the single state file — not
+the `.tf` source files) and all five Lambda `dist/handler.cjs` bundles
+(interactions, followup, update-dns, watchdog, efs-seeder) are embedded via
+`extraResources` and land outside the asar at `process.resourcesPath` inside
+the installed app. At runtime the main process reads
+`<resourcesPath>/terraform/aws/terraform.tfstate` — the `to: terraform/aws`
 mapping in `electron-builder.yml` is why the sub-path includes `aws/`, and this
 is the same data `ConfigService` requires in dev mode.
 
