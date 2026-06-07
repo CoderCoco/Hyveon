@@ -1,6 +1,7 @@
 appId: dev.gsd.desktop
 productName: Hyveon
 asar: true
+npmRebuild: false
 
 directories:
   output: release

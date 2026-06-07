@@ -37,15 +37,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Fix packages skipped by npm ci
-        # Two packages have broken lockfile entries that npm ci silently skips:
-        # - @tailwindcss/oxide: darwin-arm64 optional dep missing when lockfile
-        #   was generated on a non-ARM host (macos-latest is now macos-15-arm64)
-        # - detect-libc: required by @electron/rebuild on all platforms but its
-        #   lockfile entry lacks resolved/integrity fields so npm ci omits it
-        # Both must be installed in a single npm install call — separate calls
-        # cause npm to de-duplicate and undo the previous install's additions.
-        run: npm install --no-save @tailwindcss/oxide detect-libc
+      - name: Restore @tailwindcss/oxide native binding for macOS ARM
+        # macos-latest resolves to macos-15-arm64. The lockfile was generated on
+        # a non-ARM host so npm ci omits the darwin-arm64 optional dep
+        # (@tailwindcss/oxide-darwin-arm64). Re-install so the correct platform
+        # binary is present for the Vite build step.
+        if: runner.os == 'macOS'
+        run: npm install --no-save @tailwindcss/oxide
 
       - name: Ensure terraform.tfstate exists for packaging
         # terraform/terraform.tfstate is gitignored and will never exist in a
