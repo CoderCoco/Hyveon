@@ -11,16 +11,6 @@ files:
 extraResources:
   - from: terraform/terraform.tfstate
     to: terraform/aws/terraform.tfstate
-  - from: app/packages/lambda/interactions/dist/handler.cjs
-    to: lambda/interactions/handler.cjs
-  - from: app/packages/lambda/followup/dist/handler.cjs
-    to: lambda/followup/handler.cjs
-  - from: app/packages/lambda/update-dns/dist/handler.cjs
-    to: lambda/update-dns/handler.cjs
-  - from: app/packages/lambda/watchdog/dist/handler.cjs
-    to: lambda/watchdog/handler.cjs
-  - from: app/packages/lambda/efs-seeder/dist/handler.cjs
-    to: lambda/efs-seeder/handler.cjs
 
 win:
   target:

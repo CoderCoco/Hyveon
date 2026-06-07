@@ -34,8 +34,7 @@ npm run desktop:build  # electron-vite build: produces out/main, out/preload, ou
 #   Linux    → release/Hyveon-*.AppImage    (AppImage)
 # terraform/terraform.tfstate is embedded via extraResources and lands under
 # process.resourcesPath at runtime (not inside the asar archive).
-# Lambda bundles are NOT packaged here — they are deployed separately to AWS via Terraform.
-# app:build:lambdas is chained automatically inside desktop:package — no separate step needed.
+# Lambda bundles are deployed to AWS via Terraform and are NOT packaged into the installer.
 npm run desktop:package
 
 # Build all Lambda bundles (required before `terraform apply`)

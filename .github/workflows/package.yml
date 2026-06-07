@@ -45,14 +45,12 @@ jobs:
         #   run: terraform state pull > terraform/terraform.tfstate
         # with AWS credentials available, or pass TF_STATE_PATH to point at a
         # pre-downloaded file.
+        shell: bash
         run: |
           if [ ! -f terraform/terraform.tfstate ]; then
             echo "::error file=terraform/terraform.tfstate::terraform/terraform.tfstate is missing. The electron-builder extraResources entry for this file will be silently skipped, producing an installer without Terraform state. Supply the file (e.g. via 'terraform state pull') before running desktop:package."
             exit 1
           fi
-
-      - name: Build lambda bundles
-        run: npm run app:build:lambdas
 
       - name: Package desktop app
         run: npm run desktop:package
