@@ -45,6 +45,13 @@ jobs:
         if: runner.os == 'macOS'
         run: npm install --no-save @tailwindcss/oxide
 
+      - name: Install detect-libc for @electron/rebuild on Linux
+        # @electron/rebuild (called by electron-builder) requires detect-libc
+        # at runtime on Linux. The lockfile entry has no resolved/integrity
+        # fields so npm ci silently skips installing it; force-install here.
+        if: runner.os == 'Linux'
+        run: npm install --no-save detect-libc
+
       - name: Ensure terraform.tfstate exists for packaging
         # terraform/terraform.tfstate is gitignored and will never exist in a
         # clean CI checkout. electron-builder silently skips a missing
