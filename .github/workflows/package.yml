@@ -43,7 +43,7 @@ jobs:
         # (@tailwindcss/oxide-darwin-arm64). Re-install so the correct platform
         # binary is present for the Vite build step.
         if: runner.os == 'macOS'
-        run: npm install --no-save @tailwindcss/oxide
+        run: npm install --no-save --no-package-lock @tailwindcss/oxide@4.3.0
 
       - name: Ensure terraform.tfstate exists for packaging
         # terraform/terraform.tfstate is gitignored and will never exist in a

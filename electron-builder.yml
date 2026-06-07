@@ -5,6 +5,7 @@ npmRebuild: false
 
 directories:
   output: release
+  app: "."
 
 files:
   - out/**
