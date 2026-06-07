@@ -14,13 +14,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_glob: 'dist/*.AppImage'
+            artifact_glob: 'release/*.AppImage'
             artifact_name: linux-AppImage
           - os: macos-latest
-            artifact_glob: 'dist/*.dmg'
+            artifact_glob: 'release/*.dmg'
             artifact_name: mac-dmg
           - os: windows-latest
-            artifact_glob: 'dist/*.exe'
+            artifact_glob: 'release/*.exe'
             artifact_name: win-nsis
 
     runs-on: ${{ matrix.os }}
