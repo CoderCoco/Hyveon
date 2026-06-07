@@ -37,6 +37,14 @@ jobs:
 
       - run: npm ci
 
+      - name: Restore @tailwindcss/oxide native binding for macOS ARM
+        # macos-latest resolves to macos-15-arm64. npm ci from a lockfile
+        # generated on a non-ARM host skips the darwin-arm64 optional dep
+        # (@tailwindcss/oxide-darwin-arm64). Re-running npm install for that
+        # package forces npm to resolve and install the correct platform binary.
+        if: runner.os == 'macOS'
+        run: npm install --no-save @tailwindcss/oxide
+
       - name: Ensure terraform.tfstate exists for packaging
         # terraform/terraform.tfstate is gitignored and will never exist in a
         # clean CI checkout. electron-builder silently skips a missing
