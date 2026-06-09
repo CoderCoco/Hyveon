@@ -1,5 +1,5 @@
-import { Controller, Get, Param, Post } from '@nestjs/common';
-import { MessagePattern } from '@nestjs/microservices';
+import { Controller } from '@nestjs/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
 
@@ -16,7 +16,6 @@ export class GamesController {
    * tfstate cache first so a fresh `terraform apply` shows up without having
    * to restart the server.
    */
-  @Get('games')
   @MessagePattern('games.list')
   listGames(): { games: string[] } {
     this.config.invalidateCache();
@@ -29,7 +28,7 @@ export class GamesController {
    * invalidates the tfstate cache — this is the endpoint the dashboard polls,
    * so it's the natural place to pick up newly-added games.
    */
-  @Get('status')
+  @MessagePattern('games.status')
   async listStatus() {
     this.config.invalidateCache();
     const outputs = this.config.getTfOutputs();
@@ -38,20 +37,20 @@ export class GamesController {
   }
 
   /** Returns status for a single game. Does not invalidate the tfstate cache (kept cheap for frequent polling). */
-  @Get('status/:game')
-  getStatus(@Param('game') game: string) {
+  @MessagePattern('games.getStatus')
+  getStatus(@Payload() game: string) {
     return this.ecs.getStatus(game);
   }
 
   /** Launches the `{game}-server` task via `ecs.run_task()`. There is no long-running ECS Service by design — this is the only way a game starts. */
-  @Post('start/:game')
-  start(@Param('game') game: string) {
+  @MessagePattern('games.start')
+  start(@Payload() game: string) {
     return this.ecs.start(game);
   }
 
   /** Stops the running task for `game`. Triggers the EventBridge → update-dns Lambda path that deletes the Route 53 record. */
-  @Post('stop/:game')
-  stop(@Param('game') game: string) {
+  @MessagePattern('games.stop')
+  stop(@Payload() game: string) {
     return this.ecs.stop(game);
   }
 }
