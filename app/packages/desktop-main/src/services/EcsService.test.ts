@@ -265,6 +265,21 @@ describe('EcsService', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('throttled');
     });
+
+    it('should surface AWS SDK exception name in the failure message', async () => {
+      // Mirrors the shape thrown by the real AWS SDK — `name` is set to the
+      // exception code (e.g. 'AccessDeniedException') so that `String(err)`
+      // yields "<name>: <message>", which is what the catch block returns.
+      ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
+      const awsError = Object.assign(new Error('User is not authorized to perform ecs:RunTask'), {
+        name: 'AccessDeniedException',
+      });
+      ecsMock.on(RunTaskCommand).rejects(awsError);
+      const service = new EcsService(makeConfig(), makeEc2());
+      const result = await service.start('minecraft');
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('AccessDeniedException');
+    });
   });
 
   describe('stop', () => {
