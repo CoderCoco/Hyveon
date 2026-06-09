@@ -21,7 +21,6 @@ function makeConfig(outputs: Partial<TfOutputs> | null = DEFAULT_OUTPUTS): Confi
   return {
     invalidateCache: vi.fn(),
     getTfOutputs: vi.fn().mockReturnValue(outputs),
-    getRegion: vi.fn().mockReturnValue('us-east-1'),
   } as unknown as ConfigService;
 }
 
@@ -34,7 +33,43 @@ function makeEcs(): EcsService {
   } as unknown as EcsService;
 }
 
+/**
+ * The metadata key NestJS stores on each method decorated with
+ * `@MessagePattern`. Asserting this value is the only automated guard
+ * that prevents a typo in the controller from silently breaking IPC —
+ * calling the method directly (as every other test does) would succeed
+ * regardless of what string is registered with the transport.
+ */
+const PATTERN_METADATA_KEY = 'microservices:pattern';
+
 describe('GamesController', () => {
+  describe('@MessagePattern channel names', () => {
+    it('should register listGames on the "games.list" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.listGames);
+      expect(pattern).toEqual(['games.list']);
+    });
+
+    it('should register listStatus on the "games.status" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.listStatus);
+      expect(pattern).toEqual(['games.status']);
+    });
+
+    it('should register getStatus on the "games.getStatus" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.getStatus);
+      expect(pattern).toEqual(['games.getStatus']);
+    });
+
+    it('should register start on the "games.start" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.start);
+      expect(pattern).toEqual(['games.start']);
+    });
+
+    it('should register stop on the "games.stop" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.stop);
+      expect(pattern).toEqual(['games.stop']);
+    });
+  });
+
   describe('listGames', () => {
     it('should invalidate the tfstate cache before reading game names', () => {
       const config = makeConfig();
