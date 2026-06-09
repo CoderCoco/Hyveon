@@ -1,9 +1,17 @@
-import { Controller, Get, Param, Post } from '@nestjs/common';
+import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
 
-/** Core game-server endpoints: list games from tfstate, query status, and run/stop the per-game ECS tasks. */
+/**
+ * IPC-only game-server controller. Handles Electron main-process messages via
+ * `@MessagePattern` / `@Payload` — no HTTP routes are registered here.
+ *
+ * The HTTP surface (`/api/games`, `/api/status`, `/api/start/:game`,
+ * `/api/stop/:game`) is covered entirely by {@link GamesHttpController}.
+ * Both controllers delegate to the same {@link ConfigService} and
+ * {@link EcsService} providers — there is no duplicated logic.
+ */
 @Controller()
 export class GamesController {
   constructor(
@@ -16,10 +24,8 @@ export class GamesController {
    * tfstate cache first so a fresh `terraform apply` shows up without having
    * to restart the server.
    *
-   * Reachable via HTTP GET /api/games (integration tests, Docker) and the
-   * Electron IPC transport (`games.list`).
+   * Reachable via the Electron IPC transport (`games.list`).
    */
-  @Get('games')
   @MessagePattern('games.list')
   listGames(): { games: string[] } {
     this.config.invalidateCache();
@@ -29,13 +35,11 @@ export class GamesController {
 
   /**
    * Returns the current ECS status of every game in parallel. Also
-   * invalidates the tfstate cache — this is the endpoint the dashboard polls,
-   * so it's the natural place to pick up newly-added games.
+   * invalidates the tfstate cache — this is the natural place to pick up
+   * newly-added games when called from the Electron renderer.
    *
-   * Reachable via HTTP GET /api/status (integration tests, Docker) and the
-   * Electron IPC transport (`games.status`).
+   * Reachable via the Electron IPC transport (`games.status`).
    */
-  @Get('status')
   @MessagePattern('games.status')
   async listStatus() {
     this.config.invalidateCache();
@@ -48,38 +52,32 @@ export class GamesController {
    * Returns status for a single game. Does not invalidate the tfstate cache
    * (kept cheap for frequent polling).
    *
-   * Dual-transport: `@Get('status/:game')` serves the HTTP surface used by the
-   * integration-test server and Docker; `@MessagePattern` serves the Electron
-   * IPC transport. Under HTTP `@Param` resolves the game name; under IPC
-   * `@Payload` resolves it. The handler merges both so either transport works.
+   * Reachable via the Electron IPC transport (`games.getStatus`).
    */
-  @Get('status/:game')
   @MessagePattern('games.getStatus')
-  getStatus(@Param('game') httpGame: string, @Payload() ipcGame: string) {
-    return this.ecs.getStatus(ipcGame ?? httpGame);
+  getStatus(@Payload() game: string) {
+    return this.ecs.getStatus(game);
   }
 
   /**
    * Launches the `{game}-server` task via `ecs.run_task()`. There is no
    * long-running ECS Service by design — this is the only way a game starts.
    *
-   * Dual-transport: `@Post('start/:game')` for HTTP; `@MessagePattern` for IPC.
+   * Reachable via the Electron IPC transport (`games.start`).
    */
-  @Post('start/:game')
   @MessagePattern('games.start')
-  start(@Param('game') httpGame: string, @Payload() ipcGame: string) {
-    return this.ecs.start(ipcGame ?? httpGame);
+  start(@Payload() game: string) {
+    return this.ecs.start(game);
   }
 
   /**
    * Stops the running task for `game`. Triggers the EventBridge → update-dns
    * Lambda path that deletes the Route 53 record.
    *
-   * Dual-transport: `@Post('stop/:game')` for HTTP; `@MessagePattern` for IPC.
+   * Reachable via the Electron IPC transport (`games.stop`).
    */
-  @Post('stop/:game')
   @MessagePattern('games.stop')
-  stop(@Param('game') httpGame: string, @Payload() ipcGame: string) {
-    return this.ecs.stop(ipcGame ?? httpGame);
+  stop(@Payload() game: string) {
+    return this.ecs.stop(game);
   }
 }
