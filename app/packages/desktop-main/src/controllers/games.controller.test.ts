@@ -81,47 +81,53 @@ describe('GamesController', () => {
   });
 
   describe('getStatus', () => {
-    it('should delegate to EcsService without invalidating the tfstate cache', async () => {
+    it('should delegate to EcsService without invalidating the tfstate cache via the IPC transport', async () => {
       const config = makeConfig();
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(config, ecs).getStatus('minecraft');
       expect(config.invalidateCache).not.toHaveBeenCalled();
       expect(ecs.getStatus).toHaveBeenCalledWith('minecraft');
     });
 
-    it('should return whatever EcsService returns', async () => {
+    it('should return whatever EcsService returns via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.getStatus).mockResolvedValue({ game: 'minecraft', state: 'running' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).getStatus('minecraft');
       expect(result).toEqual({ game: 'minecraft', state: 'running' });
     });
   });
 
   describe('start', () => {
-    it('should delegate to EcsService.start with the requested game name', async () => {
+    it('should delegate to EcsService.start with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(makeConfig(), ecs).start('palworld');
       expect(ecs.start).toHaveBeenCalledWith('palworld');
     });
 
-    it('should return the result from EcsService.start', async () => {
+    it('should return the result from EcsService.start via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.start).mockResolvedValue({ success: true, message: 'running', taskArn: 'arn:task' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).start('minecraft');
       expect(result).toMatchObject({ success: true, taskArn: 'arn:task' });
     });
   });
 
   describe('stop', () => {
-    it('should delegate to EcsService.stop with the requested game name', async () => {
+    it('should delegate to EcsService.stop with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(makeConfig(), ecs).stop('minecraft');
       expect(ecs.stop).toHaveBeenCalledWith('minecraft');
     });
 
-    it('should return the result from EcsService.stop', async () => {
+    it('should return the result from EcsService.stop via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.stop).mockResolvedValue({ success: true, message: 'stopped' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).stop('minecraft');
       expect(result).toMatchObject({ success: true, message: 'stopped' });
     });
