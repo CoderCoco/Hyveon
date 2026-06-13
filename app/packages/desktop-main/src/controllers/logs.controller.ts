@@ -23,32 +23,27 @@ export class LogsController implements OnModuleInit {
    * dispatcher — it does **not** call `ipcMain.handle`, so `ipcRenderer.invoke`
    * would otherwise hang. This hook bridges the gap.
    *
-   * The Electron import is wrapped in try/catch so the module boots cleanly
-   * in plain-Node environments (integration test server, Docker) where the
-   * Electron binary is absent.
+   * Only runs inside a real Electron main process. In plain-Node runtimes
+   * (integration test server, Docker, CI) `process.versions.electron` is
+   * undefined and importing `electron` would throw — either MODULE_NOT_FOUND
+   * or "Electron failed to install correctly" when the package is present but
+   * its binary isn't — so we skip the bridge entirely rather than guessing
+   * which error means "no Electron" from the message. When we *are* in
+   * Electron, the import succeeds and any `ipcMain.handle` failure propagates
+   * so a broken bridge fails startup loudly instead of hanging invoke.
    */
   async onModuleInit(): Promise<void> {
-    try {
-      const { ipcMain } = await import('electron') as unknown as { ipcMain: IpcMain };
-      // Remove any existing handler first so hot-reload re-registration does
-      // not throw "IPC channel already registered".
-      ipcMain.removeHandler('logs.stream');
-      ipcMain.handle('logs.stream', (evt, game: string) =>
-        this.streamLogs(game, { evt: evt as IpcMainInvokeEvent }),
-      );
-    } catch (err) {
-      // Only swallow errors that indicate Electron is absent from this runtime
-      // (plain-Node integration server, Docker, CI).  Any other error — e.g. a
-      // coding mistake inside the handle callback — must propagate so startup
-      // fails visibly rather than leaving the IPC bridge silently broken.
-      const code = (err as NodeJS.ErrnoException).code;
-      const msg = (err as Error).message ?? '';
-      if (code === 'MODULE_NOT_FOUND' || msg.includes('Cannot find module')) {
-        // Not running inside the Electron main process — ipcMain bridge skipped.
-        return;
-      }
-      throw err;
+    if (!process.versions.electron) {
+      // Not running inside the Electron main process — ipcMain bridge skipped.
+      return;
     }
+    const { ipcMain } = await import('electron') as unknown as { ipcMain: IpcMain };
+    // Remove any existing handler first so hot-reload re-registration does
+    // not throw "IPC channel already registered".
+    ipcMain.removeHandler('logs.stream');
+    ipcMain.handle('logs.stream', (evt, game: string) =>
+      this.streamLogs(game, { evt: evt as IpcMainInvokeEvent }),
+    );
   }
 
   /**

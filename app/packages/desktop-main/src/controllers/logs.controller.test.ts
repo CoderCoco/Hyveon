@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LogsController } from './logs.controller.js';
 import type { LogsService } from '../services/LogsService.js';
 
@@ -112,6 +112,31 @@ describe('LogsController', () => {
   // -------------------------------------------------------------------------
 
   describe('onModuleInit', () => {
+    // onModuleInit only wires the bridge when running inside a real Electron
+    // main process, detected via `process.versions.electron`. Vitest runs under
+    // plain Node where it's undefined, so fake it for the "is Electron" cases
+    // and restore afterwards.
+    const realElectronVersion = process.versions.electron;
+    const setElectron = (value: string | undefined): void => {
+      if (value === undefined) {
+        delete (process.versions as { electron?: string }).electron;
+      } else {
+        Object.defineProperty(process.versions, 'electron', { value, configurable: true });
+      }
+    };
+    beforeEach(() => setElectron('30.0.0'));
+    afterEach(() => setElectron(realElectronVersion));
+
+    it('should skip the ipcMain bridge when not running inside an Electron main process', async () => {
+      // Plain-Node runtimes (integration test server, Docker, CI) have no
+      // `process.versions.electron`; importing electron there would throw, so
+      // the bridge must be skipped without touching ipcMain at all.
+      setElectron(undefined);
+      await new LogsController(makeLogs()).onModuleInit();
+      expect(mockIpcMainHandle).not.toHaveBeenCalled();
+      expect(mockIpcMainRemoveHandler).not.toHaveBeenCalled();
+    });
+
     it('should register ipcMain.handle for "logs.stream" so ipcRenderer.invoke can resolve', async () => {
       // onModuleInit bridges the gap between @MessagePattern (transport-internal
       // dispatch only) and ipcMain.handle (required by ipcRenderer.invoke). Without
