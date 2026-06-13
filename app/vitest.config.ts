@@ -20,7 +20,7 @@ export default defineConfig({
   },
   test: {
     // Cap the worker pool so the suite can't fan out to one process per core.
-    // On high-core dev boxes (e.g. 32 cores) the default span one worker per
+    // On high-core dev boxes (e.g. 32 cores) the default spawns one worker per
     // core, each ballooning to ~1 GB under jsdom + large module graphs, which
     // exhausts RAM/swap and OOMs the machine. The `forks` pool also reclaims
     // memory better between files than the default `threads` pool. Four forks
