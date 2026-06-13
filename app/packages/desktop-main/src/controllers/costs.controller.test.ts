@@ -43,7 +43,28 @@ function makeEcs(td: { cpu: number; memory: number } | null = { cpu: 4096, memor
   } as unknown as EcsService;
 }
 
+/**
+ * The metadata key NestJS stores on each method decorated with
+ * `@MessagePattern`. Asserting this value is the only automated guard
+ * that prevents a typo in the controller from silently breaking IPC —
+ * calling the method directly (as every other test does) would succeed
+ * regardless of what string is registered with the transport.
+ */
+const PATTERN_METADATA_KEY = 'microservices:pattern';
+
 describe('CostsController', () => {
+  describe('@MessagePattern channel names', () => {
+    it('should register estimate on the "costs.estimate" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, CostsController.prototype.estimate);
+      expect(pattern).toEqual(['costs.estimate']);
+    });
+
+    it('should register actual on the "costs.actual" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, CostsController.prototype.actual);
+      expect(pattern).toEqual(['costs.actual']);
+    });
+  });
+
   describe('estimate', () => {
     it('should return zeroed estimates when Terraform has not been applied', async () => {
       const result = await new CostsController(makeConfig(null), makeCosts(), makeEcs()).estimate();
@@ -92,6 +113,12 @@ describe('CostsController', () => {
       const costs = makeCosts();
       new CostsController(makeConfig(), costs, makeEcs()).actual('14');
       expect(costs.getActualCosts).toHaveBeenCalledWith(14);
+    });
+
+    it('should accept a bare number payload from the IPC transport', () => {
+      const costs = makeCosts();
+      new CostsController(makeConfig(), costs, makeEcs()).actual(30);
+      expect(costs.getActualCosts).toHaveBeenCalledWith(30);
     });
 
     it('should return whatever CostService returns', async () => {
