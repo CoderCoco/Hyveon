@@ -281,11 +281,13 @@ export interface GsdConfigApi {
 /**
  * Typed shape of `window.gsd` as exposed by the Electron preload script.
  *
- * Declare this on `Window` in a renderer-side `.d.ts` file:
+ * Declare this on `Window` in a renderer-side `.d.ts` file. Mark it optional
+ * (`gsd?`) — the bridge is absent in plain browser/web contexts, so runtime
+ * guards like `if (!window.gsd)` need it to be possibly-undefined:
  * ```ts
  * import type { GsdApi } from '@hyveon/desktop-preload/gsd-api';
  * declare global {
- *   interface Window { gsd: GsdApi; }
+ *   interface Window { gsd?: GsdApi; }
  * }
  * ```
  */
