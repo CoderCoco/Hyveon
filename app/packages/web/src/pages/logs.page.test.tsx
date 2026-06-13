@@ -3,32 +3,29 @@ import { render, screen, waitFor, type RenderOptions } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import { PollingProvider } from '../polling/polling-provider.component.js';
 
-// Mock the API client and the token reader so the component drives off
-// canned data instead of real fetch calls. `vi.mock` is hoisted above
-// the import, so the LogsPage import below picks up the stub.
+// Mock the API client so the component drives off canned data instead of real
+// fetch calls. `vi.mock` is hoisted above the import so LogsPage picks up the stub.
 const apiMock = vi.hoisted(() => ({
   games: vi.fn(),
-  logs: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({
   api: apiMock,
-  getStoredApiToken: () => '',
 }));
 
-// jsdom doesn't ship an EventSource implementation. Provide a minimal
-// stub so `new EventSource(url)` works; tests don't need to drive the
-// stream — the seeded snapshot is enough for these assertions.
-class MockEventSource {
-  url: string;
-  onmessage: ((e: MessageEvent) => void) | null = null;
-  constructor(url: string) {
-    this.url = url;
-  }
-  close(): void {
-    // noop
-  }
-}
-vi.stubGlobal('EventSource', MockEventSource);
+// Stub window.gsd.logs so the component can open IPC streams without a real
+// Electron main process. `stream` resolves immediately; `onChunk`/`onEnd`
+// return no-op cleanup functions so the component can register and deregister
+// listeners without throwing.
+const gsdMock = {
+  logs: {
+    get: vi.fn(),
+    stream: vi.fn(),
+    onChunk: vi.fn(),
+    onEnd: vi.fn(),
+    cancel: vi.fn(),
+  },
+};
+vi.stubGlobal('gsd', gsdMock);
 
 import { LogsPage } from './logs.page.js';
 
@@ -54,7 +51,10 @@ const SAMPLE_LINES = [
 describe('LogsPage', () => {
   beforeEach(() => {
     apiMock.games.mockResolvedValue({ games: ['minecraft'] });
-    apiMock.logs.mockResolvedValue({ game: 'minecraft', lines: SAMPLE_LINES });
+    gsdMock.logs.get.mockResolvedValue({ game: 'minecraft', lines: SAMPLE_LINES });
+    gsdMock.logs.stream.mockResolvedValue({ streamId: 'test-stream-id' });
+    gsdMock.logs.onChunk.mockReturnValue(() => {});
+    gsdMock.logs.onEnd.mockReturnValue(() => {});
   });
 
   it('should render the Server Logs heading and the LIVE badge', async () => {
@@ -137,12 +137,12 @@ describe('LogsPage', () => {
     expect(await screen.findByText(/^5 lines · oldest /)).toBeInTheDocument();
   });
 
-  it('should call api.logs(game) with the selected game on mount', async () => {
+  it('should call window.gsd.logs.get with the selected game on mount', async () => {
     renderWithProviders(<LogsPage />);
 
     await waitFor(() => {
       expect(apiMock.games).toHaveBeenCalled();
-      expect(apiMock.logs).toHaveBeenCalledWith('minecraft');
+      expect(gsdMock.logs.get).toHaveBeenCalledWith('minecraft');
     });
   });
 });

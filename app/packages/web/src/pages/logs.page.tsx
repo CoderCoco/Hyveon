@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Filter, Pause, Play, Search } from 'lucide-react';
-import { api, getStoredApiToken } from '../api.service.js';
+import { api } from '../api.service.js';
 import { Badge } from '../components/ui/badge.component.js';
 import { Button } from '../components/ui/button.component.js';
 import { Input } from '../components/ui/input.component.js';
@@ -97,9 +97,8 @@ function HighlightedLine({ text, query }: { text: string; query: string }) {
 
 /**
  * Logs route (`/logs`) — full-page tailing of CloudWatch logs for a single
- * game. Owns the same SSE plumbing the old `LogsPanel` had (initial snapshot
- * via `/api/logs/:game`, then EventSource on `/api/logs/:game/stream`), but
- * surfaces it through:
+ * game. Fetches an initial snapshot via `window.gsd.logs.get`, then opens a
+ * live IPC stream via `window.gsd.logs.stream`. Surfaces the stream through:
  *
  *   - A LIVE/PAUSED status badge (pulsing cyan / muted slate).
  *   - A searchable game selector that resets the buffer on switch.
@@ -128,7 +127,9 @@ export function LogsPage() {
   const [bufferedCount, setBufferedCount] = useState(0);
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const streamIdRef = useRef<string | null>(null);
+  /** Cleanup fns registered by the current startStream call (listener removes + cancel-on-pending). */
+  const cleanupRef = useRef<Array<() => void>>([]);
   const pausedRef = useRef(false);
   const bufferRef = useRef<LogLine[]>([]);
 
@@ -146,29 +147,36 @@ export function LogsPage() {
   }, []);
 
   const stopStream = useCallback(() => {
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
+    if (streamIdRef.current) {
+      window.gsd.logs.cancel(streamIdRef.current);
+      streamIdRef.current = null;
     }
+    cleanupRef.current.forEach((fn) => fn());
+    cleanupRef.current = [];
   }, []);
 
   const startStream = useCallback(
     (game: string) => {
       stopStream();
-      const token = getStoredApiToken();
-      const url = `/api/logs/${game}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-      const es = new EventSource(url);
+      // Closure-scoped flag so a stopStream call that arrives while the IPC
+      // invoke is in-flight can abort the stream before listeners are wired.
+      let cancelled = false;
+      cleanupRef.current = [() => { cancelled = true; }];
 
-      es.onmessage = (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data as string) as { line: string };
-          appendLine(data.line);
-        } catch {
-          // ignore malformed events
+      void window.gsd.logs.stream(game).then(({ streamId }) => {
+        if (cancelled) {
+          window.gsd.logs.cancel(streamId);
+          return;
         }
-      };
-
-      esRef.current = es;
+        streamIdRef.current = streamId;
+        const removeChunk = window.gsd.logs.onChunk(streamId, appendLine);
+        const removeEnd = window.gsd.logs.onEnd(streamId, (err) => {
+          if (err) setError(`Stream ended with error: ${err}`);
+          streamIdRef.current = null;
+          cleanupRef.current = [];
+        });
+        cleanupRef.current = [removeChunk, removeEnd];
+      });
     },
     [stopStream, appendLine],
   );
@@ -219,7 +227,7 @@ export function LogsPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const data = await api.logs(selectedGame);
+        const data = await window.gsd.logs.get(selectedGame);
         if (cancelled) return;
         const seeded: LogLine[] = data.lines.map((text) => ({
           text,

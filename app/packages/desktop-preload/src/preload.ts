@@ -13,7 +13,7 @@
  * via `ipcRenderer.on` in a dedicated channel if needed.
  */
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
 import type { GsdApi } from './gsd-api.js';
 
@@ -33,6 +33,22 @@ const api: GsdApi = {
 
   logs: {
     get: (game: string, limit?: number) => ipcRenderer.invoke('logs.get', game, limit),
+    stream: (game: string) => ipcRenderer.invoke('logs.stream', game),
+    onChunk: (streamId: string, cb: (chunk: string) => void) => {
+      const ch = `logs.stream.${streamId}.chunk`;
+      const handler = (_evt: IpcRendererEvent, chunk: string) => cb(chunk);
+      ipcRenderer.on(ch, handler);
+      return () => ipcRenderer.removeListener(ch, handler);
+    },
+    onEnd: (streamId: string, cb: (err?: string) => void) => {
+      const ch = `logs.stream.${streamId}.end`;
+      const handler = (_evt: IpcRendererEvent, data: { error?: string }) => cb(data?.error);
+      ipcRenderer.once(ch, handler);
+      return () => ipcRenderer.removeListener(ch, handler);
+    },
+    cancel: (streamId: string) => {
+      ipcRenderer.send(`logs.stream.${streamId}.cancel`);
+    },
   },
 
   files: {

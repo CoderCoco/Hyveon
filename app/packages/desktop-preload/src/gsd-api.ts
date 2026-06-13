@@ -66,6 +66,9 @@ export interface GameLogs {
   lines: string[];
 }
 
+/** A single chunk of streamed log text delivered over IPC. */
+export type LogChunk = string;
+
 /** State of the EFS FileBrowser helper task for a game. */
 export interface FileMgrStatus {
   game: string;
@@ -191,16 +194,27 @@ export interface GsdCostsApi {
   actual: (days?: number) => Promise<ActualCosts>;
 }
 
-/**
- * CloudWatch log endpoints.
- *
- * Note: the SSE log stream (`logs.stream`) is intentionally absent — IPC
- * `invoke` is request/response only. Wire streaming separately via
- * `ipcRenderer.on` if needed.
- */
+/** CloudWatch log endpoints: poll recent lines or open a live IPC stream. */
 export interface GsdLogsApi {
   /** Returns recent log lines for a game's ECS task. */
   get: (game: string, limit?: number) => Promise<GameLogs>;
+  /**
+   * Opens a live log stream for `game` via IPC and returns the opaque
+   * `streamId` used to subscribe to chunk/end events and to cancel the stream.
+   */
+  stream: (game: string) => Promise<{ streamId: string }>;
+  /**
+   * Subscribe to incoming log chunks for a stream. Returns a cleanup function
+   * that removes the listener when called.
+   */
+  onChunk: (streamId: string, cb: (chunk: string) => void) => () => void;
+  /**
+   * Subscribe to the end-of-stream notification. Returns a cleanup function.
+   * `err` is set when the stream terminated due to an error.
+   */
+  onEnd: (streamId: string, cb: (err?: string) => void) => () => void;
+  /** Send a cancellation request for an active stream. */
+  cancel: (streamId: string) => void;
 }
 
 /** EFS file-manager task endpoints: status, start, and stop per game. */

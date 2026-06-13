@@ -1,48 +1,44 @@
-import { Controller, Get, MessageEvent, Param, Query, Sse } from '@nestjs/common';
-import { Observable } from 'rxjs';
+import { Controller } from '@nestjs/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
 import { LogsService } from '../services/LogsService.js';
 
-/** Tails CloudWatch logs from the `/ecs/{game}-server` log group. */
-@Controller('logs')
+/** IPC-only logs controller. Handles Electron main-process messages via
+ * `@MessagePattern` — no HTTP routes are registered here.
+ *
+ * Tails CloudWatch logs from the `/ecs/{game}-server` log group.
+ */
+@Controller()
 export class LogsController {
   constructor(private readonly logs: LogsService) {}
 
-  /** Returns the most recent `limit` (default 50) log lines for a game's ECS task. */
-  @Get(':game')
-  async getLogs(@Param('game') game: string, @Query('limit') limitRaw?: string) {
-    const limit = parseInt(String(limitRaw ?? '50'), 10);
+  /**
+   * Returns the most recent `limit` (default 50) log lines for a game's ECS task.
+   *
+   * Reachable via the Electron IPC transport (`logs.get`).
+   */
+  @MessagePattern('logs.get')
+  async getRecentLogs(
+    @Payload() payload: { game: string; limit?: number },
+  ): Promise<{ game: string; lines: string[] }> {
+    const { game, limit = 50 } = payload;
     const lines = await this.logs.getRecentLogs(game, limit);
     return { game, lines };
   }
 
   /**
-   * SSE stream of new log lines for a game, delivered as they arrive from
-   * `FilterLogEvents`. The client receives `{ data: { line: "..." } }` events.
-   * Auth: `Authorization: Bearer` header OR `?token=` query param (the latter
-   * is required because the browser's native `EventSource` cannot set headers).
+   * Async-generator stream of new log lines for a game, delivered as they
+   * arrive from `FilterLogEvents`. The `AbortSignal` is sourced from the
+   * Nest execution context (`ctx.signal`) as wired by
+   * `StreamingElectronIPCTransport` — the renderer cancels the stream by
+   * sending the matching `.cancel` IPC message.
+   *
+   * Reachable via the Electron IPC transport (`logs.stream`).
    */
-  @Sse(':game/stream')
-  streamLogs(@Param('game') game: string): Observable<MessageEvent> {
-    const ac = new AbortController();
-
-    return new Observable<MessageEvent>((subscriber) => {
-      const run = async () => {
-        try {
-          for await (const line of this.logs.streamLogs(game, ac.signal)) {
-            subscriber.next({ data: { line } } as MessageEvent);
-          }
-          subscriber.complete();
-        } catch (err) {
-          if ((err as Error).name === 'AbortError') {
-            subscriber.complete();
-          } else {
-            subscriber.error(err);
-          }
-        }
-      };
-      void run();
-
-      return () => ac.abort();
-    });
+  @MessagePattern('logs.stream')
+  async *streamLogs(
+    @Payload() game: string,
+    ctx: { signal: AbortSignal },
+  ): AsyncGenerator<string> {
+    yield* this.logs.streamLogs(game, ctx.signal);
   }
 }
