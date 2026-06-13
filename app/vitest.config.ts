@@ -19,6 +19,22 @@ export default defineConfig({
     },
   },
   test: {
+    // Cap the worker pool so the suite can't fan out to one process per core.
+    // On high-core dev boxes (e.g. 32 cores) the default spawns one worker per
+    // core, each ballooning to ~1 GB under jsdom + large module graphs, which
+    // exhausts RAM/swap and OOMs the machine. The `forks` pool also reclaims
+    // memory better between files than the default `threads` pool. Four forks
+    // (~4 GB) keeps the suite fast without starving the host; CI boxes with
+    // fewer cores are unaffected since the cap is only an upper bound.
+    pool: 'forks',
+    maxWorkers: 4,
+    minWorkers: 1,
+    poolOptions: {
+      forks: {
+        maxForks: 4,
+        minForks: 1,
+      },
+    },
     include: [
       'packages/**/*.test.{ts,tsx}',
       // Explicitly include desktop-preload specs so they are always discovered.
