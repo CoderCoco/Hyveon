@@ -15,25 +15,27 @@ export class LogsController implements OnModuleInit {
   constructor(private readonly logs: LogsService) {}
 
   /**
-   * Registers `ipcMain.handle('logs.stream', ...)` after the Nest module is
-   * initialised so that `ipcRenderer.invoke('logs.stream', game)` in the
-   * preload resolves with `{ streamId }`.
+   * Registers an `ipcMain.handle` bridge for the `logs.stream` channel after
+   * the Nest module initialises, so that `ipcRenderer.invoke('logs.stream')`
+   * in the preload resolves with `{ streamId }`.
    *
-   * `@MessagePattern('logs.stream')` only registers a handler in the
-   * transport's internal `ipcMessageDispatcher` — it does **not** call
-   * `ipcMain.handle`, so `ipcRenderer.invoke` would otherwise hang. This
-   * lifecycle hook bridges the gap by wiring an explicit `ipcMain.handle`
-   * that forwards the call into `streamLogs` through the same context shape
-   * (`{ evt }`) that `ElectronIPCTransport.onMessage` produces.
+   * `@MessagePattern('logs.stream')` only wires the transport's internal
+   * dispatcher — it does **not** call `ipcMain.handle`, so `ipcRenderer.invoke`
+   * would otherwise hang. This hook bridges the gap.
    *
-   * The electron import is deferred so the module remains loadable in
-   * plain-Node test environments where the Electron runtime is absent.
+   * The Electron import is wrapped in try/catch so the module boots cleanly
+   * in plain-Node environments (integration test server, Docker) where the
+   * Electron binary is absent.
    */
   async onModuleInit(): Promise<void> {
-    const { ipcMain } = await import('electron') as unknown as { ipcMain: IpcMain };
-    ipcMain.handle('logs.stream', (evt, game: string) =>
-      this.streamLogs(game, { evt: evt as IpcMainInvokeEvent }),
-    );
+    try {
+      const { ipcMain } = await import('electron') as unknown as { ipcMain: IpcMain };
+      ipcMain.handle('logs.stream', (evt, game: string) =>
+        this.streamLogs(game, { evt: evt as IpcMainInvokeEvent }),
+      );
+    } catch {
+      // Not running inside the Electron main process — ipcMain bridge skipped.
+    }
   }
 
   /**
@@ -52,10 +54,10 @@ export class LogsController implements OnModuleInit {
 
   /**
    * Opens a live log stream for `game` and returns an opaque `streamId`
-   * immediately. Chunks are pushed back to the renderer via
-   * `evt.sender.send(`logs.stream.${streamId}.chunk`, line)` as they arrive
-   * from `FilterLogEvents`. The stream ends with a
-   * `logs.stream.${streamId}.end` message carrying `{ error?: string }`.
+   * immediately. Chunks are pushed to the renderer via `sender.send` on the
+   * `logs.stream.<streamId>.chunk` channel as they arrive from FilterLogEvents.
+   * The stream terminates with a `logs.stream.<streamId>.end` message
+   * carrying `{ error?: string }`.
    *
    * The renderer cancels the stream by sending
    * `logs.stream.${streamId}.cancel` via `ipcRenderer.send`.
