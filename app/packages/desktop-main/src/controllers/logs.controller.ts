@@ -95,7 +95,7 @@ export class LogsController implements OnModuleInit {
     void (async () => {
       try {
         for await (const line of this.logs.streamLogs(game, ac.signal)) {
-          if (sender.isDestroyed()) break;
+          if (sender.isDestroyed()) { ac.abort(); break; }
           sender.send(chunkChannel, line);
         }
         if (!sender.isDestroyed()) {
