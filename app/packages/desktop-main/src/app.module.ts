@@ -6,6 +6,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
+import { GamesHttpController } from './controllers/games-http.controller.js';
 import { ConfigController } from './controllers/config.controller.js';
 import { CostsController } from './controllers/costs.controller.js';
 import { LogsController } from './controllers/logs.controller.js';
@@ -30,6 +31,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
   imports: [AwsModule, DiscordModule],
   controllers: [
     GamesController,
+    GamesHttpController,
     ConfigController,
     CostsController,
     LogsController,

@@ -150,20 +150,16 @@ Both scripts are idempotent — safe to re-run at any time. They:
    (`setup.sh` uses apt on Debian/Ubuntu; `setup.ps1` uses winget + the AWS MSI
    installer on Windows; macOS users should install those tools manually first).
 2. Runs `npm ci` from `app/` so all workspaces are installed.
-3. Runs `npm run build:lambdas` to produce `app/packages/lambda/*/dist/handler.cjs`
-   — Terraform's `archive_file` data sources zip these at apply time, so
-   the bundles **must** exist on disk before `terraform apply` or init will
-   fail.
-4. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
+3. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
    if the latter doesn't exist yet.
-5. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
+4. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
    table (`{project_name}-tf-locks`) if they don't already exist. The bucket
    gets versioning, public-access blocking, and AES-256 encryption enabled.
    The script waits for the DynamoDB table to reach `ACTIVE` status before
    continuing. Both names are derived from `project_name` in
    `terraform.tfvars` (default: `game-servers`). This step requires the
    `s3:*` permissions in the inline policy above.
-6. Runs `terraform init` inside `terraform/`, passing the bucket and table
+5. Runs `terraform init` inside `terraform/`, passing the bucket and table
    as `-backend-config` flags. If a local `terraform.tfstate` is present
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
@@ -350,6 +346,39 @@ token on first load; paste the value of `$API_TOKEN` and click **Save**.
 config), and `~/.aws` (credentials). If you prefer
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars, uncomment the
 corresponding block in `docker-compose.yml`.
+
+### Option C — packaged Electron app (distributable installer)
+
+`npm run desktop:package` produces a platform-native installer via
+electron-builder (config: `electron-builder.yml`). Run it from the repo root:
+
+```bash
+# Build the Electron bundle and package into an installer
+npm run desktop:package
+```
+
+This runs `desktop:build` (electron-vite) first, then electron-builder,
+which produces one output per platform in `release/`:
+
+| Platform | Output |
+|---|---|
+| Windows | `release/Hyveon Setup *.exe` (NSIS installer) |
+| macOS | `release/Hyveon-*.dmg` (DMG image) |
+| Linux | `release/Hyveon-*.AppImage` (AppImage) |
+
+By default electron-builder targets only the host platform. To cross-compile,
+pass `--win`, `--mac`, or `--linux` explicitly:
+`npx electron-builder --config electron-builder.yml --linux`.
+
+**What gets bundled**: the Electron sources under `out/` are packed into an
+asar archive. Only `terraform/terraform.tfstate` (the single state file — not
+the `.tf` source files) is embedded via `extraResources` and lands outside the
+asar at `process.resourcesPath` inside the installed app. At runtime the main
+process reads `<resourcesPath>/terraform/aws/terraform.tfstate` — the
+`to: terraform/aws` mapping in `electron-builder.yml` is why the sub-path
+includes `aws/`, and this is the same data `ConfigService` requires in dev
+mode. Lambda bundles are deployed to AWS via Terraform and are not packaged
+into the installer.
 
 ## 7. (Optional) Wire up the Discord bot
 

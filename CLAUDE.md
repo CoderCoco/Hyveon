@@ -27,6 +27,16 @@ npm run app:start        # starts the built Electron app (requires desktop:build
 npm run desktop:dev    # electron-vite dev: HMR on renderer saves, auto-restarts main+preload
 npm run desktop:build  # electron-vite build: produces out/main, out/preload, out/renderer
 
+# Package the Electron app into a distributable installer (runs desktop:build first)
+# Produces three targets via electron-builder (electron-builder.yml):
+#   Windows  → release/Hyveon Setup *.exe   (NSIS installer)
+#   macOS    → release/Hyveon-*.dmg         (DMG image)
+#   Linux    → release/Hyveon-*.AppImage    (AppImage)
+# terraform/terraform.tfstate is embedded via extraResources and lands under
+# process.resourcesPath at runtime (not inside the asar archive).
+# Lambda bundles are deployed to AWS via Terraform and are NOT packaged into the installer.
+npm run desktop:package
+
 # Build all Lambda bundles (required before `terraform apply`)
 npm run app:build:lambdas
 

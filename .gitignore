@@ -44,3 +44,6 @@ app/packages/web/dist-integration/
 
 # Vitest coverage output
 app/coverage/
+
+# electron-builder packaged artifacts
+release/

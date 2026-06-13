@@ -12,6 +12,10 @@ const HEADERS = { Authorization: 'Bearer test-token' };
  * set to the `code` value, mirroring the real AWS SDK exception shape. Nest's
  * `EcsService.start()` catch block converts that to the message string via
  * `String(err)` → `"<name>: <message>"`.
+ *
+ * The `/api/start/:game` route is provided by `GamesHttpController` — the HTTP
+ * shim that runs alongside the IPC `GamesController`. Both delegate to the same
+ * `EcsService`, so this spec exercises the real error-propagation path.
  */
 test.describe('Error propagation', () => {
   test('should surface RunTask AccessDeniedException as a failed start response', async ({

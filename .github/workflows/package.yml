@@ -1,0 +1,93 @@
+name: Package
+
+on:
+  pull_request:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_glob: 'release/*.AppImage'
+            artifact_name: linux-AppImage
+          - os: macos-latest
+            artifact_glob: 'release/*.dmg'
+            artifact_name: mac-dmg
+          - os: windows-latest
+            artifact_glob: 'release/*.exe'
+            artifact_name: win-nsis
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - name: Restore @tailwindcss/oxide native binding
+        # The lockfile was generated on a linux-x64 host, so the optional
+        # platform-specific binaries for darwin-arm64 (macos-15-arm64) and
+        # win32-x64-msvc are missing. Re-install to fetch the correct binary
+        # for the current runner before the Vite build step.
+        run: npm install --no-save @tailwindcss/oxide@4.3.0
+
+      - name: Ensure terraform.tfstate exists for packaging
+        # terraform/terraform.tfstate is gitignored and will never exist in a
+        # clean CI checkout. electron-builder silently skips a missing
+        # extraResources 'from' path, which would produce an installer that
+        # lacks the tfstate file entirely. Create an empty placeholder so
+        # electron-builder always includes the file. ConfigService falls back
+        # to the build-time-embedded tfstate.ts when the runtime file is empty,
+        # so shipping an empty state file is safe for CI-produced installers.
+        shell: bash
+        run: |
+          if [ ! -f terraform/terraform.tfstate ]; then
+            echo "terraform/terraform.tfstate not found — creating empty placeholder for packaging."
+            echo '{}' > terraform/terraform.tfstate
+          fi
+
+      - name: Build workspace packages
+        run: npm run app:build
+
+      - name: Package desktop app
+        run: npm run desktop:package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release and attach artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          draft: true

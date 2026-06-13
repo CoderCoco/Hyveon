@@ -21,7 +21,6 @@ function makeConfig(outputs: Partial<TfOutputs> | null = DEFAULT_OUTPUTS): Confi
   return {
     invalidateCache: vi.fn(),
     getTfOutputs: vi.fn().mockReturnValue(outputs),
-    getRegion: vi.fn().mockReturnValue('us-east-1'),
   } as unknown as ConfigService;
 }
 
@@ -34,7 +33,43 @@ function makeEcs(): EcsService {
   } as unknown as EcsService;
 }
 
+/**
+ * The metadata key NestJS stores on each method decorated with
+ * `@MessagePattern`. Asserting this value is the only automated guard
+ * that prevents a typo in the controller from silently breaking IPC —
+ * calling the method directly (as every other test does) would succeed
+ * regardless of what string is registered with the transport.
+ */
+const PATTERN_METADATA_KEY = 'microservices:pattern';
+
 describe('GamesController', () => {
+  describe('@MessagePattern channel names', () => {
+    it('should register listGames on the "games.list" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.listGames);
+      expect(pattern).toEqual(['games.list']);
+    });
+
+    it('should register listStatus on the "games.status" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.listStatus);
+      expect(pattern).toEqual(['games.status']);
+    });
+
+    it('should register getStatus on the "games.getStatus" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.getStatus);
+      expect(pattern).toEqual(['games.getStatus']);
+    });
+
+    it('should register start on the "games.start" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.start);
+      expect(pattern).toEqual(['games.start']);
+    });
+
+    it('should register stop on the "games.stop" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, GamesController.prototype.stop);
+      expect(pattern).toEqual(['games.stop']);
+    });
+  });
+
   describe('listGames', () => {
     it('should invalidate the tfstate cache before reading game names', () => {
       const config = makeConfig();
@@ -81,47 +116,53 @@ describe('GamesController', () => {
   });
 
   describe('getStatus', () => {
-    it('should delegate to EcsService without invalidating the tfstate cache', async () => {
+    it('should delegate to EcsService without invalidating the tfstate cache via the IPC transport', async () => {
       const config = makeConfig();
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(config, ecs).getStatus('minecraft');
       expect(config.invalidateCache).not.toHaveBeenCalled();
       expect(ecs.getStatus).toHaveBeenCalledWith('minecraft');
     });
 
-    it('should return whatever EcsService returns', async () => {
+    it('should return whatever EcsService returns via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.getStatus).mockResolvedValue({ game: 'minecraft', state: 'running' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).getStatus('minecraft');
       expect(result).toEqual({ game: 'minecraft', state: 'running' });
     });
   });
 
   describe('start', () => {
-    it('should delegate to EcsService.start with the requested game name', async () => {
+    it('should delegate to EcsService.start with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(makeConfig(), ecs).start('palworld');
       expect(ecs.start).toHaveBeenCalledWith('palworld');
     });
 
-    it('should return the result from EcsService.start', async () => {
+    it('should return the result from EcsService.start via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.start).mockResolvedValue({ success: true, message: 'running', taskArn: 'arn:task' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).start('minecraft');
       expect(result).toMatchObject({ success: true, taskArn: 'arn:task' });
     });
   });
 
   describe('stop', () => {
-    it('should delegate to EcsService.stop with the requested game name', async () => {
+    it('should delegate to EcsService.stop with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       await new GamesController(makeConfig(), ecs).stop('minecraft');
       expect(ecs.stop).toHaveBeenCalledWith('minecraft');
     });
 
-    it('should return the result from EcsService.stop', async () => {
+    it('should return the result from EcsService.stop via the IPC transport', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.stop).mockResolvedValue({ success: true, message: 'stopped' });
+      // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
       const result = await new GamesController(makeConfig(), ecs).stop('minecraft');
       expect(result).toMatchObject({ success: true, message: 'stopped' });
     });
