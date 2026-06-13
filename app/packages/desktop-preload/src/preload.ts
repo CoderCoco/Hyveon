@@ -32,7 +32,7 @@ const api: GsdApi = {
   },
 
   logs: {
-    get: (game: string, limit?: number) => ipcRenderer.invoke('logs.get', game, limit),
+    get: (game: string, limit?: number) => ipcRenderer.invoke('logs.get', { game, limit }),
     stream: (game: string) => ipcRenderer.invoke('logs.stream', game),
     onChunk: (streamId: string, cb: (chunk: string) => void) => {
       const ch = `logs.stream.${streamId}.chunk`;

@@ -78,18 +78,25 @@ export interface StubOptions {
    */
   games?: string[];
   /**
-   * Initial log lines returned by `GET /api/logs/:game` (used by the Logs
-   * page). Maps game name → seeded lines. Games not present in the map
-   * receive an empty buffer. The SSE stream at `/api/logs/:game/stream` is
-   * always aborted so EventSource gives up immediately and tests don't hang
-   * on a never-ending response.
+   * Initial log lines surfaced via `window.gsd.logs.get(game)` (used by the
+   * Logs page). Maps game name → seeded lines. Games not present in the map
+   * receive an empty buffer.
+   *
+   * `stubApis` injects a `window.gsd.logs` stub via `addInitScript` so that
+   * `LogsPage` can call `window.gsd.logs.get` and `window.gsd.logs.stream`
+   * without a real Electron main process. The stream stub resolves immediately
+   * but never fires chunks, so specs drive off the seeded snapshot only.
    */
   logLines?: Record<string, string[]>;
 }
 
 /**
  * Registers Playwright route intercepts for all `/api/*` endpoints used by the
- * dashboard. Call before `page.goto()` in each spec that needs a running UI.
+ * dashboard, and injects a `window.gsd.logs` stub via `addInitScript` so the
+ * Logs page can call `window.gsd.logs.get` / `window.gsd.logs.stream` without
+ * a real Electron main process.
+ *
+ * Must be called before `page.goto()` in each spec that needs a running UI.
  *
  * Playwright matches routes in REVERSE registration order (last-registered
  * wins), so we register the catch-all FIRST and the specific stubs after —
@@ -176,16 +183,32 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
     route.fulfill({ json: { success: true, permissions: discord.gamePermissions } }),
   );
 
-  // Logs page — the SSE stream is aborted so EventSource gives up immediately.
-  // Specs that need to drive the stream can override this route after stubApis().
-  // The `/stream*` glob is registered AFTER `/api/logs/*` so it wins for SSE
-  // URLs (Playwright matches routes in reverse registration order).
-  await page.route('**/api/logs/*', (route) => {
-    const url = new URL(route.request().url());
-    const game = url.pathname.split('/').pop()!;
-    return route.fulfill({ json: { game, lines: logLines[game] ?? [] } });
-  });
-  await page.route('**/api/logs/*/stream*', (route) => route.abort());
+  // Logs page — inject a window.gsd.logs stub so LogsPage can call
+  // window.gsd.logs.get / window.gsd.logs.stream without a real Electron
+  // main process. The stub must be registered via addInitScript (runs before
+  // any page JS) and receives the seeded logLines map as a serialisable arg.
+  //
+  // The stream stub resolves immediately with a fixed streamId but never
+  // fires onChunk/onEnd events, so specs drive off the seeded snapshot only.
+  // onChunk / onEnd return no-op cleanup functions so the component's
+  // listener-registration code doesn't throw.
+  await page.addInitScript(
+    ({ lines }: { lines: Record<string, string[]> }) => {
+      const noop = () => () => {};
+      (window as Record<string, unknown>)['gsd'] = {
+        logs: {
+          get: (game: string) =>
+            Promise.resolve({ game, lines: lines[game] ?? [] }),
+          stream: (_game: string) =>
+            Promise.resolve({ streamId: 'e2e-stub-stream' }),
+          onChunk: noop,
+          onEnd: noop,
+          cancel: () => {},
+        },
+      };
+    },
+    { lines: logLines },
+  );
 }
 
 type E2EFixtures = {
