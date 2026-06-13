@@ -2,11 +2,12 @@ import { test, expect, stubApis, SAMPLE_LOG_LINES } from '../fixtures/index.js';
 
 /**
  * `/logs` route specs (issue #63). The Nest server is never started — every
- * `/api/*` call goes through Playwright route stubs. The SSE stream
- * (`/api/logs/:game/stream`) is aborted by the default `stubApis()` setup so
- * `EventSource` gives up immediately and tests don't hang on a never-ending
- * response. We then drive the page entirely off the seeded snapshot returned
- * by `GET /api/logs/:game`.
+ * `/api/*` call goes through Playwright route stubs. `LogsPage` now fetches
+ * its initial snapshot via `window.gsd.logs.get` (IPC bridge) instead of
+ * the HTTP API; `stubApis()` injects a `window.gsd.logs` stub via
+ * `addInitScript` that returns the seeded lines from `logLines` and resolves
+ * the stream call immediately without firing any chunks, so specs drive the
+ * page entirely off the seeded snapshot.
  */
 test.describe('logs page', () => {
   test('should render LIVE badge and seeded log lines', async ({ logs }) => {

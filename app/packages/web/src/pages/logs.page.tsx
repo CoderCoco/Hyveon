@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Filter, Pause, Play, Search } from 'lucide-react';
-import { api, getStoredApiToken } from '../api.service.js';
+import { api } from '../api.service.js';
 import { Badge } from '../components/ui/badge.component.js';
 import { Button } from '../components/ui/button.component.js';
 import { Input } from '../components/ui/input.component.js';
@@ -97,9 +97,9 @@ function HighlightedLine({ text, query }: { text: string; query: string }) {
 
 /**
  * Logs route (`/logs`) — full-page tailing of CloudWatch logs for a single
- * game. Owns the same SSE plumbing the old `LogsPanel` had (initial snapshot
- * via `/api/logs/:game`, then EventSource on `/api/logs/:game/stream`), but
- * surfaces it through:
+ * game. Fetches an initial snapshot via `window.gsd.logs.get`, then consumes
+ * a live IPC stream via `for await (… of window.gsd.logs.stream(game, signal))`,
+ * cancelling through an `AbortController`. Surfaces the stream through:
  *
  *   - A LIVE/PAUSED status badge (pulsing cyan / muted slate).
  *   - A searchable game selector that resets the buffer on switch.
@@ -128,7 +128,8 @@ export function LogsPage() {
   const [bufferedCount, setBufferedCount] = useState(0);
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
+  /** Aborts the in-flight `for await` log stream; aborting also tells the main process to cancel. */
+  const abortRef = useRef<AbortController | null>(null);
   const pausedRef = useRef(false);
   const bufferRef = useRef<LogLine[]>([]);
 
@@ -146,29 +147,33 @@ export function LogsPage() {
   }, []);
 
   const stopStream = useCallback(() => {
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
+    abortRef.current?.abort();
+    abortRef.current = null;
   }, []);
 
   const startStream = useCallback(
     (game: string) => {
+      if (!window.gsd) {
+        setError('IPC bridge (window.gsd) is not available in this context.');
+        return;
+      }
       stopStream();
-      const token = getStoredApiToken();
-      const url = `/api/logs/${game}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-      const es = new EventSource(url);
+      const ac = new AbortController();
+      abortRef.current = ac;
 
-      es.onmessage = (e: MessageEvent) => {
+      void (async () => {
         try {
-          const data = JSON.parse(e.data as string) as { line: string };
-          appendLine(data.line);
-        } catch {
-          // ignore malformed events
+          for await (const chunk of window.gsd!.logs.stream(game, ac.signal)) {
+            if (ac.signal.aborted) break;
+            appendLine(chunk);
+          }
+        } catch (err: unknown) {
+          // An abort tears the iterator down without a real failure — ignore it.
+          if (ac.signal.aborted) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setError(`Stream ended with error: ${message}`);
         }
-      };
-
-      esRef.current = es;
+      })();
     },
     [stopStream, appendLine],
   );
@@ -218,8 +223,12 @@ export function LogsPage() {
 
     let cancelled = false;
     void (async () => {
+      if (!window.gsd) {
+        if (!cancelled) setError('IPC bridge (window.gsd) is not available in this context.');
+        return;
+      }
       try {
-        const data = await api.logs(selectedGame);
+        const data = await window.gsd.logs.get(selectedGame);
         if (cancelled) return;
         const seeded: LogLine[] = data.lines.map((text) => ({
           text,

@@ -66,6 +66,9 @@ export interface GameLogs {
   lines: string[];
 }
 
+/** A single chunk of streamed log text delivered over IPC. */
+export type LogChunk = string;
+
 /** State of the EFS FileBrowser helper task for a game. */
 export interface FileMgrStatus {
   game: string;
@@ -191,16 +194,21 @@ export interface GsdCostsApi {
   actual: (days?: number) => Promise<ActualCosts>;
 }
 
-/**
- * CloudWatch log endpoints.
- *
- * Note: the SSE log stream (`logs.stream`) is intentionally absent — IPC
- * `invoke` is request/response only. Wire streaming separately via
- * `ipcRenderer.on` if needed.
- */
+/** CloudWatch log endpoints: poll recent lines or open a live IPC stream. */
 export interface GsdLogsApi {
   /** Returns recent log lines for a game's ECS task. */
   get: (game: string, limit?: number) => Promise<GameLogs>;
+  /**
+   * Opens a live log stream for `game` as an async iterable of log chunks.
+   * Consume it with `for await (const chunk of stream(game, signal))`.
+   *
+   * Pass an `AbortSignal` to cancel the stream: aborting (or breaking out of
+   * the `for await` loop) tells the main process to stop tailing CloudWatch.
+   * The iterator completes when the stream ends and throws if it terminated
+   * due to an error. Internally this wraps the per-stream chunk/end/cancel IPC
+   * channels in an async generator.
+   */
+  stream: (game: string, signal?: AbortSignal) => AsyncIterable<LogChunk>;
 }
 
 /** EFS file-manager task endpoints: status, start, and stop per game. */
@@ -267,11 +275,13 @@ export interface GsdConfigApi {
 /**
  * Typed shape of `window.gsd` as exposed by the Electron preload script.
  *
- * Declare this on `Window` in a renderer-side `.d.ts` file:
+ * Declare this on `Window` in a renderer-side `.d.ts` file. Mark it optional
+ * (`gsd?`) — the bridge is absent in plain browser/web contexts, so runtime
+ * guards like `if (!window.gsd)` need it to be possibly-undefined:
  * ```ts
  * import type { GsdApi } from '@hyveon/desktop-preload/gsd-api';
  * declare global {
- *   interface Window { gsd: GsdApi; }
+ *   interface Window { gsd?: GsdApi; }
  * }
  * ```
  */

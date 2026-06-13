@@ -225,8 +225,6 @@ export const api = {
     }),
   costsEstimate: () => request<CostEstimates>('/api/costs/estimate'),
   costsActual: (days = 7) => request<ActualCosts>(`/api/costs/actual?days=${days}`),
-  logs: (game: string, limit = 50) =>
-    request<{ game: string; lines: string[] }>(`/api/logs/${game}?limit=${limit}`),
   filesMgrStatus: (game: string) => request<FileMgrStatus>(`/api/files/${game}`),
   filesMgrStart: (game: string) => request<ActionResult>(`/api/files/${game}/start`, { method: 'POST' }),
   filesMgrStop: (game: string) => request<ActionResult>(`/api/files/${game}/stop`, { method: 'POST' }),
