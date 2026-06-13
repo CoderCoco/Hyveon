@@ -148,8 +148,12 @@ export function LogsPage() {
 
   const stopStream = useCallback(() => {
     if (streamIdRef.current) {
-      window.gsd.logs.cancel(streamIdRef.current);
-      streamIdRef.current = null;
+      if (!window.gsd) {
+        streamIdRef.current = null;
+      } else {
+        window.gsd.logs.cancel(streamIdRef.current);
+        streamIdRef.current = null;
+      }
     }
     cleanupRef.current.forEach((fn) => fn());
     cleanupRef.current = [];
@@ -157,6 +161,10 @@ export function LogsPage() {
 
   const startStream = useCallback(
     (game: string) => {
+      if (!window.gsd) {
+        setError('IPC bridge (window.gsd) is not available in this context.');
+        return;
+      }
       stopStream();
       // Closure-scoped flag so a stopStream call that arrives while the IPC
       // invoke is in-flight can abort the stream before listeners are wired.
@@ -167,12 +175,12 @@ export function LogsPage() {
         .stream(game)
         .then(({ streamId }) => {
           if (cancelled) {
-            window.gsd.logs.cancel(streamId);
+            window.gsd?.logs.cancel(streamId);
             return;
           }
           streamIdRef.current = streamId;
-          const removeChunk = window.gsd.logs.onChunk(streamId, appendLine);
-          const removeEnd = window.gsd.logs.onEnd(streamId, (err) => {
+          const removeChunk = window.gsd!.logs.onChunk(streamId, appendLine);
+          const removeEnd = window.gsd!.logs.onEnd(streamId, (err) => {
             if (err) setError(`Stream ended with error: ${err}`);
             streamIdRef.current = null;
             cleanupRef.current.forEach(fn => fn());
@@ -185,7 +193,7 @@ export function LogsPage() {
           if (cancelled) {
             removeChunk();
             removeEnd();
-            window.gsd.logs.cancel(streamId);
+            window.gsd?.logs.cancel(streamId);
             return;
           }
           cleanupRef.current = [removeChunk, removeEnd];
@@ -244,6 +252,10 @@ export function LogsPage() {
 
     let cancelled = false;
     void (async () => {
+      if (!window.gsd) {
+        if (!cancelled) setError('IPC bridge (window.gsd) is not available in this context.');
+        return;
+      }
       try {
         const data = await window.gsd.logs.get(selectedGame);
         if (cancelled) return;
