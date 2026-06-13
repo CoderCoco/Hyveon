@@ -30,11 +30,24 @@ export class LogsController implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     try {
       const { ipcMain } = await import('electron') as unknown as { ipcMain: IpcMain };
+      // Remove any existing handler first so hot-reload re-registration does
+      // not throw "IPC channel already registered".
+      ipcMain.removeHandler('logs.stream');
       ipcMain.handle('logs.stream', (evt, game: string) =>
         this.streamLogs(game, { evt: evt as IpcMainInvokeEvent }),
       );
-    } catch {
-      // Not running inside the Electron main process — ipcMain bridge skipped.
+    } catch (err) {
+      // Only swallow errors that indicate Electron is absent from this runtime
+      // (plain-Node integration server, Docker, CI).  Any other error — e.g. a
+      // coding mistake inside the handle callback — must propagate so startup
+      // fails visibly rather than leaving the IPC bridge silently broken.
+      const code = (err as NodeJS.ErrnoException).code;
+      const msg = (err as Error).message ?? '';
+      if (code === 'MODULE_NOT_FOUND' || msg.includes('Cannot find module')) {
+        // Not running inside the Electron main process — ipcMain bridge skipped.
+        return;
+      }
+      throw err;
     }
   }
 

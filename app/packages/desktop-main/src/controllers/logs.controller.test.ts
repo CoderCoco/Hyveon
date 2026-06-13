@@ -16,11 +16,17 @@ import type { LogsService } from '../services/LogsService.js';
  * made by `onModuleInit()`. Without it, calling `onModuleInit` in a test
  * environment (where the real Electron `ipcMain` is absent) would throw.
  */
-const { mockIpcMainHandle, mockIpcMainOnce, mockIpcMainRemoveAllListeners } = vi.hoisted(() => {
+const {
+  mockIpcMainHandle,
+  mockIpcMainOnce,
+  mockIpcMainRemoveAllListeners,
+  mockIpcMainRemoveHandler,
+} = vi.hoisted(() => {
   const mockIpcMainHandle = vi.fn();
   const mockIpcMainOnce = vi.fn();
   const mockIpcMainRemoveAllListeners = vi.fn();
-  return { mockIpcMainHandle, mockIpcMainOnce, mockIpcMainRemoveAllListeners };
+  const mockIpcMainRemoveHandler = vi.fn();
+  return { mockIpcMainHandle, mockIpcMainOnce, mockIpcMainRemoveAllListeners, mockIpcMainRemoveHandler };
 });
 
 vi.mock('electron', () => ({
@@ -28,6 +34,7 @@ vi.mock('electron', () => ({
     handle: mockIpcMainHandle,
     once: mockIpcMainOnce,
     removeAllListeners: mockIpcMainRemoveAllListeners,
+    removeHandler: mockIpcMainRemoveHandler,
   },
 }));
 
@@ -112,6 +119,17 @@ describe('LogsController', () => {
       // destructured in the preload.
       await new LogsController(makeLogs()).onModuleInit();
       expect(mockIpcMainHandle).toHaveBeenCalledWith('logs.stream', expect.any(Function));
+    });
+
+    it('should remove any existing "logs.stream" handler before registering so hot-reload re-bootstrap does not throw', async () => {
+      // A second bootstrap (hot-reload / dev restart) would otherwise hit
+      // "Attempted to register a second handler for 'logs.stream'". Clearing the
+      // handler first keeps re-registration idempotent.
+      await new LogsController(makeLogs()).onModuleInit();
+      expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith('logs.stream');
+      expect(mockIpcMainRemoveHandler.mock.invocationCallOrder[0]).toBeLessThan(
+        mockIpcMainHandle.mock.invocationCallOrder[0],
+      );
     });
   });
 

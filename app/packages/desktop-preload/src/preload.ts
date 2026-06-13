@@ -8,9 +8,9 @@
  *
  * Channel naming convention: `<namespace>.<action>`
  *
- * SSE / streaming methods (e.g. `logs.stream`) are intentionally absent —
- * `ipcRenderer.invoke` is request/response only; wire streaming separately
- * via `ipcRenderer.on` in a dedicated channel if needed.
+ * Log streaming uses an invoke+event pattern: `logs.stream` invokes main to
+ * start a stream and returns a `streamId`; `logs.onChunk` / `logs.onEnd`
+ * subscribe to per-stream IPC events; `logs.cancel` sends a cancel signal.
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
