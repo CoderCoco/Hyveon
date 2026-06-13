@@ -13,16 +13,13 @@ vi.mock('../api.service.js', () => ({
 }));
 
 // Stub window.gsd.logs so the component can open IPC streams without a real
-// Electron main process. `stream` resolves immediately; `onChunk`/`onEnd`
-// return no-op cleanup functions so the component can register and deregister
-// listeners without throwing.
+// Electron main process. `stream(game, signal)` returns an async iterable; the
+// default stub (set in beforeEach) yields nothing so tests drive off the
+// seeded `get` snapshot. Individual tests override `stream` to emit chunks.
 const gsdMock = {
   logs: {
     get: vi.fn(),
     stream: vi.fn(),
-    onChunk: vi.fn(),
-    onEnd: vi.fn(),
-    cancel: vi.fn(),
   },
 };
 vi.stubGlobal('gsd', gsdMock);
@@ -52,9 +49,9 @@ describe('LogsPage', () => {
   beforeEach(() => {
     apiMock.games.mockResolvedValue({ games: ['minecraft'] });
     gsdMock.logs.get.mockResolvedValue({ game: 'minecraft', lines: SAMPLE_LINES });
-    gsdMock.logs.stream.mockResolvedValue({ streamId: 'test-stream-id' });
-    gsdMock.logs.onChunk.mockReturnValue(() => {});
-    gsdMock.logs.onEnd.mockReturnValue(() => {});
+    // Default stream emits nothing and ends immediately — tests assert on the
+    // seeded snapshot. Override per-test to drive live chunks through `for await`.
+    gsdMock.logs.stream.mockImplementation(async function* () {});
   });
 
   it('should render the Server Logs heading and the LIVE badge', async () => {
@@ -143,6 +140,27 @@ describe('LogsPage', () => {
     await waitFor(() => {
       expect(apiMock.games).toHaveBeenCalled();
       expect(gsdMock.logs.get).toHaveBeenCalledWith('minecraft');
+    });
+  });
+
+  it('should append live chunks yielded by the stream iterator after the seeded snapshot', async () => {
+    gsdMock.logs.stream.mockImplementation(async function* () {
+      yield '2026-05-03T12:00:05Z INFO Live chunk one';
+      yield '2026-05-03T12:00:06Z ERROR Live chunk two';
+    });
+    renderWithProviders(<LogsPage />);
+
+    // Seeded snapshot first, then the two chunks consumed via `for await`.
+    await screen.findByText(/Server started on port 25565/);
+    expect(await screen.findByText(/Live chunk one/)).toBeInTheDocument();
+    expect(await screen.findByText(/Live chunk two/)).toBeInTheDocument();
+  });
+
+  it('should pass the selected game and an AbortSignal to stream', async () => {
+    renderWithProviders(<LogsPage />);
+
+    await waitFor(() => {
+      expect(gsdMock.logs.stream).toHaveBeenCalledWith('minecraft', expect.any(AbortSignal));
     });
   });
 });

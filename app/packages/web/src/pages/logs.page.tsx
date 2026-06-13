@@ -97,8 +97,9 @@ function HighlightedLine({ text, query }: { text: string; query: string }) {
 
 /**
  * Logs route (`/logs`) — full-page tailing of CloudWatch logs for a single
- * game. Fetches an initial snapshot via `window.gsd.logs.get`, then opens a
- * live IPC stream via `window.gsd.logs.stream`. Surfaces the stream through:
+ * game. Fetches an initial snapshot via `window.gsd.logs.get`, then consumes
+ * a live IPC stream via `for await (… of window.gsd.logs.stream(game, signal))`,
+ * cancelling through an `AbortController`. Surfaces the stream through:
  *
  *   - A LIVE/PAUSED status badge (pulsing cyan / muted slate).
  *   - A searchable game selector that resets the buffer on switch.
@@ -127,9 +128,8 @@ export function LogsPage() {
   const [bufferedCount, setBufferedCount] = useState(0);
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const streamIdRef = useRef<string | null>(null);
-  /** Cleanup fns registered by the current startStream call (listener removes + cancel-on-pending). */
-  const cleanupRef = useRef<Array<() => void>>([]);
+  /** Aborts the in-flight `for await` log stream; aborting also tells the main process to cancel. */
+  const abortRef = useRef<AbortController | null>(null);
   const pausedRef = useRef(false);
   const bufferRef = useRef<LogLine[]>([]);
 
@@ -147,16 +147,8 @@ export function LogsPage() {
   }, []);
 
   const stopStream = useCallback(() => {
-    if (streamIdRef.current) {
-      if (!window.gsd) {
-        streamIdRef.current = null;
-      } else {
-        window.gsd.logs.cancel(streamIdRef.current);
-        streamIdRef.current = null;
-      }
-    }
-    cleanupRef.current.forEach((fn) => fn());
-    cleanupRef.current = [];
+    abortRef.current?.abort();
+    abortRef.current = null;
   }, []);
 
   const startStream = useCallback(
@@ -166,43 +158,22 @@ export function LogsPage() {
         return;
       }
       stopStream();
-      // Closure-scoped flag so a stopStream call that arrives while the IPC
-      // invoke is in-flight can abort the stream before listeners are wired.
-      let cancelled = false;
-      cleanupRef.current = [() => { cancelled = true; }];
+      const ac = new AbortController();
+      abortRef.current = ac;
 
-      void window.gsd.logs
-        .stream(game)
-        .then(({ streamId }) => {
-          if (cancelled) {
-            window.gsd?.logs.cancel(streamId);
-            return;
+      void (async () => {
+        try {
+          for await (const chunk of window.gsd!.logs.stream(game, ac.signal)) {
+            if (ac.signal.aborted) break;
+            appendLine(chunk);
           }
-          streamIdRef.current = streamId;
-          const removeChunk = window.gsd!.logs.onChunk(streamId, appendLine);
-          const removeEnd = window.gsd!.logs.onEnd(streamId, (err) => {
-            if (err) setError(`Stream ended with error: ${err}`);
-            streamIdRef.current = null;
-            cleanupRef.current.forEach(fn => fn());
-            cleanupRef.current = [];
-          });
-          // Guard against a stopStream call (or onEnd firing) that ran between
-          // the `if (cancelled)` check above and here: if cancelled is now true,
-          // cleanupRef is already empty so removeChunk would be orphaned.
-          // Remove both listeners directly and cancel the stream instead.
-          if (cancelled) {
-            removeChunk();
-            removeEnd();
-            window.gsd?.logs.cancel(streamId);
-            return;
-          }
-          cleanupRef.current = [removeChunk, removeEnd];
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
+        } catch (err: unknown) {
+          // An abort tears the iterator down without a real failure — ignore it.
+          if (ac.signal.aborted) return;
           const message = err instanceof Error ? err.message : String(err);
-          setError(`Could not start log stream: ${message}`);
-        });
+          setError(`Stream ended with error: ${message}`);
+        }
+      })();
     },
     [stopStream, appendLine],
   );

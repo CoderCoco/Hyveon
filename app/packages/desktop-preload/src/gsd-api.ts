@@ -199,22 +199,16 @@ export interface GsdLogsApi {
   /** Returns recent log lines for a game's ECS task. */
   get: (game: string, limit?: number) => Promise<GameLogs>;
   /**
-   * Opens a live log stream for `game` via IPC and returns the opaque
-   * `streamId` used to subscribe to chunk/end events and to cancel the stream.
+   * Opens a live log stream for `game` as an async iterable of log chunks.
+   * Consume it with `for await (const chunk of stream(game, signal))`.
+   *
+   * Pass an `AbortSignal` to cancel the stream: aborting (or breaking out of
+   * the `for await` loop) tells the main process to stop tailing CloudWatch.
+   * The iterator completes when the stream ends and throws if it terminated
+   * due to an error. Internally this wraps the per-stream chunk/end/cancel IPC
+   * channels in an async generator.
    */
-  stream: (game: string) => Promise<{ streamId: string }>;
-  /**
-   * Subscribe to incoming log chunks for a stream. Returns a cleanup function
-   * that removes the listener when called.
-   */
-  onChunk: (streamId: string, cb: (chunk: string) => void) => () => void;
-  /**
-   * Subscribe to the end-of-stream notification. Returns a cleanup function.
-   * `err` is set when the stream terminated due to an error.
-   */
-  onEnd: (streamId: string, cb: (err?: string) => void) => () => void;
-  /** Send a cancellation request for an active stream. */
-  cancel: (streamId: string) => void;
+  stream: (game: string, signal?: AbortSignal) => AsyncIterable<LogChunk>;
 }
 
 /** EFS file-manager task endpoints: status, start, and stop per game. */
