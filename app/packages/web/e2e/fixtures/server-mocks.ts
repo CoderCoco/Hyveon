@@ -1,6 +1,7 @@
 import { test as base } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
 import { DashboardPage } from '../pages/DashboardPage.js';
+import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 const SERVER_BASE = 'http://localhost:3002';
 const AUTH_HEADERS = { Authorization: 'Bearer test-token' };
@@ -73,6 +74,10 @@ export const test = base.extend<IntegrationFixtures>({
     await page.addInitScript(() => {
       localStorage.setItem('apiToken', 'test-token');
     });
+    // The web client talks to `window.gsd.*`; install a browser-side bridge
+    // that forwards each IPC call to the matching `/api/*` route, which the
+    // integration preview proxies to the real Nest server on :3002.
+    await page.addInitScript(installGsdHttpBridge);
     await use(page);
   },
 
