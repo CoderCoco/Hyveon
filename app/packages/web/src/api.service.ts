@@ -1,4 +1,7 @@
-// Typed API wrappers — all fetch calls go through here
+// Typed API wrappers — every call is delegated to the Electron IPC bridge
+// (`window.gsd.*`) exposed by the preload script. There are no `fetch` calls and
+// no bearer-token plumbing left in this module: the renderer talks to the main
+// process over IPC, not HTTP.
 
 /** Live status for a single game, as returned by `GET /api/status` and `/api/status/:game`. */
 export interface GameStatus {
@@ -128,149 +131,102 @@ export function setStoredApiToken(token: string): void {
   }
 }
 
-let unauthorizedHandler: (() => void) | null = null;
-/** Register the function called when an `/api/*` request returns 401. The App component sets this on mount. */
-export function setUnauthorizedHandler(h: (() => void) | null): void {
-  unauthorizedHandler = h;
-}
-
-interface PendingRetry {
-  url: string;
-  init: RequestInit | undefined;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-}
-
 /**
- * Requests parked when the server returned 401. They wait for the operator to
- * supply a valid token via `ApiTokenModal`, at which point `retryPendingAfterAuth`
- * re-issues each one with the new bearer.
- */
-const pendingRetries: PendingRetry[] = [];
-
-/** Internal sentinel — `request` recognises it and parks the caller's promise; `retryPendingAfterAuth` recognises it on a retry to mark the new token as still bad. */
-const UNAUTHORIZED = Symbol('api.unauthorized');
-
-async function fetchWithAuth<T>(url: string, init?: RequestInit): Promise<T> {
-  const token = getStoredApiToken();
-  const headers = new Headers(init?.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(url, { ...init, headers });
-  if (res.status === 401) {
-    setStoredApiToken('');
-    throw UNAUTHORIZED;
-  }
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  try {
-    return await fetchWithAuth<T>(url, init);
-  } catch (err) {
-    if (err !== UNAUTHORIZED) throw err;
-    return new Promise<T>((resolve, reject) => {
-      pendingRetries.push({
-        url,
-        init,
-        resolve: resolve as (value: unknown) => void,
-        reject,
-      });
-      unauthorizedHandler?.();
-    });
-  }
-}
-
-/**
- * Re-issues every request that was parked on a 401 using the now-current
- * stored token. Called by `ApiTokenModal` after the operator supplies a token.
+ * Retained for source compatibility while the renderer finishes migrating off
+ * the old HTTP/bearer transport. The 401-retry queue these drove only made
+ * sense for `fetch`; IPC has no per-request 401, so both are now inert no-ops.
+ * They stay exported because `app.component.tsx` and `api-token-modal.component.tsx`
+ * still import them — those call sites are removed in #162.
  *
- * @returns `true` if every retry succeeded (the modal can dismiss);
- *          `false` if any retry returned 401 again (the modal stays open and
- *          shows an inline error). Requests that 401 again stay queued so the
- *          next save attempt retries them.
+ * @param _handler - Ignored. Kept so existing callers still type-check.
  */
-export async function retryPendingAfterAuth(): Promise<boolean> {
-  const queued = pendingRetries.splice(0);
-  let allOk = true;
-  for (const entry of queued) {
-    try {
-      const value = await fetchWithAuth(entry.url, entry.init);
-      entry.resolve(value);
-    } catch (err) {
-      if (err === UNAUTHORIZED) {
-        allOk = false;
-        pendingRetries.push(entry);
-      } else {
-        entry.reject(err);
-      }
-    }
-  }
-  return allOk;
+export function setUnauthorizedHandler(_handler: (() => void) | null): void {
+  // no-op: there is no HTTP 401 to intercept over the IPC bridge.
 }
+
+/**
+ * Inert counterpart to {@link setUnauthorizedHandler}: nothing is ever queued
+ * now, so this resolves to `true` (every — i.e. zero — parked request
+ * "succeeded") and any caller proceeds as before.
+ *
+ * @returns A promise that always resolves to `true`.
+ */
+export function retryPendingAfterAuth(): Promise<boolean> {
+  return Promise.resolve(true);
+}
+
+/**
+ * Returns the `window.gsd` IPC bridge, throwing a descriptive error if it is
+ * absent. The bridge is injected by the Electron preload script, so a missing
+ * one means the renderer is running outside Electron (e.g. a plain browser).
+ */
+function gsd() {
+  const bridge = window.gsd;
+  if (!bridge) {
+    throw new Error(
+      'window.gsd IPC bridge is unavailable — the renderer must run inside the Electron preload context.',
+    );
+  }
+  return bridge;
+}
+
+// The Discord `actions` field is typed as the narrower `DiscordAction[]` in this
+// module but as the wider `string[]` in the preload bridge. The runtime values
+// are identical, so the single-step narrowings below (never `as unknown as`) are
+// safe — `DiscordAction[]` is assignable to `string[]`, which makes the cast legal.
+//
+// Every method is `async` so the missing-bridge guard in `gsd()` surfaces as a
+// rejected promise rather than a synchronous throw: callers that chain
+// `.then().catch()` (rather than `await`) still route the failure to `.catch`.
 
 export const api = {
-  env: () => request<EnvInfo>('/api/env'),
-  games: () => request<{ games: string[] }>('/api/games'),
-  status: () => request<GameStatus[]>('/api/status'),
-  statusGame: (game: string) => request<GameStatus>(`/api/status/${game}`),
-  start: (game: string) => request<ActionResult>(`/api/start/${game}`, { method: 'POST' }),
-  stop: (game: string) => request<ActionResult>(`/api/stop/${game}`, { method: 'POST' }),
-  config: () => request<WatchdogConfig>('/api/config'),
-  saveConfig: (cfg: WatchdogConfig) =>
-    request<{ success: boolean; config: WatchdogConfig }>('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg),
-    }),
-  costsEstimate: () => request<CostEstimates>('/api/costs/estimate'),
-  costsActual: (days = 7) => request<ActualCosts>(`/api/costs/actual?days=${days}`),
-  filesMgrStatus: (game: string) => request<FileMgrStatus>(`/api/files/${game}`),
-  filesMgrStart: (game: string) => request<ActionResult>(`/api/files/${game}/start`, { method: 'POST' }),
-  filesMgrStop: (game: string) => request<ActionResult>(`/api/files/${game}/stop`, { method: 'POST' }),
+  env: async (): Promise<EnvInfo> => gsd().env.get(),
+  games: async (): Promise<{ games: string[] }> => gsd().games.list(),
+  status: async (): Promise<GameStatus[]> => gsd().games.status(),
+  statusGame: async (game: string): Promise<GameStatus> => gsd().games.getStatus(game),
+  start: async (game: string): Promise<ActionResult> => gsd().games.start(game),
+  stop: async (game: string): Promise<ActionResult> => gsd().games.stop(game),
+  config: async (): Promise<WatchdogConfig> => gsd().config.get(),
+  saveConfig: async (cfg: WatchdogConfig): Promise<{ success: boolean; config: WatchdogConfig }> =>
+    gsd().config.update(cfg),
+  costsEstimate: async (): Promise<CostEstimates> => gsd().costs.estimate(),
+  costsActual: async (days = 7): Promise<ActualCosts> => gsd().costs.actual(days),
+  filesMgrStatus: async (game: string): Promise<FileMgrStatus> => gsd().files.list(game),
+  filesMgrStart: async (game: string): Promise<ActionResult> => gsd().files.start(game),
+  filesMgrStop: async (game: string): Promise<ActionResult> => gsd().files.stop(game),
 
-  discordConfig: () => request<DiscordConfigRedacted>('/api/discord/config'),
-  discordSaveCredentials: (body: { botToken?: string; clientId?: string; publicKey?: string }) =>
-    request<{ success: boolean; config: DiscordConfigRedacted }>('/api/discord/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  discordAddGuild: (guildId: string) =>
-    request<{ success: boolean; guilds: string[] }>('/api/discord/guilds', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guildId }),
-    }),
-  discordRemoveGuild: (guildId: string) =>
-    request<{ success: boolean; guilds: string[] }>(`/api/discord/guilds/${guildId}`, {
-      method: 'DELETE',
-    }),
-  discordRegisterCommands: (guildId: string) =>
-    request<DiscordMutationResult>(`/api/discord/guilds/${guildId}/register-commands`, {
-      method: 'POST',
-    }),
-  discordSaveAdmins: (admins: DiscordAdmins) =>
-    request<{ success: boolean; admins: DiscordAdmins }>('/api/discord/admins', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(admins),
-    }),
-  discordSavePermission: (game: string, perm: DiscordGamePermission) =>
-    request<{ success: boolean; permissions: Record<string, DiscordGamePermission> }>(
-      `/api/discord/permissions/${game}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(perm),
-      },
-    ),
-  discordDeletePermission: (game: string) =>
-    request<{ success: boolean; permissions: Record<string, DiscordGamePermission> }>(
-      `/api/discord/permissions/${game}`,
-      { method: 'DELETE' },
-    ),
+  discordConfig: async (): Promise<DiscordConfigRedacted> =>
+    gsd().discord.getConfig() as Promise<DiscordConfigRedacted>,
+  discordSaveCredentials: async (body: {
+    botToken?: string;
+    clientId?: string;
+    publicKey?: string;
+  }): Promise<{ success: boolean; config: DiscordConfigRedacted }> =>
+    gsd().discord.putConfig(body) as Promise<{ success: boolean; config: DiscordConfigRedacted }>,
+  discordAddGuild: async (guildId: string): Promise<{ success: boolean; guilds: string[] }> =>
+    gsd().discord.addGuild(guildId),
+  discordRemoveGuild: async (guildId: string): Promise<{ success: boolean; guilds: string[] }> =>
+    gsd().discord.removeGuild(guildId),
+  discordRegisterCommands: async (guildId: string): Promise<DiscordMutationResult> =>
+    gsd().discord.registerCommands(guildId),
+  discordSaveAdmins: async (admins: DiscordAdmins): Promise<{ success: boolean; admins: DiscordAdmins }> =>
+    gsd().discord.putAdmins(admins),
+  discordSavePermission: async (
+    game: string,
+    perm: DiscordGamePermission,
+  ): Promise<{ success: boolean; permissions: Record<string, DiscordGamePermission> }> =>
+    gsd().discord.putPermission(game, perm) as Promise<{
+      success: boolean;
+      permissions: Record<string, DiscordGamePermission>;
+    }>,
+  discordDeletePermission: async (
+    game: string,
+  ): Promise<{ success: boolean; permissions: Record<string, DiscordGamePermission> }> =>
+    gsd().discord.deletePermission(game) as Promise<{
+      success: boolean;
+      permissions: Record<string, DiscordGamePermission>;
+    }>,
 
-  diagnosticsTail: () => request<{ lines: string[] }>('/api/diagnostics/tail'),
-  diagnosticsLogPath: () => request<{ path: string }>('/api/diagnostics/path'),
+  diagnosticsTail: async (): Promise<{ lines: string[] }> => gsd().diagnostics.tail(),
+  diagnosticsLogPath: async (): Promise<{ path: string }> => gsd().diagnostics.path(),
 };
