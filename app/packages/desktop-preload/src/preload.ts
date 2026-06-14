@@ -124,7 +124,7 @@ const api: GsdApi = {
     putConfig: (body: { botToken?: string; clientId?: string; publicKey?: string }) =>
       ipcRenderer.invoke('discord.putConfig', body),
     listGuilds: () => ipcRenderer.invoke('discord.listGuilds'),
-    addGuild: (guildId: string) => ipcRenderer.invoke('discord.addGuild', guildId),
+    addGuild: (guildId: string) => ipcRenderer.invoke('discord.addGuild', { guildId }),
     removeGuild: (guildId: string) => ipcRenderer.invoke('discord.removeGuild', guildId),
     registerCommands: (guildId: string) => ipcRenderer.invoke('discord.registerCommands', guildId),
     getAdmins: () => ipcRenderer.invoke('discord.getAdmins'),
@@ -134,7 +134,7 @@ const api: GsdApi = {
     putPermission: (
       game: string,
       body: { userIds?: string[]; roleIds?: string[]; actions?: string[] },
-    ) => ipcRenderer.invoke('discord.putPermission', game, body),
+    ) => ipcRenderer.invoke('discord.putPermission', { game, body }),
     deletePermission: (game: string) => ipcRenderer.invoke('discord.deletePermission', game),
   },
 

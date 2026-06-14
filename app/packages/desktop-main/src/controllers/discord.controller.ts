@@ -1,13 +1,5 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Post,
-  Put,
-} from '@nestjs/common';
+import { BadRequestException, Controller } from '@nestjs/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
 import {
   DiscordConfigService,
   type DiscordAction,
@@ -33,12 +25,15 @@ function requireStringArray(field: string, value: unknown): string[] {
 }
 
 /**
- * Operator-facing endpoints for the serverless Discord bot: credentials
+ * IPC-only controller for the serverless Discord bot: credentials
  * (Secrets Manager), per-guild allowlist, admins, per-game permissions, and
  * command registration. All state lives in DynamoDB + Secrets Manager; this
  * controller never talks to a gateway connection (there isn't one).
+ *
+ * Every handler is bound to an IPC channel via `@MessagePattern` / `@Payload`
+ * — no HTTP routes are registered here.
  */
-@Controller('discord')
+@Controller()
 export class DiscordController {
   constructor(
     private readonly discord: DiscordConfigService,
@@ -52,7 +47,7 @@ export class DiscordController {
    * from tfstate — the value the operator copies into Discord's developer
    * portal. The raw bot token and public key are never sent to the client.
    */
-  @Get('config')
+  @MessagePattern('discord.getConfig')
   async getConfig() {
     const redacted = await this.discord.getRedacted();
     return { ...redacted, interactionsEndpointUrl: this.config.getTfOutputs()?.interactions_invoke_url ?? null };
@@ -64,9 +59,9 @@ export class DiscordController {
    * `secretsmanager:PutSecretValue` on the IAM principal running the app.
    * Any field omitted from the body is left untouched.
    */
-  @Put('config')
+  @MessagePattern('discord.putConfig')
   async putConfig(
-    @Body() body: { botToken?: unknown; clientId?: unknown; publicKey?: unknown } = {},
+    @Payload() body: { botToken?: unknown; clientId?: unknown; publicKey?: unknown } = {},
   ) {
     if (body.botToken !== undefined && typeof body.botToken !== 'string') {
       throw new BadRequestException({ success: false, error: 'botToken must be a string' });
@@ -94,15 +89,15 @@ export class DiscordController {
    * Returns the dynamic allowlisted guild IDs and the Terraform-managed base guild IDs.
    * The UI should render base guilds as locked (non-removable).
    */
-  @Get('guilds')
+  @MessagePattern('discord.listGuilds')
   async listGuilds() {
     const [cfg, base] = await Promise.all([this.discord.getConfig(), this.discord.getBaseConfig()]);
     return { guilds: cfg.allowedGuilds, baseGuilds: base.allowedGuilds };
   }
 
   /** Adds a guild ID to the dynamic allowlist persisted in DynamoDB. Takes effect on the next interaction (Lambda re-reads per invocation). */
-  @Post('guilds')
-  async addGuild(@Body() body: { guildId?: unknown } = {}) {
+  @MessagePattern('discord.addGuild')
+  async addGuild(@Payload() body: { guildId?: unknown } = {}) {
     if (typeof body.guildId !== 'string') {
       throw new BadRequestException({ success: false, error: 'guildId required' });
     }
@@ -118,8 +113,8 @@ export class DiscordController {
    * in the Terraform base config — those entries require a tfvars edit + re-apply.
    * Already-registered slash commands remain in Discord until manually cleaned up.
    */
-  @Delete('guilds/:guildId')
-  async removeGuild(@Param('guildId') guildIdRaw: string) {
+  @MessagePattern('discord.removeGuild')
+  async removeGuild(@Payload() guildIdRaw: string) {
     const guildId = (guildIdRaw ?? '').trim();
     if (!guildId) throw new BadRequestException({ success: false, error: 'guildId required' });
     const result = await this.discord.removeAllowedGuild(guildId);
@@ -136,8 +131,8 @@ export class DiscordController {
    * leak to every server the bot is invited to. Operators run this after
    * bumping `COMMAND_DESCRIPTORS` and redeploying the Lambdas.
    */
-  @Post('guilds/:guildId/register-commands')
-  async registerCommands(@Param('guildId') guildIdRaw: string) {
+  @MessagePattern('discord.registerCommands')
+  async registerCommands(@Payload() guildIdRaw: string) {
     const guildId = (guildIdRaw ?? '').trim();
     if (!guildId) throw new BadRequestException({ success: false, error: 'guildId required' });
     return this.registrar.registerForGuild(guildId);
@@ -147,7 +142,7 @@ export class DiscordController {
    * Returns the dynamic admin user/role lists and the Terraform-managed base admin lists.
    * The UI should render base admins as locked (non-removable).
    */
-  @Get('admins')
+  @MessagePattern('discord.getAdmins')
   async getAdmins() {
     const [cfg, base] = await Promise.all([this.discord.getConfig(), this.discord.getBaseConfig()]);
     return { ...cfg.admins, baseAdmins: base.admins };
@@ -157,8 +152,8 @@ export class DiscordController {
    * Replaces the dynamic admin user/role lists atomically. Omitted fields are treated as empty arrays
    * (not "leave alone"). Base admins set via Terraform are unaffected by this endpoint.
    */
-  @Put('admins')
-  async putAdmins(@Body() body: { userIds?: unknown; roleIds?: unknown } = {}) {
+  @MessagePattern('discord.putAdmins')
+  async putAdmins(@Payload() body: { userIds?: unknown; roleIds?: unknown } = {}) {
     const userIds = requireStringArray('userIds', body.userIds);
     const roleIds = requireStringArray('roleIds', body.roleIds);
     await this.discord.setAdmins({ userIds, roleIds });
@@ -167,7 +162,7 @@ export class DiscordController {
   }
 
   /** Returns the per-game permission map (user/role IDs allowed to run specific actions on each game). */
-  @Get('permissions')
+  @MessagePattern('discord.getPermissions')
   async getPermissions() {
     return (await this.discord.getConfig()).gamePermissions;
   }
@@ -176,12 +171,17 @@ export class DiscordController {
    * Sets the allowed users/roles/actions for a single game. `game` must match
    * a key in the Terraform `game_servers` map; unknown keys return 400. The
    * `actions` array is the permission bucket `canRun()` checks against.
+   *
+   * The IPC payload is a single object `{ game, body }` — `nestjs-electron-ipc-transport`
+   * only delivers the first `ipcRenderer.invoke` argument to `@Payload`, so
+   * the two parameters are collapsed here and the preload sends
+   * `ipcRenderer.invoke('discord.putPermission', { game, body })`.
    */
-  @Put('permissions/:game')
+  @MessagePattern('discord.putPermission')
   async putPermission(
-    @Param('game') game: string,
-    @Body() body: { userIds?: unknown; roleIds?: unknown; actions?: unknown } = {},
+    @Payload() payload: { game: string; body: { userIds?: unknown; roleIds?: unknown; actions?: unknown } },
   ) {
+    const { game, body = {} } = payload;
     const userIds = requireStringArray('userIds', body.userIds);
     const roleIds = requireStringArray('roleIds', body.roleIds);
     const actions = requireStringArray('actions', body.actions);
@@ -197,8 +197,8 @@ export class DiscordController {
   }
 
   /** Removes the permission entry for a game. Returns 400 if `game` isn't a known key from the Terraform `game_servers` map. */
-  @Delete('permissions/:game')
-  async deletePermission(@Param('game') game: string) {
+  @MessagePattern('discord.deletePermission')
+  async deletePermission(@Payload() game: string) {
     const deleted = await this.discord.deleteGamePermission(game);
     if (!deleted) {
       throw new BadRequestException({ success: false, error: `invalid game key: ${game}` });
