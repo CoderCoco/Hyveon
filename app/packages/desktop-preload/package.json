@@ -3,8 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "exports": {
-    ".": "./dist/index.js",
-    "./preload": "./dist/preload.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./preload": {
+      "types": "./dist/preload.d.ts",
+      "default": "./dist/preload.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",

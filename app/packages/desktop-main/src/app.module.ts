@@ -19,6 +19,7 @@ import { DiscordHttpController } from './controllers/discord-http.controller.js'
 import { EnvController } from './controllers/env.controller.js';
 import { EnvHttpController } from './controllers/env-http.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
+import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
 import { ApiTokenGuard } from './guards/api-token.guard.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
@@ -49,6 +50,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     EnvController,
     EnvHttpController,
     DiagnosticsController,
+    DiagnosticsHttpController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ApiTokenGuard },

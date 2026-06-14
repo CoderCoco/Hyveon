@@ -17,6 +17,7 @@ import {
   makeActualCosts,
 } from './game-data.js';
 import { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 export type {
   GameStatus,
@@ -183,17 +184,27 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
     route.fulfill({ json: { success: true, permissions: discord.gamePermissions } }),
   );
 
-  // Logs page — inject a window.gsd.logs stub so LogsPage can call
-  // window.gsd.logs.get / window.gsd.logs.stream without a real Electron
-  // main process. The stub must be registered via addInitScript (runs before
-  // any page JS) and receives the seeded logLines map as a serialisable arg.
+  // The web client now talks exclusively to `window.gsd.*`, so install a
+  // browser-side bridge that forwards each IPC call to the matching `/api/*`
+  // endpoint the route stubs above already answer. Registered before page JS
+  // via addInitScript so `window.gsd` exists when app code first runs.
+  await page.addInitScript(installGsdHttpBridge);
+
+  // Logs page — override `window.gsd.logs` with a data-backed stub so LogsPage
+  // can call `window.gsd.logs.get` / `window.gsd.logs.stream` without a real
+  // Electron main process or an HTTP logs route (logs are IPC-only). This runs
+  // after the bridge init script and *merges* over it, preserving every other
+  // namespace the bridge installed. The seeded logLines map is passed as a
+  // serialisable arg.
   //
   // The stream stub is an async generator that yields nothing and returns
   // immediately, so the component's `for await` loop completes without emitting
   // live chunks — specs drive off the seeded snapshot only.
   await page.addInitScript(
     ({ lines }: { lines: Record<string, string[]> }) => {
+      const existing = (window as Record<string, unknown>)['gsd'] as Record<string, unknown> | undefined;
       (window as Record<string, unknown>)['gsd'] = {
+        ...(existing ?? {}),
         logs: {
           get: (game: string) =>
             Promise.resolve({ game, lines: lines[game] ?? [] }),
