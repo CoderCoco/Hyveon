@@ -190,7 +190,7 @@ describe('DiscordController', () => {
       const result = await ctrl(discord).putConfig({});
       expect(discord.setCredentials).toHaveBeenCalledWith({});
       expect(result.success).toBe(true);
-      expect(result.config).toBeDefined();
+      expect(result.config).not.toBeNull();
       expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
       expect(result.config).not.toHaveProperty('botToken');
       expect(result.config).not.toHaveProperty('publicKey');
