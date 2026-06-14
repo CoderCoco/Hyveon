@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
-import { DiscordController } from './discord.controller.js';
+import { DiscordHttpController } from './discord-http.controller.js';
 import type { DiscordConfigService, DiscordAction } from '../services/DiscordConfigService.js';
 import type { DiscordCommandRegistrar } from '../services/DiscordCommandRegistrar.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
@@ -75,10 +75,10 @@ function ctrl(
   registrar: DiscordCommandRegistrar = makeRegistrar(),
   config: ConfigService = makeConfig(),
 ) {
-  return new DiscordController(discord, registrar, config);
+  return new DiscordHttpController(discord, registrar, config);
 }
 
-describe('DiscordController', () => {
+describe('DiscordHttpController', () => {
   describe('getConfig', () => {
     it('should return the redacted config merged with the interactions endpoint URL', async () => {
       const result = await ctrl().getConfig();
@@ -130,6 +130,12 @@ describe('DiscordController', () => {
       expect(result.success).toBe(true);
       expect(result.config).toBeDefined();
       expect(result.config.interactionsEndpointUrl).toBeDefined();
+    });
+
+    it('should never echo the submitted secrets back in the response', async () => {
+      const result = await ctrl().putConfig({ botToken: 'tok', publicKey: 'pkey' });
+      expect(result.config).not.toHaveProperty('botToken');
+      expect(result.config).not.toHaveProperty('publicKey');
     });
   });
 
@@ -244,21 +250,22 @@ describe('DiscordController', () => {
   describe('putPermission', () => {
     it('should throw BadRequestException when actions is not an array', async () => {
       await expect(
-        ctrl().putPermission({ game: 'minecraft', body: { actions: 'start' as unknown as string[] } }),
+        ctrl().putPermission('minecraft', { actions: 'start' as unknown as string[] }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('should throw BadRequestException when setGamePermission returns false (unknown game)', async () => {
       const discord = makeDiscord();
       vi.mocked(discord.setGamePermission).mockResolvedValue(false);
-      await expect(ctrl(discord).putPermission({ game: 'unknown-game', body: {} })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(ctrl(discord).putPermission('unknown-game', {})).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('should call setGamePermission with parsed user/role/action lists', async () => {
       const discord = makeDiscord();
-      await ctrl(discord).putPermission({
-        game: 'minecraft',
-        body: { userIds: ['U1'], roleIds: ['R1'], actions: ['start', 'stop'] },
+      await ctrl(discord).putPermission('minecraft', {
+        userIds: ['U1'],
+        roleIds: ['R1'],
+        actions: ['start', 'stop'],
       });
       expect(discord.setGamePermission).toHaveBeenCalledWith('minecraft', {
         userIds: ['U1'],
@@ -268,7 +275,7 @@ describe('DiscordController', () => {
     });
 
     it('should return success with the updated permissions map', async () => {
-      const result = await ctrl().putPermission({ game: 'minecraft', body: { userIds: ['U1'], actions: ['start'] } });
+      const result = await ctrl().putPermission('minecraft', { userIds: ['U1'], actions: ['start'] });
       expect(result.success).toBe(true);
       expect(result.permissions).toBeDefined();
     });
