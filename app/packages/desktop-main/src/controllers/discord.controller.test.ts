@@ -319,6 +319,10 @@ describe('DiscordController', () => {
   });
 
   describe('putPermission', () => {
+    it('should throw BadRequestException when game is an empty string', async () => {
+      await expect(ctrl().putPermission({ game: '', body: {} })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('should throw BadRequestException when actions is not an array', async () => {
       await expect(
         ctrl().putPermission({ game: 'minecraft', body: { actions: 'start' as unknown as string[] } }),
@@ -362,6 +366,10 @@ describe('DiscordController', () => {
   });
 
   describe('deletePermission', () => {
+    it('should throw BadRequestException when game is an empty string', async () => {
+      await expect(ctrl().deletePermission('')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('should throw BadRequestException when deleteGamePermission returns false (unknown game)', async () => {
       const discord = makeDiscord();
       vi.mocked(discord.deleteGamePermission).mockResolvedValue(false);

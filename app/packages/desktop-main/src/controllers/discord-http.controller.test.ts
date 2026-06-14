@@ -132,8 +132,8 @@ describe('DiscordHttpController', () => {
     it('should return success with updated config when credentials are valid', async () => {
       const result = await ctrl().putConfig({ botToken: 'tok', clientId: 'cid', publicKey: 'pkey' });
       expect(result.success).toBe(true);
-      expect(result.config).toBeDefined();
-      expect(result.config.interactionsEndpointUrl).toBeDefined();
+      expect(result.config).not.toBeNull();
+      expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
     });
 
     it('should never echo the submitted secrets back in the response', async () => {

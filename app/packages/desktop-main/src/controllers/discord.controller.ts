@@ -183,9 +183,13 @@ export class DiscordController {
     return { success: true, permissions: (await this.discord.getConfig()).gamePermissions };
   }
 
-  /** Removes the permission entry for a game. Returns 400 if `game` isn't a known key from the Terraform `game_servers` map. */
+  /** Removes the permission entry for a game. Returns 400 if `game` is empty or isn't a known key from the Terraform `game_servers` map. */
   @MessagePattern('discord.deletePermission')
-  async deletePermission(@Payload() game: string) {
+  async deletePermission(@Payload() gameRaw: string) {
+    const game = (gameRaw ?? '').trim();
+    if (!game) {
+      throw new BadRequestException({ success: false, error: 'game is required' });
+    }
     const deleted = await this.discord.deleteGamePermission(game);
     if (!deleted) {
       throw new BadRequestException({ success: false, error: `invalid game key: ${game}` });
