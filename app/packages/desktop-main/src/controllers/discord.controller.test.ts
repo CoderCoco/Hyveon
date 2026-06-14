@@ -191,14 +191,16 @@ describe('DiscordController', () => {
       expect(discord.setCredentials).toHaveBeenCalledWith({});
       expect(result.success).toBe(true);
       expect(result.config).toBeDefined();
-      expect(result.config.interactionsEndpointUrl).toBeDefined();
+      expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
+      expect(result.config).not.toHaveProperty('botToken');
+      expect(result.config).not.toHaveProperty('publicKey');
     });
 
     it('should return success with updated config when credentials are valid', async () => {
       const result = await ctrl().putConfig({ botToken: 'tok', clientId: 'cid', publicKey: 'pkey' });
       expect(result.success).toBe(true);
       expect(result.config).toBeDefined();
-      expect(result.config.interactionsEndpointUrl).toBeDefined();
+      expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
     });
 
     it('should never echo the submitted secrets back in the response', async () => {
@@ -339,6 +341,16 @@ describe('DiscordController', () => {
         userIds: ['U1'],
         roleIds: ['R1'],
         actions: ['start', 'stop'],
+      });
+    });
+
+    it('should call setGamePermission with empty arrays when body key is absent', async () => {
+      const discord = makeDiscord();
+      await ctrl(discord).putPermission({ game: 'minecraft' } as { game: string; body: Record<string, unknown> });
+      expect(discord.setGamePermission).toHaveBeenCalledWith('minecraft', {
+        userIds: [],
+        roleIds: [],
+        actions: [],
       });
     });
 
