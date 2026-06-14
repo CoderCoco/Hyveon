@@ -1,19 +1,21 @@
-import { Controller } from '@nestjs/common';
-import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ConfigService } from '../services/ConfigService.js';
 import { CostService } from '../services/CostService.js';
 import { EcsService } from '../services/EcsService.js';
 
 /**
- * Cost endpoints for the Electron main-process host. Every handler is bound to
- * an IPC channel via `@MessagePattern` / `@Payload` — no HTTP routes are
- * registered here. The browser client and the integration-test server reach
- * the same operations over REST through the {@link CostsHttpController} shim,
- * which delegates to the identical {@link CostService} / {@link EcsService}
- * providers.
+ * HTTP shim that exposes the cost operations as plain REST endpoints
+ * (`/api/costs/estimate`, `/api/costs/actual?days=N`). The browser client
+ * (`api.service.ts`) and the integration-test server both consume these routes
+ * over HTTP; the Electron main-process host uses the IPC
+ * {@link CostsController} (`@MessagePattern`) handlers instead.
+ *
+ * Both controllers delegate to the same {@link ConfigService},
+ * {@link CostService}, and {@link EcsService} providers — the heavy lifting
+ * lives in those services, not in the thin orchestration duplicated here.
  */
-@Controller()
-export class CostsController {
+@Controller('costs')
+export class CostsHttpController {
   constructor(
     private readonly config: ConfigService,
     private readonly costs: CostService,
@@ -26,7 +28,7 @@ export class CostsController {
    * from tfstate; falls back to `2048 cpu / 8192 MiB` if the task definition
    * can't be resolved. Returns zeros when tfstate is missing.
    */
-  @MessagePattern('costs.estimate')
+  @Get('estimate')
   async estimate() {
     const outputs = this.config.getTfOutputs();
     if (!outputs) {
@@ -50,12 +52,10 @@ export class CostsController {
   /**
    * Returns actual costs over the trailing `days` window (default 7) via Cost
    * Explorer, grouped by the `Project` cost-allocation tag. Requires the tag
-   * to have been activated in AWS Billing — see CLAUDE.md "Cost Tagging". The
-   * IPC payload supplies `days` as a bare string or number; the
-   * `parseInt(String(...))` coercion tolerates either.
+   * to have been activated in AWS Billing — see CLAUDE.md "Cost Tagging".
    */
-  @MessagePattern('costs.actual')
-  actual(@Payload() daysRaw?: string | number) {
+  @Get('actual')
+  actual(@Query('days') daysRaw?: string) {
     const days = parseInt(String(daysRaw ?? '7'), 10);
     return this.costs.getActualCosts(days);
   }
