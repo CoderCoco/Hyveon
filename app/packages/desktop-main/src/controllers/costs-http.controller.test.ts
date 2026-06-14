@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi } from 'vitest';
-import { CostsController } from './costs.controller.js';
+import { CostsHttpController } from './costs-http.controller.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 import type { CostService } from '../services/CostService.js';
 import type { EcsService } from '../services/EcsService.js';
@@ -43,38 +43,17 @@ function makeEcs(td: { cpu: number; memory: number } | null = { cpu: 4096, memor
   } as unknown as EcsService;
 }
 
-/**
- * The metadata key NestJS stores on each method decorated with
- * `@MessagePattern`. Asserting this value is the only automated guard
- * that prevents a typo in the controller from silently breaking IPC —
- * calling the method directly (as every other test does) would succeed
- * regardless of what string is registered with the transport.
- */
-const PATTERN_METADATA_KEY = 'microservices:pattern';
-
-describe('CostsController', () => {
-  describe('@MessagePattern channel names', () => {
-    it('should register estimate on the "costs.estimate" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, CostsController.prototype.estimate);
-      expect(pattern).toEqual(['costs.estimate']);
-    });
-
-    it('should register actual on the "costs.actual" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, CostsController.prototype.actual);
-      expect(pattern).toEqual(['costs.actual']);
-    });
-  });
-
+describe('CostsHttpController', () => {
   describe('estimate', () => {
     it('should return zeroed estimates when Terraform has not been applied', async () => {
-      const result = await new CostsController(makeConfig(null), makeCosts(), makeEcs()).estimate();
+      const result = await new CostsHttpController(makeConfig(null), makeCosts(), makeEcs()).estimate();
       expect(result).toEqual({ games: {}, totalPerHourIfAllOn: 0 });
     });
 
     it('should call getTaskDefinition and estimateForSpec for each game', async () => {
       const ecs = makeEcs();
       const costs = makeCosts();
-      await new CostsController(makeConfig(), costs, ecs).estimate();
+      await new CostsHttpController(makeConfig(), costs, ecs).estimate();
       expect(ecs.getTaskDefinition).toHaveBeenCalledWith('minecraft');
       expect(costs.estimateForSpec).toHaveBeenCalledWith(4096, 16384);
     });
@@ -82,7 +61,7 @@ describe('CostsController', () => {
     it('should fall back to 2048 cpu / 8192 memory when getTaskDefinition returns null', async () => {
       const ecs = makeEcs(null);
       const costs = makeCosts();
-      await new CostsController(makeConfig(), costs, ecs).estimate();
+      await new CostsHttpController(makeConfig(), costs, ecs).estimate();
       expect(costs.estimateForSpec).toHaveBeenCalledWith(2048, 8192);
     });
 
@@ -90,35 +69,29 @@ describe('CostsController', () => {
       const config = makeConfig({ game_names: ['minecraft', 'palworld'] });
       const costs = makeCosts();
       vi.mocked(costs.estimateForSpec).mockReturnValue({ ...MOCK_ESTIMATE, costPerHour: 0.25 });
-      const result = await new CostsController(config, costs, makeEcs()).estimate();
+      const result = await new CostsHttpController(config, costs, makeEcs()).estimate();
       // 2 games × $0.25/hr = $0.50/hr, rounded to 4 decimal places
       expect(result.totalPerHourIfAllOn).toBe(0.5);
     });
 
     it('should include an estimate entry for each game', async () => {
       const config = makeConfig({ game_names: ['minecraft', 'palworld'] });
-      const result = await new CostsController(config, makeCosts(), makeEcs()).estimate();
+      const result = await new CostsHttpController(config, makeCosts(), makeEcs()).estimate();
       expect(Object.keys(result.games)).toEqual(['minecraft', 'palworld']);
     });
   });
 
   describe('actual', () => {
-    it('should default to 7 days when the payload is absent', () => {
+    it('should default to 7 days when the query param is absent', () => {
       const costs = makeCosts();
-      new CostsController(makeConfig(), costs, makeEcs()).actual(undefined);
+      new CostsHttpController(makeConfig(), costs, makeEcs()).actual(undefined);
       expect(costs.getActualCosts).toHaveBeenCalledWith(7);
     });
 
-    it('should parse a string days payload and forward the integer to CostService', () => {
+    it('should parse the days query string and forward the integer to CostService', () => {
       const costs = makeCosts();
-      new CostsController(makeConfig(), costs, makeEcs()).actual('14');
+      new CostsHttpController(makeConfig(), costs, makeEcs()).actual('14');
       expect(costs.getActualCosts).toHaveBeenCalledWith(14);
-    });
-
-    it('should accept a bare number payload from the IPC transport', () => {
-      const costs = makeCosts();
-      new CostsController(makeConfig(), costs, makeEcs()).actual(30);
-      expect(costs.getActualCosts).toHaveBeenCalledWith(30);
     });
 
     it('should return whatever CostService returns', async () => {
@@ -129,7 +102,7 @@ describe('CostsController', () => {
         currency: 'USD',
         days: 7,
       });
-      const result = await new CostsController(makeConfig(), costs, makeEcs()).actual('7');
+      const result = await new CostsHttpController(makeConfig(), costs, makeEcs()).actual('7');
       expect(result).toMatchObject({ total: 1.23, currency: 'USD' });
     });
   });

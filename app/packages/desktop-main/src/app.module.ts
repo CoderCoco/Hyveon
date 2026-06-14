@@ -9,6 +9,7 @@ import { GamesController } from './controllers/games.controller.js';
 import { GamesHttpController } from './controllers/games-http.controller.js';
 import { ConfigController } from './controllers/config.controller.js';
 import { CostsController } from './controllers/costs.controller.js';
+import { CostsHttpController } from './controllers/costs-http.controller.js';
 import { LogsController } from './controllers/logs.controller.js';
 import { FilesController } from './controllers/files.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
@@ -34,6 +35,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     GamesHttpController,
     ConfigController,
     CostsController,
+    CostsHttpController,
     LogsController,
     FilesController,
     DiscordController,
