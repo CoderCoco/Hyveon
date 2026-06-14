@@ -110,51 +110,6 @@ export interface EnvInfo {
   environment: string;
 }
 
-const TOKEN_STORAGE_KEY = 'apiToken';
-
-/** Read the stored API bearer token from localStorage (returns empty string if unset). */
-export function getStoredApiToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-/** Persist the API bearer token for subsequent requests. Clear with `''`. */
-export function setStoredApiToken(token: string): void {
-  try {
-    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    else localStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {
-    // localStorage unavailable (private mode, etc.); failures are non-fatal — user will just be re-prompted.
-  }
-}
-
-/**
- * Retained for source compatibility while the renderer finishes migrating off
- * the old HTTP/bearer transport. The 401-retry queue these drove only made
- * sense for `fetch`; IPC has no per-request 401, so both are now inert no-ops.
- * They stay exported because `app.component.tsx` and `api-token-modal.component.tsx`
- * still import them — those call sites are removed in #162.
- *
- * @param _handler - Ignored. Kept so existing callers still type-check.
- */
-export function setUnauthorizedHandler(_handler: (() => void) | null): void {
-  // no-op: there is no HTTP 401 to intercept over the IPC bridge.
-}
-
-/**
- * Inert counterpart to {@link setUnauthorizedHandler}: nothing is ever queued
- * now, so this resolves to `true` (every — i.e. zero — parked request
- * "succeeded") and any caller proceeds as before.
- *
- * @returns A promise that always resolves to `true`.
- */
-export function retryPendingAfterAuth(): Promise<boolean> {
-  return Promise.resolve(true);
-}
-
 /**
  * Returns the `window.gsd` IPC bridge, throwing a descriptive error if it is
  * absent. The bridge is injected by the Electron preload script, so a missing

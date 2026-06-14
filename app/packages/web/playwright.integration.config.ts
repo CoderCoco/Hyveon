@@ -42,7 +42,6 @@ export default defineConfig({
       env: {
         PORT: '3002',
         NODE_ENV: 'test',
-        API_TOKEN: 'test-token',
         TF_STATE_PATH: tfstatePath,
       },
     },

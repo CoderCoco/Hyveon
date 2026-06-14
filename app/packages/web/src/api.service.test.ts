@@ -1,23 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  getStoredApiToken,
-  setStoredApiToken,
-  setUnauthorizedHandler,
-  retryPendingAfterAuth,
-  api,
-} from './api.service.js';
-
-// jsdom provides localStorage, but we replace it with a controlled stub so
-// tests are isolated from each other's stored tokens.
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: vi.fn((key: string) => store[key] ?? null),
-    setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
-    removeItem: vi.fn((key: string) => { delete store[key]; }),
-    clear: () => { store = {}; },
-  };
-})();
+import { api } from './api.service.js';
 
 /**
  * Builds a fresh `window.gsd` IPC-bridge double. Every namespace method is a
@@ -77,54 +59,13 @@ function makeGsdMock() {
 let gsd: ReturnType<typeof makeGsdMock>;
 
 beforeEach(() => {
-  localStorageMock.clear();
-  localStorageMock.getItem.mockClear();
-  localStorageMock.setItem.mockClear();
-  localStorageMock.removeItem.mockClear();
-  vi.stubGlobal('localStorage', localStorageMock);
   gsd = makeGsdMock();
   vi.stubGlobal('gsd', gsd);
-  setStoredApiToken('');
-  setUnauthorizedHandler(null);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-describe('getStoredApiToken / setStoredApiToken', () => {
-  it('should return an empty string when no token has been stored', () => {
-    expect(getStoredApiToken()).toBe('');
-  });
-
-  it('should persist and retrieve a non-empty token', () => {
-    setStoredApiToken('my-api-token');
-    expect(getStoredApiToken()).toBe('my-api-token');
-  });
-
-  it('should remove the stored token when called with an empty string', () => {
-    setStoredApiToken('tok');
-    setStoredApiToken('');
-    expect(getStoredApiToken()).toBe('');
-  });
-
-  it('should return empty string when localStorage.getItem throws', () => {
-    vi.stubGlobal('localStorage', {
-      getItem: () => { throw new Error('unavailable'); },
-    });
-    expect(getStoredApiToken()).toBe('');
-  });
-
-  it('should silently ignore setItem errors (e.g. private browsing quota)', () => {
-    vi.stubGlobal('localStorage', {
-      getItem: () => null,
-      setItem: () => { throw new Error('QuotaExceeded'); },
-      removeItem: () => { throw new Error('unavailable'); },
-    });
-    expect(() => setStoredApiToken('tok')).not.toThrow();
-    expect(() => setStoredApiToken('')).not.toThrow();
-  });
 });
 
 describe('IPC bridge delegation', () => {
@@ -262,16 +203,5 @@ describe('missing IPC bridge', () => {
   it('should throw a descriptive error when window.gsd is unavailable', async () => {
     vi.stubGlobal('gsd', undefined);
     await expect(api.env()).rejects.toThrow('window.gsd IPC bridge is unavailable');
-  });
-});
-
-describe('inert auth stubs (retained for #162)', () => {
-  it('should treat setUnauthorizedHandler as a no-op that never throws', () => {
-    expect(() => setUnauthorizedHandler(vi.fn())).not.toThrow();
-    expect(() => setUnauthorizedHandler(null)).not.toThrow();
-  });
-
-  it('should resolve retryPendingAfterAuth to true since nothing is ever queued', async () => {
-    expect(await retryPendingAfterAuth()).toBe(true);
   });
 });

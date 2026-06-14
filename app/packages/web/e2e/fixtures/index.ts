@@ -16,7 +16,7 @@ import {
   CONFIGURED_DISCORD_CONFIG,
   makeActualCosts,
 } from './game-data.js';
-import { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 export type {
@@ -44,7 +44,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, AuthGatePage, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+export { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -218,10 +218,10 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
 
 type E2EFixtures = {
   /**
-   * A page with `apiToken` pre-seeded in localStorage so every navigation
-   * starts authenticated. Use this in specs that need raw page access (e.g.
-   * to call `stubApis` or `addInitScript`); prefer `dashboard` / `costs` /
-   * `layout` for higher-level interactions.
+   * Raw page handle for specs that need direct page access (e.g. to call
+   * `stubApis` or `addInitScript`); prefer `dashboard` / `costs` / `layout`
+   * for higher-level interactions. Retained as a named alias now that the API
+   * no longer requires a pre-seeded token.
    */
   authedPage: Page;
   /** Page object for the dashboard route — use in any authed-dashboard spec. */
@@ -234,21 +234,14 @@ type E2EFixtures = {
   settings: SettingsPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
-  /** Page object for the API-token modal — use in auth-gate specs. */
-  authGate: AuthGatePage;
 };
 
 export const test = base.extend<E2EFixtures>({
   authedPage: async ({ page }, use) => {
-    await page.addInitScript(() => {
-      localStorage.setItem('apiToken', 'test-token');
-    });
     await use(page);
   },
-  // `dashboard` and `costs` depend on `authedPage` because every authed-route
-  // spec wants the token pre-seeded. `layout` and `authGate` depend on the raw
-  // `page` so auth-gate specs (which exercise the unauthenticated state) can
-  // use them without dragging the init script along.
+  // `dashboard` and `costs` resolve through `authedPage`; `layout` uses the raw
+  // `page`. Both are plain page handles now that no token seeding is required.
   dashboard: async ({ authedPage }, use) => {
     await use(new DashboardPage(authedPage));
   },
@@ -263,9 +256,6 @@ export const test = base.extend<E2EFixtures>({
   },
   layout: async ({ page }, use) => {
     await use(new AppLayout(page));
-  },
-  authGate: async ({ page }, use) => {
-    await use(new AuthGatePage(page));
   },
 });
 

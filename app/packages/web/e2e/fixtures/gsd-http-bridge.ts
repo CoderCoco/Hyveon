@@ -19,20 +19,12 @@
  *
  * It is intentionally self-contained — it closes over no module-scope bindings —
  * because Playwright serialises it to source and re-evaluates it in the page.
- * The bearer token is read from `localStorage` on every call, mirroring the
- * old `fetchWithAuth`, so it picks up whatever the `authedPage` fixture seeded.
+ * The Nest API no longer requires a bearer token, so calls go out with only the
+ * headers each request supplies.
  */
 export function installGsdHttpBridge(): void {
-  const authHeader = (): Record<string, string> => {
-    const token = localStorage.getItem('apiToken') ?? '';
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
-
   const call = async (path: string, init?: RequestInit): Promise<unknown> => {
-    const res = await fetch(path, {
-      ...init,
-      headers: { ...(init?.headers as Record<string, string> | undefined), ...authHeader() },
-    });
+    const res = await fetch(path, init);
     if (!res.ok) throw new Error(`API error ${res.status}`);
     return res.json();
   };
