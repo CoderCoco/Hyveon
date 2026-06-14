@@ -12,7 +12,7 @@ export class FilesController {
   constructor(private readonly files: FileManagerService) {}
 
   /** Returns whether a file-manager task is currently running for `game`, with connection details if so. */
-  @MessagePattern('files.getStatus')
+  @MessagePattern('files.list')
   getStatus(@Payload() game: string) {
     return this.files.getStatus(game);
   }
