@@ -1,18 +1,23 @@
-import { Controller } from '@nestjs/common';
-import { MessagePattern, Payload } from '@nestjs/microservices';
+import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ConfigService, type WatchdogConfig } from '../services/ConfigService.js';
 
 /**
- * IPC-only controller that exposes watchdog tuning knobs stored in
- * `server_config.json`. Every handler is bound to an IPC channel via
- * `@MessagePattern` / `@Payload` — no HTTP routes are registered here.
+ * HTTP shim that exposes the watchdog tuning knobs as plain REST endpoints
+ * (`GET /api/config`, `POST /api/config`). The browser client
+ * (`api.service.ts`) and the integration-test server consume these routes over
+ * HTTP; the Electron main-process host uses the IPC {@link ConfigController}
+ * (`@MessagePattern`) handlers instead.
+ *
+ * Both controllers delegate to the same {@link ConfigService} provider — the
+ * heavy lifting lives in that service, not in the thin orchestration duplicated
+ * here.
  */
-@Controller()
-export class ConfigController {
+@Controller('config')
+export class ConfigHttpController {
   constructor(private readonly config: ConfigService) {}
 
   /** Returns the current watchdog config (interval, idle-check count, min packets). */
-  @MessagePattern('config.get')
+  @Get()
   get(): WatchdogConfig {
     return this.config.getConfig();
   }
@@ -23,8 +28,8 @@ export class ConfigController {
    * watchdog Lambda at `terraform apply` time, so changes here only take effect
    * after the next apply.
    */
-  @MessagePattern('config.update')
-  update(@Payload() body: Partial<WatchdogConfig>): { success: true; config: WatchdogConfig } {
+  @Post()
+  update(@Body() body: Partial<WatchdogConfig>): { success: true; config: WatchdogConfig } {
     const current = this.config.getConfig();
     const updated: WatchdogConfig = {
       watchdog_interval_minutes: body.watchdog_interval_minutes ?? current.watchdog_interval_minutes,

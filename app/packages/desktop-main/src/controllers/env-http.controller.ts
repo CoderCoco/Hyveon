@@ -1,22 +1,26 @@
-import { Controller } from '@nestjs/common';
-import { MessagePattern } from '@nestjs/microservices';
+import { Controller, Get } from '@nestjs/common';
 import { ConfigService } from '../services/ConfigService.js';
 
 /**
- * Environment metadata IPC controller. Returns deployment-level info (region, domain)
- * for UI display — e.g., the top bar env pill that shows "PROD · us-east-1".
+ * HTTP shim that exposes the environment metadata endpoint as a plain REST
+ * route (`GET /api/env`). The browser client (`api.service.ts`) and the
+ * integration-test server consume this route over HTTP; the Electron
+ * main-process host uses the IPC {@link EnvController} (`@MessagePattern`)
+ * handler instead.
  *
- * Handles only IPC messages via `@MessagePattern` / no HTTP routes are registered here.
+ * Both controllers delegate to the same {@link ConfigService} provider — the
+ * heavy lifting lives in that service, not in the thin orchestration
+ * duplicated here.
  */
-@Controller()
-export class EnvController {
+@Controller('env')
+export class EnvHttpController {
   constructor(private readonly config: ConfigService) {}
 
   /**
    * Returns environment context derived from Terraform outputs. The UI uses
    * this to show the active region + environment label in the top bar.
    */
-  @MessagePattern('env.get')
+  @Get()
   getEnv(): { region: string; domain: string; environment: string } {
     const outputs = this.config.getTfOutputs();
     const region = outputs?.aws_region ?? 'local';

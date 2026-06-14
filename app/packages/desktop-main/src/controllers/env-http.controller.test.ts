@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi } from 'vitest';
-import { EnvController } from './env.controller.js';
+import { EnvHttpController } from './env-http.controller.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 
 vi.mock('../logger.js', () => ({
@@ -14,26 +14,10 @@ function makeConfig(outputs: Partial<TfOutputs> | null = null): ConfigService {
   } as unknown as ConfigService;
 }
 
-/**
- * The metadata key NestJS stores on each method decorated with
- * `@MessagePattern`. Asserting this value is the only automated guard
- * that prevents a typo in the controller from silently breaking IPC —
- * calling the method directly (as every other test does) would succeed
- * regardless of what string is registered with the transport.
- */
-const PATTERN_METADATA_KEY = 'microservices:pattern';
-
-describe('EnvController', () => {
-  describe('@MessagePattern channel names', () => {
-    it('should register getEnv on the "env.get" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, EnvController.prototype.getEnv);
-      expect(pattern).toEqual(['env.get']);
-    });
-  });
-
+describe('EnvHttpController', () => {
   describe('getEnv', () => {
     it('should return region and domain from Terraform outputs', () => {
-      const result = new EnvController(
+      const result = new EnvHttpController(
         makeConfig({ aws_region: 'us-east-1', domain_name: 'example.com' }),
       ).getEnv();
       expect(result.region).toBe('us-east-1');
@@ -41,21 +25,21 @@ describe('EnvController', () => {
     });
 
     it('should derive environment as PROD when a domain_name is present', () => {
-      const result = new EnvController(
+      const result = new EnvHttpController(
         makeConfig({ aws_region: 'us-east-1', domain_name: 'servers.example.com' }),
       ).getEnv();
       expect(result.environment).toBe('PROD');
     });
 
     it('should fall back to "local" region and empty domain when Terraform has not been applied', () => {
-      const result = new EnvController(makeConfig(null)).getEnv();
+      const result = new EnvHttpController(makeConfig(null)).getEnv();
       expect(result.region).toBe('local');
       expect(result.domain).toBe('');
       expect(result.environment).toBe('local');
     });
 
     it('should set environment to "local" when domain_name is an empty string', () => {
-      const result = new EnvController(
+      const result = new EnvHttpController(
         makeConfig({ aws_region: 'eu-west-1', domain_name: '' }),
       ).getEnv();
       expect(result.environment).toBe('local');
