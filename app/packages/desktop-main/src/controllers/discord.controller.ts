@@ -166,6 +166,9 @@ export class DiscordController {
     @Payload() payload: { game: string; body: { userIds?: unknown; roleIds?: unknown; actions?: unknown } } = { game: '', body: {} },
   ) {
     const { game, body = {} } = payload;
+    if (!game) {
+      throw new BadRequestException({ success: false, error: 'game is required' });
+    }
     const userIds = requireStringArray('userIds', body.userIds);
     const roleIds = requireStringArray('roleIds', body.roleIds);
     const actions = requireStringArray('actions', body.actions);
