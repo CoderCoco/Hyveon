@@ -78,7 +78,73 @@ function ctrl(
   return new DiscordController(discord, registrar, config);
 }
 
+/**
+ * The metadata key NestJS stores on each method decorated with
+ * `@MessagePattern`. Asserting this value is the only automated guard
+ * that prevents a typo in the controller from silently breaking IPC —
+ * calling the method directly (as every other test does) would succeed
+ * regardless of what string is registered with the transport.
+ */
+const PATTERN_METADATA_KEY = 'microservices:pattern';
+
 describe('DiscordController', () => {
+  describe('@MessagePattern channel names', () => {
+    it('should register getConfig on the "discord.getConfig" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getConfig);
+      expect(pattern).toEqual(['discord.getConfig']);
+    });
+
+    it('should register putConfig on the "discord.putConfig" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putConfig);
+      expect(pattern).toEqual(['discord.putConfig']);
+    });
+
+    it('should register listGuilds on the "discord.listGuilds" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.listGuilds);
+      expect(pattern).toEqual(['discord.listGuilds']);
+    });
+
+    it('should register addGuild on the "discord.addGuild" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.addGuild);
+      expect(pattern).toEqual(['discord.addGuild']);
+    });
+
+    it('should register removeGuild on the "discord.removeGuild" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.removeGuild);
+      expect(pattern).toEqual(['discord.removeGuild']);
+    });
+
+    it('should register registerCommands on the "discord.registerCommands" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.registerCommands);
+      expect(pattern).toEqual(['discord.registerCommands']);
+    });
+
+    it('should register getAdmins on the "discord.getAdmins" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getAdmins);
+      expect(pattern).toEqual(['discord.getAdmins']);
+    });
+
+    it('should register putAdmins on the "discord.putAdmins" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putAdmins);
+      expect(pattern).toEqual(['discord.putAdmins']);
+    });
+
+    it('should register getPermissions on the "discord.getPermissions" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getPermissions);
+      expect(pattern).toEqual(['discord.getPermissions']);
+    });
+
+    it('should register putPermission on the "discord.putPermission" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putPermission);
+      expect(pattern).toEqual(['discord.putPermission']);
+    });
+
+    it('should register deletePermission on the "discord.deletePermission" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.deletePermission);
+      expect(pattern).toEqual(['discord.deletePermission']);
+    });
+  });
+
   describe('getConfig', () => {
     it('should return the redacted config merged with the interactions endpoint URL', async () => {
       const result = await ctrl().getConfig();
@@ -121,8 +187,11 @@ describe('DiscordController', () => {
 
     it('should accept a body with no fields and delegate to setCredentials', async () => {
       const discord = makeDiscord();
-      await ctrl(discord).putConfig({});
+      const result = await ctrl(discord).putConfig({});
       expect(discord.setCredentials).toHaveBeenCalledWith({});
+      expect(result.success).toBe(true);
+      expect(result.config).toBeDefined();
+      expect(result.config.interactionsEndpointUrl).toBeDefined();
     });
 
     it('should return success with updated config when credentials are valid', async () => {
@@ -130,6 +199,12 @@ describe('DiscordController', () => {
       expect(result.success).toBe(true);
       expect(result.config).toBeDefined();
       expect(result.config.interactionsEndpointUrl).toBeDefined();
+    });
+
+    it('should never echo the submitted secrets back in the response', async () => {
+      const result = await ctrl().putConfig({ botToken: 'tok', publicKey: 'pkey' });
+      expect(result.config).not.toHaveProperty('botToken');
+      expect(result.config).not.toHaveProperty('publicKey');
     });
   });
 
