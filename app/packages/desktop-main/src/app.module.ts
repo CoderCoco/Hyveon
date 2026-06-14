@@ -8,6 +8,7 @@ import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
 import { GamesHttpController } from './controllers/games-http.controller.js';
 import { ConfigController } from './controllers/config.controller.js';
+import { ConfigHttpController } from './controllers/config-http.controller.js';
 import { CostsController } from './controllers/costs.controller.js';
 import { CostsHttpController } from './controllers/costs-http.controller.js';
 import { LogsController } from './controllers/logs.controller.js';
@@ -16,6 +17,7 @@ import { FilesHttpController } from './controllers/files-http.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
 import { DiscordHttpController } from './controllers/discord-http.controller.js';
 import { EnvController } from './controllers/env.controller.js';
+import { EnvHttpController } from './controllers/env-http.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { ApiTokenGuard } from './guards/api-token.guard.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
@@ -36,6 +38,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     GamesController,
     GamesHttpController,
     ConfigController,
+    ConfigHttpController,
     CostsController,
     CostsHttpController,
     LogsController,
@@ -44,6 +47,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     DiscordController,
     DiscordHttpController,
     EnvController,
+    EnvHttpController,
     DiagnosticsController,
   ],
   providers: [
