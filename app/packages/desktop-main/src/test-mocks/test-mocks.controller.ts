@@ -4,9 +4,6 @@ import { mockStore, type MockResponse } from './mock-store.js';
 /**
  * HTTP endpoints for Playwright integration tests to control mock AWS SDK
  * responses. Only registered in the test binary — never imported by AppModule.
- *
- * Protected by ApiTokenGuard (the global guard from AppModule applies to all
- * routes) — callers must send `Authorization: Bearer test-token`.
  */
 @Controller('test/mocks')
 export class TestMocksController {

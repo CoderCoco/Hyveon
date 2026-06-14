@@ -75,7 +75,7 @@ ecsMock.on(StopTaskCommand).callsFake(async () => {
 
 // ── Boot the Nest application ──
 
-/** Wraps AppModule (real providers + global guard) and adds TestMocksModule. */
+/** Wraps AppModule (real providers) and adds TestMocksModule. */
 @Module({ imports: [AppModule, TestMocksModule] })
 class TestAppModule {}
 
