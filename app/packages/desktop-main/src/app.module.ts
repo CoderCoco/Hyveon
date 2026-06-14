@@ -12,6 +12,7 @@ import { CostsController } from './controllers/costs.controller.js';
 import { CostsHttpController } from './controllers/costs-http.controller.js';
 import { LogsController } from './controllers/logs.controller.js';
 import { FilesController } from './controllers/files.controller.js';
+import { FilesHttpController } from './controllers/files-http.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
 import { DiscordHttpController } from './controllers/discord-http.controller.js';
 import { EnvController } from './controllers/env.controller.js';
@@ -39,6 +40,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     CostsHttpController,
     LogsController,
     FilesController,
+    FilesHttpController,
     DiscordController,
     DiscordHttpController,
     EnvController,

@@ -114,7 +114,7 @@ const api: GsdApi = {
   },
 
   files: {
-    getStatus: (game: string) => ipcRenderer.invoke('files.getStatus', game),
+    list: (game: string) => ipcRenderer.invoke('files.list', game),
     start: (game: string) => ipcRenderer.invoke('files.start', game),
     stop: (game: string) => ipcRenderer.invoke('files.stop', game),
   },
