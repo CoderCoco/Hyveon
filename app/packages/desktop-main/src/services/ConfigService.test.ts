@@ -17,20 +17,6 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-/**
- * Mutable holder for the build-time embedded Terraform state.
- * Tests that exercise the EMBEDDED_TFSTATE fallback path set this before
- * calling `getTfOutputs()`; all other tests leave it as `null` so they
- * don't accidentally exercise the fallback.
- */
-let mockEmbeddedState: Record<string, unknown> | null = null;
-
-vi.mock('../generated/tfstate.js', () => ({
-  get EMBEDDED_TFSTATE() {
-    return mockEmbeddedState;
-  },
-}));
-
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { ConfigService } from './ConfigService.js';
 
@@ -53,35 +39,12 @@ describe('ConfigService', () => {
 
   beforeEach(() => {
     service = new ConfigService();
-    mockEmbeddedState = null;
   });
 
   describe('getTfOutputs', () => {
-    it('should return null when both the state file and embedded state are absent', () => {
+    it('should return null when the state file is absent', () => {
       mockExists.mockReturnValue(false);
       expect(service.getTfOutputs()).toBeNull();
-    });
-
-    it('should use EMBEDDED_TFSTATE as fallback when the state file is absent', () => {
-      mockEmbeddedState = {
-        outputs: {
-          aws_region: { value: 'us-west-1' },
-          game_names: { value: ['minecraft'] },
-        },
-      };
-      mockExists.mockReturnValue(false);
-      const outputs = service.getTfOutputs();
-      expect(outputs).not.toBeNull();
-      expect(outputs!.aws_region).toBe('us-west-1');
-      expect(outputs!.game_names).toEqual(['minecraft']);
-      expect(outputs!.subnet_ids).toBe('');
-    });
-
-    it('should prefer the runtime state file over EMBEDDED_TFSTATE when both are present', () => {
-      mockEmbeddedState = { outputs: { aws_region: { value: 'embedded-region' } } };
-      mockExists.mockReturnValue(true);
-      mockRead.mockReturnValue(makeState({ aws_region: { value: 'runtime-region' } }));
-      expect(service.getTfOutputs()!.aws_region).toBe('runtime-region');
     });
 
     it('should parse outputs and fill defaults for missing keys', () => {

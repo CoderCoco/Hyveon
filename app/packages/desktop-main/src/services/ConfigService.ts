@@ -4,7 +4,6 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { logger } from '../logger.js';
-import { EMBEDDED_TFSTATE } from '../generated/tfstate.js';
 
 /** Absolute path to the `dist/services/` directory at runtime. */
 const _dirname = dirname(fileURLToPath(import.meta.url));
@@ -92,10 +91,8 @@ export class ConfigService {
 
   /**
    * Parse `terraform/terraform.tfstate` (once, then memoised) and project the
-   * pieces the app cares about. Falls back to the state embedded at build time
-   * by `scripts/embed-tfstate.mjs` when the runtime file is absent. Returns
-   * `null` when neither source is available — callers treat that as "infra not
-   * deployed yet" and degrade gracefully.
+   * pieces the app cares about. Returns `null` when the runtime file is absent
+   * — callers treat that as "infra not deployed yet" and degrade gracefully.
    */
   getTfOutputs(): TfOutputs | null {
     if (this.tfCache) return this.tfCache;
@@ -111,9 +108,6 @@ export class ConfigService {
         logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
         return null;
       }
-    } else if (EMBEDDED_TFSTATE) {
-      logger.debug('Using build-time embedded Terraform state');
-      raw = EMBEDDED_TFSTATE as unknown as RawState;
     } else {
       logger.warn('Terraform state not found', { path: tfStatePath });
       return null;

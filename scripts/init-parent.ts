@@ -188,8 +188,9 @@ update: | $(STAMP_DIR)
 \t@echo "  git add ${a.submoduleDir} && git commit -m 'chore: bump ${a.submoduleDir}'"
 
 # ── Dev server ───────────────────────────────────────────────────────────────
-# Pull live tfstate so embed-tfstate has something to read; falls back to null
-# when the backend isn't reachable yet (e.g. before the first apply).
+# Pull live tfstate into a temp file and point ConfigService at it via
+# TF_STATE_PATH; falls back to null when the backend isn't reachable yet
+# (e.g. before the first apply).
 dev: | $(STAMP_DIR)
 \tterraform -chdir=$(TF_DIR) state pull > $(STAMP_DIR)/tfstate.json 2>/dev/null || echo 'null' > $(STAMP_DIR)/tfstate.json
 \trm -f $(SUBMODULE)/app/packages/*/tsconfig*.tsbuildinfo
