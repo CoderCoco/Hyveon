@@ -241,7 +241,16 @@ export interface GsdDiscordApi {
   putAdmins: (body: { userIds?: string[]; roleIds?: string[] }) => Promise<AdminsResult>;
   /** Returns the per-game permission map. */
   getPermissions: () => Promise<Record<string, DiscordGamePermission>>;
-  /** Sets allowed users/roles/actions for a single game. */
+  /**
+   * Sets allowed users/roles/actions for a single game.
+   *
+   * **Transport note:** the preload binding collapses the two parameters into a
+   * single object — `ipcRenderer.invoke('discord.putPermission', { game, body })`
+   * — because `nestjs-electron-ipc-transport` only delivers the first argument to
+   * `@Payload`. Callers must go through `window.gsd.discord.putPermission` and
+   * must **not** invoke the `discord.putPermission` IPC channel directly with two
+   * separate arguments, as the controller would only receive the first one.
+   */
   putPermission: (
     game: string,
     body: { userIds?: string[]; roleIds?: string[]; actions?: string[] },
