@@ -163,7 +163,7 @@ export class DiscordController {
    */
   @MessagePattern('discord.putPermission')
   async putPermission(
-    @Payload() payload: { game: string; body: { userIds?: unknown; roleIds?: unknown; actions?: unknown } },
+    @Payload() payload: { game: string; body: { userIds?: unknown; roleIds?: unknown; actions?: unknown } } = { game: '', body: {} },
   ) {
     const { game, body = {} } = payload;
     const userIds = requireStringArray('userIds', body.userIds);
