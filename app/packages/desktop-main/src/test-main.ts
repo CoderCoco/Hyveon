@@ -6,8 +6,13 @@
  * so patching the prototype here is sufficient — all subsequent send() calls
  * on any ECSClient instance will hit the mock.
  *
- * Run via: PORT=3002 NODE_ENV=test API_TOKEN=test-token
- *           TF_STATE_PATH=<path> node dist/test-main.js
+ * Run via: PORT=3002 NODE_ENV=test TF_STATE_PATH=<path> node dist/test-main.js
+ *
+ * SECURITY NOTE — test-only, unauthenticated, localhost-bound:
+ * ApiTokenGuard has been removed, so this server exposes the HTTP controllers
+ * without authentication. The listener is bound explicitly to 127.0.0.1
+ * (loopback only) so the endpoints are unreachable from the network during a
+ * test run. Never use this entry point in production.
  */
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
@@ -86,7 +91,9 @@ async function bootstrap(): Promise<void> {
     logger: ['error', 'warn'],
   });
   app.setGlobalPrefix('api');
-  await app.listen(PORT);
+  // Bind to loopback only — with ApiTokenGuard removed these endpoints are
+  // unauthenticated, so they must not be reachable from the network.
+  await app.listen(PORT, '127.0.0.1');
   logger.info(`Integration test server running on http://localhost:${PORT}`, { port: PORT });
 }
 
