@@ -1,10 +1,2 @@
-import type { GsdApi } from '@hyveon/desktop-preload';
-
-declare global {
-  interface Window {
-    /** IPC bridge injected by the Electron preload script. Absent in browser/web contexts. */
-    gsd?: GsdApi;
-  }
-}
-
-export {};
+// Window.gsd is declared by @hyveon/desktop-preload via the side-effect import
+// in globals.d.ts — no hand-declaration needed here.
