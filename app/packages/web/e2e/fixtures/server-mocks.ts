@@ -4,7 +4,6 @@ import { DashboardPage } from '../pages/DashboardPage.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 const SERVER_BASE = 'http://localhost:3002';
-const AUTH_HEADERS = { Authorization: 'Bearer test-token' };
 
 /** Shape matching the server-side MockResponse — one queued ECS command reply. */
 export interface MockResponse {
@@ -25,7 +24,6 @@ export class ServerMocks {
 
   private async post(path: string, body?: unknown): Promise<void> {
     const res = await this.request.post(`${SERVER_BASE}${path}`, {
-      headers: AUTH_HEADERS,
       ...(body !== undefined ? { data: body } : {}),
     });
     if (!res.ok()) throw new Error(`Mock control call failed ${res.status()} ${path}`);
@@ -54,8 +52,8 @@ type IntegrationFixtures = {
    */
   serverMocks: ServerMocks;
   /**
-   * Page with `apiToken = 'test-token'` pre-seeded in localStorage so every
-   * navigation to the Vite preview starts authenticated.
+   * Page with the `window.gsd` HTTP bridge installed so every navigation to the
+   * Vite preview can reach the real Nest server on :3002.
    */
   authedPage: Page;
   /** Dashboard page object backed by `authedPage`. */
@@ -71,9 +69,6 @@ export const test = base.extend<IntegrationFixtures>({
   },
 
   authedPage: async ({ page }, use) => {
-    await page.addInitScript(() => {
-      localStorage.setItem('apiToken', 'test-token');
-    });
     // The web client talks to `window.gsd.*`; install a browser-side bridge
     // that forwards each IPC call to the matching `/api/*` route, which the
     // integration preview proxies to the real Nest server on :3002.
