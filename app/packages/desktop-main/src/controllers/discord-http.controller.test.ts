@@ -121,8 +121,12 @@ describe('DiscordHttpController', () => {
 
     it('should accept a body with no fields and delegate to setCredentials', async () => {
       const discord = makeDiscord();
-      await ctrl(discord).putConfig({});
+      const result = await ctrl(discord).putConfig({});
       expect(discord.setCredentials).toHaveBeenCalledWith({});
+      expect(result.success).toBe(true);
+      expect(result.config).toBeDefined();
+      expect(result.config).not.toHaveProperty('botToken');
+      expect(result.config).not.toHaveProperty('publicKey');
     });
 
     it('should return success with updated config when credentials are valid', async () => {
