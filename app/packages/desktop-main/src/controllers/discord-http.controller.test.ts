@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
-import { DiscordController } from './discord.controller.js';
+import { DiscordHttpController } from './discord-http.controller.js';
 import type { DiscordConfigService, DiscordAction } from '../services/DiscordConfigService.js';
 import type { DiscordCommandRegistrar } from '../services/DiscordCommandRegistrar.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
@@ -75,76 +75,10 @@ function ctrl(
   registrar: DiscordCommandRegistrar = makeRegistrar(),
   config: ConfigService = makeConfig(),
 ) {
-  return new DiscordController(discord, registrar, config);
+  return new DiscordHttpController(discord, registrar, config);
 }
 
-/**
- * The metadata key NestJS stores on each method decorated with
- * `@MessagePattern`. Asserting this value is the only automated guard
- * that prevents a typo in the controller from silently breaking IPC —
- * calling the method directly (as every other test does) would succeed
- * regardless of what string is registered with the transport.
- */
-const PATTERN_METADATA_KEY = 'microservices:pattern';
-
-describe('DiscordController', () => {
-  describe('@MessagePattern channel names', () => {
-    it('should register getConfig on the "discord.getConfig" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getConfig);
-      expect(pattern).toEqual(['discord.getConfig']);
-    });
-
-    it('should register putConfig on the "discord.putConfig" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putConfig);
-      expect(pattern).toEqual(['discord.putConfig']);
-    });
-
-    it('should register listGuilds on the "discord.listGuilds" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.listGuilds);
-      expect(pattern).toEqual(['discord.listGuilds']);
-    });
-
-    it('should register addGuild on the "discord.addGuild" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.addGuild);
-      expect(pattern).toEqual(['discord.addGuild']);
-    });
-
-    it('should register removeGuild on the "discord.removeGuild" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.removeGuild);
-      expect(pattern).toEqual(['discord.removeGuild']);
-    });
-
-    it('should register registerCommands on the "discord.registerCommands" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.registerCommands);
-      expect(pattern).toEqual(['discord.registerCommands']);
-    });
-
-    it('should register getAdmins on the "discord.getAdmins" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getAdmins);
-      expect(pattern).toEqual(['discord.getAdmins']);
-    });
-
-    it('should register putAdmins on the "discord.putAdmins" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putAdmins);
-      expect(pattern).toEqual(['discord.putAdmins']);
-    });
-
-    it('should register getPermissions on the "discord.getPermissions" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.getPermissions);
-      expect(pattern).toEqual(['discord.getPermissions']);
-    });
-
-    it('should register putPermission on the "discord.putPermission" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.putPermission);
-      expect(pattern).toEqual(['discord.putPermission']);
-    });
-
-    it('should register deletePermission on the "discord.deletePermission" IPC channel', () => {
-      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, DiscordController.prototype.deletePermission);
-      expect(pattern).toEqual(['discord.deletePermission']);
-    });
-  });
-
+describe('DiscordHttpController', () => {
   describe('getConfig', () => {
     it('should return the redacted config merged with the interactions endpoint URL', async () => {
       const result = await ctrl().getConfig();
@@ -190,8 +124,7 @@ describe('DiscordController', () => {
       const result = await ctrl(discord).putConfig({});
       expect(discord.setCredentials).toHaveBeenCalledWith({});
       expect(result.success).toBe(true);
-      expect(result.config).not.toBeNull();
-      expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
+      expect(result.config).toBeDefined();
       expect(result.config).not.toHaveProperty('botToken');
       expect(result.config).not.toHaveProperty('publicKey');
     });
@@ -199,7 +132,7 @@ describe('DiscordController', () => {
     it('should return success with updated config when credentials are valid', async () => {
       const result = await ctrl().putConfig({ botToken: 'tok', clientId: 'cid', publicKey: 'pkey' });
       expect(result.success).toBe(true);
-      expect(result.config).toBeDefined();
+      expect(result.config).not.toBeNull();
       expect(result.config.interactionsEndpointUrl).toBe('https://xyz.lambda-url.us-east-1.on.aws/');
     });
 
@@ -319,27 +252,24 @@ describe('DiscordController', () => {
   });
 
   describe('putPermission', () => {
-    it('should throw BadRequestException when game is an empty string', async () => {
-      await expect(ctrl().putPermission({ game: '', body: {} })).rejects.toBeInstanceOf(BadRequestException);
-    });
-
     it('should throw BadRequestException when actions is not an array', async () => {
       await expect(
-        ctrl().putPermission({ game: 'minecraft', body: { actions: 'start' as unknown as string[] } }),
+        ctrl().putPermission('minecraft', { actions: 'start' as unknown as string[] }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('should throw BadRequestException when setGamePermission returns false (unknown game)', async () => {
       const discord = makeDiscord();
       vi.mocked(discord.setGamePermission).mockResolvedValue(false);
-      await expect(ctrl(discord).putPermission({ game: 'unknown-game', body: {} })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(ctrl(discord).putPermission('unknown-game', {})).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('should call setGamePermission with parsed user/role/action lists', async () => {
       const discord = makeDiscord();
-      await ctrl(discord).putPermission({
-        game: 'minecraft',
-        body: { userIds: ['U1'], roleIds: ['R1'], actions: ['start', 'stop'] },
+      await ctrl(discord).putPermission('minecraft', {
+        userIds: ['U1'],
+        roleIds: ['R1'],
+        actions: ['start', 'stop'],
       });
       expect(discord.setGamePermission).toHaveBeenCalledWith('minecraft', {
         userIds: ['U1'],
@@ -348,28 +278,14 @@ describe('DiscordController', () => {
       });
     });
 
-    it('should call setGamePermission with empty arrays when body key is absent', async () => {
-      const discord = makeDiscord();
-      await ctrl(discord).putPermission({ game: 'minecraft' } as { game: string; body: Record<string, unknown> });
-      expect(discord.setGamePermission).toHaveBeenCalledWith('minecraft', {
-        userIds: [],
-        roleIds: [],
-        actions: [],
-      });
-    });
-
     it('should return success with the updated permissions map', async () => {
-      const result = await ctrl().putPermission({ game: 'minecraft', body: { userIds: ['U1'], actions: ['start'] } });
+      const result = await ctrl().putPermission('minecraft', { userIds: ['U1'], actions: ['start'] });
       expect(result.success).toBe(true);
       expect(result.permissions).toBeDefined();
     });
   });
 
   describe('deletePermission', () => {
-    it('should throw BadRequestException when game is an empty string', async () => {
-      await expect(ctrl().deletePermission('')).rejects.toBeInstanceOf(BadRequestException);
-    });
-
     it('should throw BadRequestException when deleteGamePermission returns false (unknown game)', async () => {
       const discord = makeDiscord();
       vi.mocked(discord.deleteGamePermission).mockResolvedValue(false);

@@ -13,6 +13,7 @@ import { CostsHttpController } from './controllers/costs-http.controller.js';
 import { LogsController } from './controllers/logs.controller.js';
 import { FilesController } from './controllers/files.controller.js';
 import { DiscordController } from './controllers/discord.controller.js';
+import { DiscordHttpController } from './controllers/discord-http.controller.js';
 import { EnvController } from './controllers/env.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { ApiTokenGuard } from './guards/api-token.guard.js';
@@ -39,6 +40,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     LogsController,
     FilesController,
     DiscordController,
+    DiscordHttpController,
     EnvController,
     DiagnosticsController,
   ],
