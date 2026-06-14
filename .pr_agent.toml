@@ -1,0 +1,8 @@
+[github_app]
+pr_commands = [
+    "/agentic_describe",
+    "/agentic_review"
+]
+
+[review_agent]
+approve_pr_on_self_review = true
