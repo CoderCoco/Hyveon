@@ -13,7 +13,7 @@ export class FilesController {
 
   /** Returns whether a file-manager task is currently running for `game`, with connection details if so. */
   @MessagePattern('files.list')
-  getStatus(@Payload() game: string) {
+  list(@Payload() game: string) {
     return this.files.getStatus(game);
   }
 

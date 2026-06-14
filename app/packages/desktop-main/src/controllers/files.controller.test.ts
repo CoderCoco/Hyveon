@@ -17,17 +17,17 @@ function makeFiles(): FileManagerService {
 }
 
 describe('FilesController', () => {
-  describe('getStatus', () => {
+  describe('list', () => {
     it('should delegate to FileManagerService.getStatus with the requested game', async () => {
       const files = makeFiles();
-      await new FilesController(files).getStatus('minecraft');
+      await new FilesController(files).list('minecraft');
       expect(files.getStatus).toHaveBeenCalledWith('minecraft');
     });
 
     it('should return whatever FileManagerService.getStatus returns', async () => {
       const files = makeFiles();
       vi.mocked(files.getStatus).mockResolvedValue({ game: 'minecraft', state: 'running', url: 'http://1.2.3.4:8080' });
-      const result = await new FilesController(files).getStatus('minecraft');
+      const result = await new FilesController(files).list('minecraft');
       expect(result).toMatchObject({ state: 'running', url: 'http://1.2.3.4:8080' });
     });
   });

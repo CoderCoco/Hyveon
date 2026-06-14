@@ -19,7 +19,7 @@ export class FilesHttpController {
 
   /** Returns whether a file-manager task is currently running for `game`, with connection details if so. */
   @Get(':game')
-  getStatus(@Param('game') game: string) {
+  list(@Param('game') game: string) {
     return this.files.getStatus(game);
   }
 
