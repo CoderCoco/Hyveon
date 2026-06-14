@@ -211,9 +211,9 @@ export interface GsdLogsApi {
   stream: (game: string, signal?: AbortSignal) => AsyncIterable<LogChunk>;
 }
 
-/** EFS file-manager task endpoints: status, start, and stop per game. */
+/** EFS file-manager task endpoints: list, start, and stop per game. */
 export interface GsdFilesApi {
-  /** Returns whether a file-manager task is running for `game`, with connection details. */
+  /** Lists the file-manager task for `game`, returning whether it is running plus connection details. */
   list: (game: string) => Promise<FileMgrStatus>;
   /** Launches an ECS file-manager task for `game`. */
   start: (game: string) => Promise<FileMgrResult>;

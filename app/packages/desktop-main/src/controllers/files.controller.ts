@@ -11,7 +11,7 @@ import { FileManagerService } from '../services/FileManagerService.js';
 export class FilesController {
   constructor(private readonly files: FileManagerService) {}
 
-  /** Returns whether a file-manager task is currently running for `game`, with connection details if so. */
+  /** Lists the file-manager task for `game`, returning whether it is currently running with connection details if so. */
   @MessagePattern('files.list')
   list(@Payload() game: string) {
     return this.files.getStatus(game);
