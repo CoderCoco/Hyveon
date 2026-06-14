@@ -277,6 +277,14 @@ export interface GsdConfigApi {
   }) => Promise<WatchdogConfigResult>;
 }
 
+/** Local application log diagnostics: tail recent lines or retrieve the log file path. */
+export interface GsdDiagnosticsApi {
+  /** Returns the last 500 lines from today's local log file. */
+  tail: () => Promise<{ lines: string[] }>;
+  /** Returns the absolute path of today's local log file. */
+  path: () => Promise<{ path: string }>;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level interface
 // ---------------------------------------------------------------------------
@@ -309,4 +317,6 @@ export interface GsdApi {
   env: GsdEnvApi;
   /** Watchdog configuration stored in server_config.json. */
   config: GsdConfigApi;
+  /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
+  diagnostics: GsdDiagnosticsApi;
 }

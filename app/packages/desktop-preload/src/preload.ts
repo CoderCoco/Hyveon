@@ -150,6 +150,11 @@ const api: GsdApi = {
       watchdog_min_packets?: number;
     }) => ipcRenderer.invoke('config.update', body),
   },
+
+  diagnostics: {
+    tail: () => ipcRenderer.invoke('diagnostics.tail'),
+    path: () => ipcRenderer.invoke('diagnostics.path'),
+  },
 };
 
 contextBridge.exposeInMainWorld('gsd', api);
