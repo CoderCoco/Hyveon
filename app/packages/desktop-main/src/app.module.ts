@@ -2,7 +2,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'module';
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
 import { GamesController } from './controllers/games.controller.js';
@@ -20,7 +19,6 @@ import { EnvController } from './controllers/env.controller.js';
 import { EnvHttpController } from './controllers/env-http.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
-import { ApiTokenGuard } from './guards/api-token.guard.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
@@ -28,10 +26,6 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`) to
  * the IPC controllers.
- *
- * `ApiTokenGuard` is registered as a global guard so every HTTP route requires
- * a bearer token. The guard is context-aware and passes through IPC (non-HTTP)
- * calls without token enforcement.
  */
 @Module({
   imports: [AwsModule, DiscordModule],
@@ -53,7 +47,6 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     DiagnosticsHttpController,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ApiTokenGuard },
     {
       provide: DIAGNOSTICS_LOG_DIR,
       useFactory: () => {

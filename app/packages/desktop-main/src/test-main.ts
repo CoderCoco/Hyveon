@@ -6,8 +6,13 @@
  * so patching the prototype here is sufficient — all subsequent send() calls
  * on any ECSClient instance will hit the mock.
  *
- * Run via: PORT=3002 NODE_ENV=test API_TOKEN=test-token
- *           TF_STATE_PATH=<path> node dist/test-main.js
+ * Run via: PORT=3002 NODE_ENV=test TF_STATE_PATH=<path> node dist/test-main.js
+ *
+ * SECURITY NOTE — test-only, unauthenticated, localhost-bound:
+ * ApiTokenGuard has been removed, so this server exposes the HTTP controllers
+ * without authentication. The listener is bound to localhost (loopback only,
+ * never a network-routable interface) so the endpoints are unreachable from the
+ * network during a test run. Never use this entry point in production.
  */
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
@@ -75,7 +80,7 @@ ecsMock.on(StopTaskCommand).callsFake(async () => {
 
 // ── Boot the Nest application ──
 
-/** Wraps AppModule (real providers + global guard) and adds TestMocksModule. */
+/** Wraps AppModule (real providers) and adds TestMocksModule. */
 @Module({ imports: [AppModule, TestMocksModule] })
 class TestAppModule {}
 
@@ -86,7 +91,12 @@ async function bootstrap(): Promise<void> {
     logger: ['error', 'warn'],
   });
   app.setGlobalPrefix('api');
-  await app.listen(PORT);
+  // Bind to loopback only — with ApiTokenGuard removed these endpoints are
+  // unauthenticated, so they must not be reachable from the network. Bind to
+  // 'localhost' (not a literal 127.0.0.1) so the listen host resolves the same
+  // way as the Playwright callers, which all use http://localhost:3002 — this
+  // avoids dual-stack mismatches on IPv6-first hosts where localhost is ::1.
+  await app.listen(PORT, 'localhost');
   logger.info(`Integration test server running on http://localhost:${PORT}`, { port: PORT });
 }
 
