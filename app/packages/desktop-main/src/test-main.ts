@@ -10,9 +10,9 @@
  *
  * SECURITY NOTE — test-only, unauthenticated, localhost-bound:
  * ApiTokenGuard has been removed, so this server exposes the HTTP controllers
- * without authentication. The listener is bound explicitly to 127.0.0.1
- * (loopback only) so the endpoints are unreachable from the network during a
- * test run. Never use this entry point in production.
+ * without authentication. The listener is bound to localhost (loopback only,
+ * never a network-routable interface) so the endpoints are unreachable from the
+ * network during a test run. Never use this entry point in production.
  */
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
@@ -92,8 +92,11 @@ async function bootstrap(): Promise<void> {
   });
   app.setGlobalPrefix('api');
   // Bind to loopback only — with ApiTokenGuard removed these endpoints are
-  // unauthenticated, so they must not be reachable from the network.
-  await app.listen(PORT, '127.0.0.1');
+  // unauthenticated, so they must not be reachable from the network. Bind to
+  // 'localhost' (not a literal 127.0.0.1) so the listen host resolves the same
+  // way as the Playwright callers, which all use http://localhost:3002 — this
+  // avoids dual-stack mismatches on IPv6-first hosts where localhost is ::1.
+  await app.listen(PORT, 'localhost');
   logger.info(`Integration test server running on http://localhost:${PORT}`, { port: PORT });
 }
 
