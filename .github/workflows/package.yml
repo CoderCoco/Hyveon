@@ -49,9 +49,11 @@ jobs:
         # clean CI checkout. electron-builder silently skips a missing
         # extraResources 'from' path, which would produce an installer that
         # lacks the tfstate file entirely. Create an empty placeholder so
-        # electron-builder always includes the file. ConfigService falls back
-        # to the build-time-embedded tfstate.ts when the runtime file is empty,
-        # so shipping an empty state file is safe for CI-produced installers.
+        # electron-builder always includes the file. ConfigService parses the
+        # runtime file directly into all-default outputs when it contains only
+        # '{}' (no embedded fallback exists), so shipping an empty placeholder
+        # is safe for CI-produced installers — the app simply shows defaults
+        # until the operator points it at a real state file.
         shell: bash
         run: |
           if [ ! -f terraform/terraform.tfstate ]; then
