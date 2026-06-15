@@ -59,8 +59,12 @@ export default defineConfig({
       testMatch: ELECTRON_SPEC,
     },
   ],
-  // Skip the Vite build+preview when only the electron project is being tested
-  // (e.g. `npx playwright test --project=electron` or PLAYWRIGHT_PROJECT=electron).
+  // Skip the Vite build+preview when only the electron project is being tested.
+  // This guard fires only when PLAYWRIGHT_PROJECT=electron is set in the
+  // environment before invoking Playwright — i.e.:
+  //   PLAYWRIGHT_PROJECT=electron npx playwright test --project=electron
+  // The --project CLI flag alone does NOT set this env var, so omitting it
+  // will still start the Vite build+preview (harmless but wasteful).
   // The electron project launches the app via `_electron.launch()` and never
   // opens a browser tab against localhost:4173, so starting the dev server
   // would be pure overhead in that scenario.
