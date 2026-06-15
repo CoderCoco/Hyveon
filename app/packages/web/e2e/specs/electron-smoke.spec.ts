@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { _electron } from 'playwright';
+import { test, expect, _electron } from '@playwright/test';
 import { electronMain, electronEnv } from '../../playwright.config.js';
 
 /**
