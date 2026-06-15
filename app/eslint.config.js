@@ -14,6 +14,8 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/*.d.ts',
       'packages/web/vite.config.ts',
+      'packages/web/playwright-report/**',
+      'packages/web/test-results/**',
     ],
   },
   js.configs.recommended,
