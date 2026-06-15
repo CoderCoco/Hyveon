@@ -34,9 +34,19 @@ function createWindow(): void {
   });
 }
 
+/** True when Playwright (or another test harness) sets HYVEON_TEST_MODE=1. */
+const isTestMode = process.env.HYVEON_TEST_MODE === '1';
+
 app.whenReady().then(() => {
   bootstrap()
     .then(() => {
+      if (isTestMode) {
+        // In test mode we skip window creation so Playwright can drive the app
+        // via its Electron launch API without an unwanted visible window.
+        console.log('[desktop-main] HYVEON_TEST_MODE active — skipping window creation');
+        return;
+      }
+
       createWindow();
 
       // On macOS re-create the window when the dock icon is clicked and there
