@@ -1,4 +1,18 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+
+/** Absolute path to the repo root (three directories above this config). */
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+
+/** Absolute path to the electron-vite main output entry point. */
+export const electronMain = join(repoRoot, 'out', 'main', 'index.js');
+
+/** Environment variables injected into every Electron launch during e2e tests. */
+export const electronEnv: Record<string, string> = {
+  ...process.env as Record<string, string>,
+  HYVEON_TEST_MODE: '1',
+};
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -10,25 +24,14 @@ export default defineConfig({
     ? [['github'], ['html', { open: 'never' }]]
     : [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:4173',
     trace: 'retain-on-failure',
     // Video requires ffmpeg which hangs on install in CI; traces are sufficient
     video: process.env.CI ? 'off' : 'retain-on-failure',
   },
   projects: [
     {
-      name: 'chromium',
-      use: {
-        ...devices['Desktop Chrome'],
-        // In CI use the pre-installed system Chrome to avoid downloading Chromium
-        ...(process.env.CI ? { channel: 'chrome' } : {}),
-      },
+      name: 'electron',
     },
   ],
-  webServer: {
-    command: 'npm run build && npm run preview',
-    url: 'http://localhost:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  globalSetup: './e2e/electron-global-setup.ts',
 });
