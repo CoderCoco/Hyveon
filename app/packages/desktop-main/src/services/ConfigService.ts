@@ -4,7 +4,6 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { logger } from '../logger.js';
-import { EMBEDDED_TFSTATE } from '../generated/tfstate.js';
 
 /** Absolute path to the `dist/services/` directory at runtime. */
 const _dirname = dirname(fileURLToPath(import.meta.url));
@@ -79,7 +78,14 @@ const DEFAULT_CONFIG: WatchdogConfig = {
  */
 @Injectable()
 export class ConfigService {
-  private tfCache: TfOutputs | null = null;
+  /**
+   * Memoised tfstate projection. Tri-state: `undefined` means "not loaded yet",
+   * `null` means "loaded, but no usable state" (absent/empty/placeholder), and
+   * an object is a parsed projection. Caching `null` matters because callers on
+   * polling paths (e.g. status) hit this every tick — without it, an undeployed
+   * stack would re-read the file and re-log a warning on every call.
+   */
+  private tfCache: TfOutputs | null | undefined = undefined;
 
   /**
    * Drop the cached tfstate parse. Called from the `/api/games` and
@@ -87,18 +93,16 @@ export class ConfigService {
    * a server restart; tests also call it between scenarios.
    */
   invalidateCache(): void {
-    this.tfCache = null;
+    this.tfCache = undefined;
   }
 
   /**
    * Parse `terraform/terraform.tfstate` (once, then memoised) and project the
-   * pieces the app cares about. Falls back to the state embedded at build time
-   * by `scripts/embed-tfstate.mjs` when the runtime file is absent. Returns
-   * `null` when neither source is available — callers treat that as "infra not
-   * deployed yet" and degrade gracefully.
+   * pieces the app cares about. Returns `null` when the runtime file is absent
+   * — callers treat that as "infra not deployed yet" and degrade gracefully.
    */
   getTfOutputs(): TfOutputs | null {
-    if (this.tfCache) return this.tfCache;
+    if (this.tfCache !== undefined) return this.tfCache;
 
     type RawState = { outputs?: Record<string, { value: unknown }> };
     let raw: RawState;
@@ -109,18 +113,24 @@ export class ConfigService {
         raw = JSON.parse(readFileSync(tfStatePath, 'utf-8')) as RawState;
       } catch (err) {
         logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
-        return null;
+        return (this.tfCache = null);
       }
-    } else if (EMBEDDED_TFSTATE) {
-      logger.debug('Using build-time embedded Terraform state');
-      raw = EMBEDDED_TFSTATE as unknown as RawState;
+      if (raw === null || raw === undefined) {
+        logger.warn('Terraform state file is empty or null', { path: tfStatePath });
+        return (this.tfCache = null);
+      }
     } else {
       logger.warn('Terraform state not found', { path: tfStatePath });
-      return null;
+      return (this.tfCache = null);
     }
 
     try {
-      const out = raw.outputs ?? {};
+      if (!raw.outputs) {
+        logger.warn('Terraform state has no outputs — infra not yet deployed', { path: tfStatePath });
+        return (this.tfCache = null);
+      }
+
+      const out = raw.outputs;
       const get = <T>(key: string, fallback: T): T =>
         key in out ? (out[key]!.value as T) : fallback;
 
@@ -148,7 +158,7 @@ export class ConfigService {
       return this.tfCache;
     } catch (err) {
       logger.error('Failed to parse Terraform state', { err });
-      return null;
+      return (this.tfCache = null);
     }
   }
 

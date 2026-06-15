@@ -48,15 +48,18 @@ jobs:
         # terraform/terraform.tfstate is gitignored and will never exist in a
         # clean CI checkout. electron-builder silently skips a missing
         # extraResources 'from' path, which would produce an installer that
-        # lacks the tfstate file entirely. Create an empty placeholder so
-        # electron-builder always includes the file. ConfigService falls back
-        # to the build-time-embedded tfstate.ts when the runtime file is empty,
-        # so shipping an empty state file is safe for CI-produced installers.
+        # lacks the tfstate file entirely. Create a null placeholder so
+        # electron-builder always includes the file. ConfigService.getTfOutputs()
+        # returns null for any state file that lacks an 'outputs' key (including
+        # 'null' and '{}'), so the app correctly shows "not deployed" until the
+        # operator provides a real state file. Using 'null' here makes the intent
+        # explicit and avoids any risk of the placeholder being mistaken for a
+        # valid (all-defaults) state.
         shell: bash
         run: |
           if [ ! -f terraform/terraform.tfstate ]; then
-            echo "terraform/terraform.tfstate not found — creating empty placeholder for packaging."
-            echo '{}' > terraform/terraform.tfstate
+            echo "terraform/terraform.tfstate not found — creating null placeholder for packaging."
+            echo 'null' > terraform/terraform.tfstate
           fi
 
       - name: Build workspace packages

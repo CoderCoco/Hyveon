@@ -41,8 +41,8 @@ vi.mock('@nestjs/core', () => ({
 }));
 
 /**
- * Stub AppModule so the deep Nest module graph (which requires the generated
- * tfstate file and AWS service dependencies) is never traversed during this
+ * Stub AppModule so the deep Nest module graph (which pulls in AWS service
+ * dependencies and their transitive imports) is never traversed during this
  * unit test.
  */
 vi.mock('./app.module.js', () => ({
