@@ -254,4 +254,48 @@ describe('electron-entry', () => {
     expect(mockQuit).toHaveBeenCalledOnce();
     expect(MockBrowserWindow).not.toHaveBeenCalled();
   });
+
+  it('should still create the window and log the test seam when HYVEON_TEST_MODE=1', async () => {
+    vi.resetModules();
+    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('HYVEON_TEST_MODE', '1');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    // Test mode is a forward-looking seam, not a behaviour switch: the window
+    // must still open so Playwright's _electron.launch() can drive it.
+    expect(MockBrowserWindow).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(
+      '[desktop-main] HYVEON_TEST_MODE active — test seam enabled',
+    );
+
+    logSpy.mockRestore();
+  });
+
+  it('should not log the test seam when HYVEON_TEST_MODE is unset', async () => {
+    vi.resetModules();
+    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('HYVEON_TEST_MODE', '');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    expect(MockBrowserWindow).toHaveBeenCalledOnce();
+    expect(logSpy).not.toHaveBeenCalledWith(
+      '[desktop-main] HYVEON_TEST_MODE active — test seam enabled',
+    );
+
+    logSpy.mockRestore();
+  });
 });

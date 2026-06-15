@@ -16,9 +16,10 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     webPreferences: {
-      // electron-vite outputs the preload bundle to out/preload/index.js by
-      // default. __dirname here resolves to out/main, so we go one level up.
-      preload: path.join(__dirname, '../preload/index.js'),
+      // electron-vite names the preload bundle after the input file, so the
+      // output lands at out/preload/preload.js. __dirname here resolves to
+      // out/main, so we go one level up.
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       sandbox: true,
     },
@@ -34,17 +35,21 @@ function createWindow(): void {
   });
 }
 
-/** True when Playwright (or another test harness) sets HYVEON_TEST_MODE=1. */
+/**
+ * True when Playwright (or another test harness) sets HYVEON_TEST_MODE=1.
+ *
+ * This is a forward-looking seam, not a behaviour switch: the window is still
+ * created so Playwright's `_electron.launch()` can resolve `firstWindow()` and
+ * assert on the renderer. F.7 (#198) will key the preload's
+ * `window.gsd.__test.mock()` injection off this same flag.
+ */
 const isTestMode = process.env.HYVEON_TEST_MODE === '1';
 
 app.whenReady().then(() => {
   bootstrap()
     .then(() => {
       if (isTestMode) {
-        // In test mode we skip window creation so Playwright can drive the app
-        // via its Electron launch API without an unwanted visible window.
-        console.log('[desktop-main] HYVEON_TEST_MODE active — skipping window creation');
-        return;
+        console.log('[desktop-main] HYVEON_TEST_MODE active — test seam enabled');
       }
 
       createWindow();
