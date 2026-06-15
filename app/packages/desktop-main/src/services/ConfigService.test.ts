@@ -47,6 +47,18 @@ describe('ConfigService', () => {
       expect(service.getTfOutputs()).toBeNull();
     });
 
+    it('should return null when the state file contains the literal null', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue('null');
+      expect(service.getTfOutputs()).toBeNull();
+    });
+
+    it('should return null when the state file has no outputs key', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue('{}');
+      expect(service.getTfOutputs()).toBeNull();
+    });
+
     it('should parse outputs and fill defaults for missing keys', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue(
