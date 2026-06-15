@@ -59,10 +59,18 @@ export default defineConfig({
       testMatch: ELECTRON_SPEC,
     },
   ],
-  webServer: {
-    command: 'npm run build && npm run preview',
-    url: 'http://localhost:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // Skip the Vite build+preview when only the electron project is being tested
+  // (e.g. `npx playwright test --project=electron` or PLAYWRIGHT_PROJECT=electron).
+  // The electron project launches the app via `_electron.launch()` and never
+  // opens a browser tab against localhost:4173, so starting the dev server
+  // would be pure overhead in that scenario.
+  webServer:
+    process.env.PLAYWRIGHT_PROJECT === 'electron'
+      ? undefined
+      : {
+          command: 'npm run build && npm run preview',
+          url: 'http://localhost:4173',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
 });
