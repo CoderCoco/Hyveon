@@ -108,13 +108,22 @@ export class ConfigService {
         logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
         return null;
       }
+      if (raw === null || raw === undefined) {
+        logger.warn('Terraform state file is empty or null', { path: tfStatePath });
+        return null;
+      }
     } else {
       logger.warn('Terraform state not found', { path: tfStatePath });
       return null;
     }
 
     try {
-      const out = raw.outputs ?? {};
+      if (!raw.outputs) {
+        logger.warn('Terraform state has no outputs — infra not yet deployed', { path: tfStatePath });
+        return null;
+      }
+
+      const out = raw.outputs;
       const get = <T>(key: string, fallback: T): T =>
         key in out ? (out[key]!.value as T) : fallback;
 
