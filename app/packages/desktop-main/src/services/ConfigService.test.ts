@@ -95,6 +95,26 @@ describe('ConfigService', () => {
       expect(mockRead).toHaveBeenCalledTimes(1);
     });
 
+    it('should cache a null result so an undeployed stack is not re-read on every call', () => {
+      mockExists.mockReturnValue(false);
+
+      expect(service.getTfOutputs()).toBeNull();
+      expect(service.getTfOutputs()).toBeNull();
+
+      expect(mockExists).toHaveBeenCalledTimes(1);
+    });
+
+    it('should re-read after invalidateCache when the previous result was null', () => {
+      mockExists.mockReturnValue(false);
+      expect(service.getTfOutputs()).toBeNull();
+
+      service.invalidateCache();
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(makeState({ aws_region: { value: 'eu-west-1' } }));
+
+      expect(service.getTfOutputs()!.aws_region).toBe('eu-west-1');
+    });
+
     it('should force a re-read after invalidateCache', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue(makeState({ aws_region: { value: 'a' } }));

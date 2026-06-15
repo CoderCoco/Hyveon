@@ -78,7 +78,14 @@ const DEFAULT_CONFIG: WatchdogConfig = {
  */
 @Injectable()
 export class ConfigService {
-  private tfCache: TfOutputs | null = null;
+  /**
+   * Memoised tfstate projection. Tri-state: `undefined` means "not loaded yet",
+   * `null` means "loaded, but no usable state" (absent/empty/placeholder), and
+   * an object is a parsed projection. Caching `null` matters because callers on
+   * polling paths (e.g. status) hit this every tick — without it, an undeployed
+   * stack would re-read the file and re-log a warning on every call.
+   */
+  private tfCache: TfOutputs | null | undefined = undefined;
 
   /**
    * Drop the cached tfstate parse. Called from the `/api/games` and
@@ -86,7 +93,7 @@ export class ConfigService {
    * a server restart; tests also call it between scenarios.
    */
   invalidateCache(): void {
-    this.tfCache = null;
+    this.tfCache = undefined;
   }
 
   /**
@@ -95,7 +102,7 @@ export class ConfigService {
    * — callers treat that as "infra not deployed yet" and degrade gracefully.
    */
   getTfOutputs(): TfOutputs | null {
-    if (this.tfCache) return this.tfCache;
+    if (this.tfCache !== undefined) return this.tfCache;
 
     type RawState = { outputs?: Record<string, { value: unknown }> };
     let raw: RawState;
@@ -106,21 +113,21 @@ export class ConfigService {
         raw = JSON.parse(readFileSync(tfStatePath, 'utf-8')) as RawState;
       } catch (err) {
         logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
-        return null;
+        return (this.tfCache = null);
       }
       if (raw === null || raw === undefined) {
         logger.warn('Terraform state file is empty or null', { path: tfStatePath });
-        return null;
+        return (this.tfCache = null);
       }
     } else {
       logger.warn('Terraform state not found', { path: tfStatePath });
-      return null;
+      return (this.tfCache = null);
     }
 
     try {
       if (!raw.outputs) {
         logger.warn('Terraform state has no outputs — infra not yet deployed', { path: tfStatePath });
-        return null;
+        return (this.tfCache = null);
       }
 
       const out = raw.outputs;
@@ -151,7 +158,7 @@ export class ConfigService {
       return this.tfCache;
     } catch (err) {
       logger.error('Failed to parse Terraform state', { err });
-      return null;
+      return (this.tfCache = null);
     }
   }
 
