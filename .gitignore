@@ -41,5 +41,8 @@ app/packages/web/dist-integration/
 # Vitest coverage output
 app/coverage/
 
+# electron-vite build output (main/preload/renderer bundles)
+out/
+
 # electron-builder packaged artifacts
 release/
