@@ -24,12 +24,16 @@ jobs:
       - run: npm ci
 
       - name: Install Playwright system dependencies
-        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium
+        # Installs the shared libs needed by both the Chromium project and the
+        # Electron runtime; xvfb provides the virtual display Electron requires.
+        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium && sudo apt-get install -y xvfb
         working-directory: app/packages/web
         timeout-minutes: 5
 
-
-      - run: npm run app:test:e2e
+      # The Electron project (electron-smoke.spec.ts) needs a display server on
+      # Linux; xvfb-run supplies a headless one. The Chromium project runs in
+      # the same invocation against `vite preview`.
+      - run: xvfb-run -a npm run app:test:e2e
 
       - uses: actions/upload-artifact@v4
         if: failure()
