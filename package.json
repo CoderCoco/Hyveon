@@ -27,7 +27,7 @@
     "app:test:watch": "npm run test:watch     -w game-server-manager",
     "app:lint": "npm run lint           -w game-server-manager",
     "app:lint:fix": "npm run lint:fix       -w game-server-manager",
-    "app:test:e2e": "npm run test:e2e       -w @hyveon/web",
+    "app:test:e2e": "npm run build -w @hyveon/shared && npm run test:e2e -w @hyveon/web",
     "app:test:integration": "npm run build -w @hyveon/desktop-main && npm run test:integration -w @hyveon/web",
     "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts",
     "desktop:dev": "electron-vite dev",
