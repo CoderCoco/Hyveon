@@ -23,12 +23,10 @@ jobs:
 
       - run: npm ci
 
-      - name: Build Electron main bundle
-        # Required so out/main/index.js exists when the electron-smoke spec
-        # calls _electron.launch(); without this the test crashes immediately
-        # on a fresh checkout.
-        run: npm run desktop:build
-        timeout-minutes: 10
+      # No explicit desktop:build step: @hyveon/web's `test:e2e` script always
+      # runs `desktop:build` before Playwright, so out/main/index.js is freshly
+      # built (never stale) for the electron-smoke spec's `_electron.launch()`.
+      # A separate build step here would just double the build time.
 
       - name: Install Playwright system dependencies
         # Installs the shared libs needed by both the Chromium project and the
