@@ -8,19 +8,23 @@ const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 /** Absolute path to the electron-vite main output entry point. */
 export const electronMain = join(repoRoot, 'out', 'main', 'index.js');
 
-/**
- * Environment variables injected into every Electron launch during e2e tests.
- *
- * `ELECTRON_RENDERER_URL` is set by electron-vite's dev server and, when
- * present, causes the main process to call `win.loadURL()` instead of
- * `win.loadFile()`. Explicitly remove it (and any other dev-mode renderer
- * vars) so packaged-renderer smoke tests always exercise the `loadFile()` path
- * even when run from a shell that still has dev-server variables set.
- */
+// Strip `ELECTRON_RENDERER_URL` from the inherited environment. electron-vite's
+// dev server sets it, and when present the main process calls `win.loadURL()`
+// instead of `win.loadFile()`. Removing it ensures packaged-renderer smoke
+// tests always exercise the `loadFile()` path even when run from a shell that
+// still has dev-server variables set.
 const {
   ELECTRON_RENDERER_URL: _rendererUrl,
   ...inheritedEnv
 } = process.env as Record<string, string>;
+
+/**
+ * Environment variables injected into every Electron launch during e2e tests.
+ *
+ * Inherits the current environment (minus `ELECTRON_RENDERER_URL`, stripped
+ * above) plus `HYVEON_TEST_MODE=1`, which switches the main process into its
+ * test seam.
+ */
 export const electronEnv: Record<string, string> = {
   ...inheritedEnv,
   HYVEON_TEST_MODE: '1',
