@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bootstrap } from './main.js';
+import { electronRendererUrl, isTestMode } from './env.js';
 
 // electron-vite injects __dirname for main-process entries, but we also
 // compute it explicitly via import.meta.url so the file is valid plain ESM.
@@ -25,8 +26,9 @@ function createWindow(): void {
     },
   });
 
-  const load = process.env.ELECTRON_RENDERER_URL
-    ? win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  const rendererUrl = electronRendererUrl();
+  const load = rendererUrl
+    ? win.loadURL(rendererUrl)
     : win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   load.catch((err: unknown) => {
@@ -35,20 +37,10 @@ function createWindow(): void {
   });
 }
 
-/**
- * True when Playwright (or another test harness) sets HYVEON_TEST_MODE=1.
- *
- * This is a forward-looking seam, not a behaviour switch: the window is still
- * created so Playwright's `_electron.launch()` can resolve `firstWindow()` and
- * assert on the renderer. F.7 (#198) will key the preload's
- * `window.gsd.__test.mock()` injection off this same flag.
- */
-const isTestMode = process.env.HYVEON_TEST_MODE === '1';
-
 app.whenReady().then(() => {
   bootstrap()
     .then(() => {
-      if (isTestMode) {
+      if (isTestMode()) {
         console.log('[desktop-main] HYVEON_TEST_MODE active — test seam enabled');
       }
 
