@@ -24,25 +24,22 @@ jobs:
       - run: npm ci
 
       - name: Install Electron binary
-        # npm ci leaves node_modules/electron without a path.txt, so the
-        # electron-smoke spec's `_electron.launch()` -> require('electron/index.js')
-        # throws "Electron failed to install correctly". Force a clean download
-        # with @electron/get debug logging so we can see exactly what happens,
-        # then assert path.txt exists.
+        # npm ci caches a corrupt/truncated electron zip in ~/.cache/electron,
+        # so install.js gets a "Cache hit" and extracts an incomplete dist
+        # (only locales/, no binary, no path.txt). require('electron/index.js')
+        # then throws "Electron failed to install correctly", failing the
+        # electron-smoke spec. Clear the bad cache and force a fresh,
+        # checksum-validated download (a truncated re-download now fails loudly
+        # on checksum mismatch instead of silently caching garbage), then assert
+        # the binary resolves so any regression fails at this step, not mid-test.
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: ''
-          DEBUG: '@electron/get:*'
+          force_no_cache: 'true'
         run: |
-          rm -rf node_modules/electron/dist node_modules/electron/path.txt
-          set +e
+          rm -rf node_modules/electron/dist node_modules/electron/path.txt ~/.cache/electron
           node node_modules/electron/install.js
-          echo "==== install.js exit=$? ===="
-          set -e
-          echo "==== node_modules/electron contents ===="
-          ls -la node_modules/electron/
-          echo "==== dist contents ===="
-          ls -la node_modules/electron/dist/ 2>/dev/null || echo "NO dist/"
           test -f node_modules/electron/path.txt
+          node -e "require('electron/index.js'); console.log('electron resolves OK')"
         timeout-minutes: 5
 
       # No explicit desktop:build step: @hyveon/web's `test:e2e` script always
