@@ -23,6 +23,15 @@ jobs:
 
       - run: npm ci
 
+      - name: Install Electron binary
+        # electron is a hoisted devDependency whose postinstall binary download
+        # does not reliably materialize under `npm ci` in CI, so the
+        # electron-smoke spec's `_electron.launch()` fails with "Electron failed
+        # to install correctly". Run the install script explicitly to fetch the
+        # platform binary. Idempotent — a no-op when the binary already exists.
+        run: node node_modules/electron/install.js
+        timeout-minutes: 5
+
       # No explicit desktop:build step: @hyveon/web's `test:e2e` script always
       # runs `desktop:build` before Playwright, so out/main/index.js is freshly
       # built (never stale) for the electron-smoke spec's `_electron.launch()`.
