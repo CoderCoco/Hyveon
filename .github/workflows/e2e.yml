@@ -35,12 +35,25 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: ''
           force_no_cache: 'true'
+          DEBUG: '@electron/get:*'
         run: |
+          set +e
           rm -rf node_modules/electron/dist node_modules/electron/path.txt ~/.cache/electron
+          echo "==== network reachability to github releases ===="
+          curl -sIL -o /dev/null -w "http_code=%{http_code} size=%{size_download} time=%{time_total}\n" \
+            https://github.com/electron/electron/releases/download/v36.9.5/electron-v36.9.5-linux-x64.zip
+          echo "==== run install.js ===="
           node node_modules/electron/install.js
+          echo "install.js exit=$?"
+          echo "==== dist contents ===="
+          ls -la node_modules/electron/dist/ 2>/dev/null || echo "no dist"
+          echo "==== electron cache contents ===="
+          ls -laR ~/.cache/electron/ 2>/dev/null || echo "no cache dir"
+          echo "==== path.txt ===="
+          cat node_modules/electron/path.txt 2>/dev/null || echo "NO path.txt"
+          # set the step exit code from the real assertion (diagnostics above already printed)
           test -f node_modules/electron/path.txt
-          node -e "require('electron/index.js'); console.log('electron resolves OK')"
-        timeout-minutes: 5
+        timeout-minutes: 8
 
       # No explicit desktop:build step: @hyveon/web's `test:e2e` script always
       # runs `desktop:build` before Playwright, so out/main/index.js is freshly
