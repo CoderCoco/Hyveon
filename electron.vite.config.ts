@@ -8,6 +8,13 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
   main: {
+    // `@nestjs/microservices` is bundled into the main process here, and its
+    // optional-transport loader statically pulls in `@grpc/proto-loader`. Even
+    // though we use a custom Electron IPC transport (never gRPC), that import
+    // is hoisted to a top-level `import` in the ES bundle and must resolve at
+    // startup or the main process throws ERR_MODULE_NOT_FOUND before any window
+    // opens. `@grpc/proto-loader` is therefore a required dependency of
+    // `@hyveon/desktop-main` despite appearing unused — do not remove it.
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {

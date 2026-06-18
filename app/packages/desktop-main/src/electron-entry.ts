@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bootstrap } from './main.js';
+import { electronRendererUrl, isTestMode } from './env.js';
 
 // electron-vite injects __dirname for main-process entries, but we also
 // compute it explicitly via import.meta.url so the file is valid plain ESM.
@@ -16,16 +17,18 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     webPreferences: {
-      // electron-vite outputs the preload bundle to out/preload/index.js by
-      // default. __dirname here resolves to out/main, so we go one level up.
-      preload: path.join(__dirname, '../preload/index.js'),
+      // electron-vite names the preload bundle after the input file, so the
+      // output lands at out/preload/preload.js. __dirname here resolves to
+      // out/main, so we go one level up.
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       sandbox: true,
     },
   });
 
-  const load = process.env.ELECTRON_RENDERER_URL
-    ? win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  const rendererUrl = electronRendererUrl();
+  const load = rendererUrl
+    ? win.loadURL(rendererUrl)
     : win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   load.catch((err: unknown) => {
@@ -37,6 +40,10 @@ function createWindow(): void {
 app.whenReady().then(() => {
   bootstrap()
     .then(() => {
+      if (isTestMode()) {
+        console.log('[desktop-main] HYVEON_TEST_MODE active — test seam enabled');
+      }
+
       createWindow();
 
       // On macOS re-create the window when the dock icon is clicked and there

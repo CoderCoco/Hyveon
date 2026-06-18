@@ -23,13 +23,45 @@ jobs:
 
       - run: npm ci
 
+      - name: Install Electron binary
+        # electron's install.js downloads the full zip into ~/.cache/electron,
+        # but its un-awaited async extraction races the process exit on this
+        # runner: the process exits ~20ms after the download completes, leaving
+        # node_modules/electron/dist with only locales/ (no binary, no version,
+        # no path.txt). require('electron/index.js') then throws "Electron failed
+        # to install correctly", failing the electron-smoke spec. Run install.js
+        # to populate the download cache, then extract the cached zip ourselves
+        # and write path.txt so the layout is deterministic and complete.
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ''
+        run: |
+          node node_modules/electron/install.js || true
+          ZIP="$(find "$HOME/.cache/electron" -name 'electron-v*-linux-x64.zip' | head -n1)"
+          test -n "$ZIP"
+          rm -rf node_modules/electron/dist
+          mkdir -p node_modules/electron/dist
+          unzip -q -o "$ZIP" -d node_modules/electron/dist
+          printf electron > node_modules/electron/path.txt
+          test -x node_modules/electron/dist/electron
+          node -e "require('electron/index.js'); console.log('electron resolves OK')"
+        timeout-minutes: 5
+
+      # No explicit desktop:build step: @hyveon/web's `test:e2e` script always
+      # runs `desktop:build` before Playwright, so out/main/index.js is freshly
+      # built (never stale) for the electron-smoke spec's `_electron.launch()`.
+      # A separate build step here would just double the build time.
+
       - name: Install Playwright system dependencies
-        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium
+        # Installs the shared libs needed by both the Chromium project and the
+        # Electron runtime; xvfb provides the virtual display Electron requires.
+        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium && sudo apt-get install -y xvfb
         working-directory: app/packages/web
         timeout-minutes: 5
 
-
-      - run: npm run app:test:e2e
+      # The Electron project (electron-smoke.spec.ts) needs a display server on
+      # Linux; xvfb-run supplies a headless one. The Chromium project runs in
+      # the same invocation against `vite preview`.
+      - run: xvfb-run -a npm run app:test:e2e
 
       - uses: actions/upload-artifact@v4
         if: failure()

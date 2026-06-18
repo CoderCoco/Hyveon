@@ -259,4 +259,10 @@ export const test = base.extend<E2EFixtures>({
   },
 });
 
-export { expect } from '@playwright/test';
+// `_electron` is re-exported so Electron specs import their whole Playwright
+// surface (`test`, `expect`, `_electron`) from this single shared entrypoint,
+// matching the convention that non-auth-gate specs never reach into
+// `@playwright/test` directly. The extended `test` carries browser-page
+// fixtures, but those are lazy — an Electron spec that drives its own
+// `_electron.launch()` and requests no page fixtures never instantiates them.
+export { expect, _electron } from '@playwright/test';

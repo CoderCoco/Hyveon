@@ -134,7 +134,7 @@ describe('electron-entry', () => {
 
   it('should call bootstrap() inside the app.whenReady() callback', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     await import('./electron-entry.js');
     await flushPromises();
@@ -149,7 +149,7 @@ describe('electron-entry', () => {
 
   it('should call win.loadURL() with the dev server URL when ELECTRON_RENDERER_URL is set', async () => {
     vi.resetModules();
-    process.env['ELECTRON_RENDERER_URL'] = 'http://localhost:5173';
+    vi.stubEnv('ELECTRON_RENDERER_URL', 'http://localhost:5173');
 
     await import('./electron-entry.js');
     await flushPromises();
@@ -165,7 +165,7 @@ describe('electron-entry', () => {
 
   it('should call win.loadFile() with the production renderer path when ELECTRON_RENDERER_URL is not set', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     await import('./electron-entry.js');
     await flushPromises();
@@ -184,7 +184,7 @@ describe('electron-entry', () => {
 
   it('should call app.quit() on window-all-closed for non-macOS platforms', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     await import('./electron-entry.js');
     await flushPromises();
@@ -204,7 +204,7 @@ describe('electron-entry', () => {
 
   it('should NOT call app.quit() on window-all-closed on macOS', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     await import('./electron-entry.js');
     await flushPromises();
@@ -224,7 +224,7 @@ describe('electron-entry', () => {
 
   it('should call app.quit() when the renderer fails to load', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     mockLoadFile.mockRejectedValueOnce(new Error('renderer bundle missing'));
 
@@ -240,7 +240,7 @@ describe('electron-entry', () => {
 
   it('should call app.quit() and not open a window when bootstrap() rejects', async () => {
     vi.resetModules();
-    delete process.env['ELECTRON_RENDERER_URL'];
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
 
     bootstrapMock.mockRejectedValueOnce(new Error('IPC init failure'));
 
@@ -253,5 +253,49 @@ describe('electron-entry', () => {
 
     expect(mockQuit).toHaveBeenCalledOnce();
     expect(MockBrowserWindow).not.toHaveBeenCalled();
+  });
+
+  it('should still create the window and log the test seam when HYVEON_TEST_MODE=1', async () => {
+    vi.resetModules();
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
+    vi.stubEnv('HYVEON_TEST_MODE', '1');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    // Test mode is a forward-looking seam, not a behaviour switch: the window
+    // must still open so Playwright's _electron.launch() can drive it.
+    expect(MockBrowserWindow).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(
+      '[desktop-main] HYVEON_TEST_MODE active — test seam enabled',
+    );
+
+    logSpy.mockRestore();
+  });
+
+  it('should not log the test seam when HYVEON_TEST_MODE is unset', async () => {
+    vi.resetModules();
+    vi.stubEnv('ELECTRON_RENDERER_URL', undefined);
+    vi.stubEnv('HYVEON_TEST_MODE', '');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await import('./electron-entry.js');
+    await flushPromises();
+
+    expect(whenReadyCallbacks).toHaveLength(1);
+    whenReadyCallbacks[0]!();
+    await flushPromises();
+
+    expect(MockBrowserWindow).toHaveBeenCalledOnce();
+    expect(logSpy).not.toHaveBeenCalledWith(
+      '[desktop-main] HYVEON_TEST_MODE active — test seam enabled',
+    );
+
+    logSpy.mockRestore();
   });
 });
