@@ -17,7 +17,7 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-import type { GsdApi, LogChunk } from './gsd-api.js';
+import type { GsdApi, GsdTestApi, LogChunk } from './gsd-api.js';
 
 /**
  * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
@@ -50,7 +50,11 @@ function registerMock(channel: string, handler: unknown): void {
 function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
   const mock = mockRegistry.get(channel);
   if (mock !== undefined) {
-    return Promise.resolve(mock(...args)) as Promise<T>;
+    try {
+      return Promise.resolve(mock(...args)) as Promise<T>;
+    } catch (err) {
+      return Promise.reject(err) as Promise<T>;
+    }
   }
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
 }
@@ -196,7 +200,7 @@ const api: GsdApi = {
 /** Whether this process was started in test mode by the integration test harness. */
 const isTestMode = process.env['HYVEON_TEST_MODE'] === '1';
 
-const gsdBridge: Record<string, unknown> = { ...api };
+const gsdBridge: GsdApi & { __test?: GsdTestApi } = { ...api };
 
 if (isTestMode) {
   /**
@@ -207,7 +211,7 @@ if (isTestMode) {
    * `clearMocks` and `reset` both clear the registry so state does not leak
    * between test cases (mirror the {@link GsdTestApi} contract).
    */
-  gsdBridge['__test'] = {
+  gsdBridge.__test = {
     mock: registerMock,
     /** Clears all registered mock handlers from the registry. */
     clearMocks: () => mockRegistry.clear(),
