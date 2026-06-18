@@ -103,6 +103,6 @@ export function clear(): void {
  * This helper is intentionally **not** exported from the package root — import
  * it directly from the `test-mock-registry` export path.
  */
-export function buildMockGsd(): Partial<GsdApi> {
-  return { ..._registry } as Partial<GsdApi>;
+export function buildMockGsd(): Partial<GsdPartialNamespaceMap> {
+  return { ..._registry };
 }
