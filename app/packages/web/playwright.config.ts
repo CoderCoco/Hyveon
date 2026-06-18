@@ -37,13 +37,14 @@ export const electronEnv: Record<string, string> = {
  *    stub `/api/*` over HTTP via `page.route()` and navigate to `baseURL`, so
  *    they cannot run under Electron until the IPC mock surface (F.7/#198) lands.
  *    Each existing spec migrates to Electron under its own issue (F.2–F.6).
- *  - `electron` runs the new `_electron.launch()` smoke spec against the
- *    packaged main bundle. Each spec manages its own ElectronApplication.
+ *  - `electron` runs the new `_electron.launch()` smoke spec and the IPC mock
+ *    seam spec against the packaged main bundle. Each spec manages its own
+ *    ElectronApplication.
  *
- * `electron-smoke.spec.ts` is matched only by the `electron` project and
- * ignored by `chromium`; every other spec is the reverse.
+ * `electron-smoke.spec.ts` and `ipc-mock.spec.ts` are matched only by the
+ * `electron` project and ignored by `chromium`; every other spec is the reverse.
  */
-const ELECTRON_SPEC = '**/electron-smoke.spec.ts';
+const ELECTRON_SPECS = ['**/electron-smoke.spec.ts', '**/ipc-mock.spec.ts'];
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -62,7 +63,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: ELECTRON_SPEC,
+      testIgnore: ELECTRON_SPECS,
       use: {
         ...devices['Desktop Chrome'],
         baseURL: 'http://localhost:4173',
@@ -72,7 +73,7 @@ export default defineConfig({
     },
     {
       name: 'electron',
-      testMatch: ELECTRON_SPEC,
+      testMatch: ELECTRON_SPECS,
     },
   ],
   // Skip the Vite build+preview when only the electron project is being tested.
