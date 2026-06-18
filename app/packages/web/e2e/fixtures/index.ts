@@ -266,3 +266,6 @@ export const test = base.extend<E2EFixtures>({
 // fixtures, but those are lazy — an Electron spec that drives its own
 // `_electron.launch()` and requests no page fixtures never instantiates them.
 export { expect, _electron } from '@playwright/test';
+
+export { launchElectron, applyGsdMocks } from './electron-launch.js';
+export type { ElectronHandle } from './electron-launch.js';
