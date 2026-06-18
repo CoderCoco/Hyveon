@@ -206,6 +206,30 @@ The test suite has three complementary tiers:
 - Use the `authedPage` fixture (token pre-seeded in localStorage) only when a spec needs raw `Page` access (e.g. to call `stubApis` or `addInitScript`); otherwise prefer the higher-level page-object fixtures.
 - Stubs must cover every `/api/*` endpoint the page hits, or the catch-all returns 404 and the test will surface the missing stub quickly.
 
+**Electron e2e IPC mock seam (`window.gsd.__test.mock`):**
+
+The Electron project in Playwright launches the packaged app via `_electron.launch()` with `HYVEON_TEST_MODE=1` in the process environment (set in `playwright.config.ts:electronEnv`). That env var gates two things:
+
+1. **Main process** (`desktop-main/src/electron-entry.ts`) logs `[desktop-main] HYVEON_TEST_MODE active — test seam enabled` at startup. The window still opens normally — the flag is informational, not a behaviour switch, so `_electron.launch()` can drive the real UI.
+2. **Preload script** (`desktop-preload/src/preload.ts`) checks `process.env.HYVEON_TEST_MODE === '1'` before attaching the `__test` namespace to the `gsd` bridge. When the flag is set the bridge gains:
+
+   ```ts
+   window.gsd.__test.mock(channel, handler)
+   ```
+
+   `channel` is an IPC channel string (e.g. `'games.list'`). `handler` is a replacement function or a plain value. Thereafter, every `invoke(channel, ...args)` call in the preload consults a `Map<string, fn>` before forwarding to `ipcRenderer.invoke`, so the Electron main process is never reached for mocked channels.
+
+**Production-gating guarantee.** When `HYVEON_TEST_MODE` is absent (the default for packaged / production builds), the `if (isTestMode)` branch in the preload is never entered and `window.gsd.__test` is `undefined`. The `contextBridge.exposeInMainWorld` call only ever exposes the production API namespaces. There is no path by which end users can reach the mock registry.
+
+**Two mock surfaces — choose the right one:**
+
+| Surface | File | When to use |
+|---------|------|-------------|
+| `window.gsd.__test.mock(channel, handler)` | `desktop-preload/src/preload.ts` | Playwright Electron e2e specs (`electron` project) that need to control IPC responses without running the Nest server. Called via `win.evaluate(...)` in spec `beforeEach`. |
+| `register(namespace, mock)` from `@hyveon/desktop-preload/test-mock-registry` | `desktop-preload/src/test-mock-registry.ts` | Vitest unit tests running under jsdom. Build a partial namespace stub with `vi.fn()`, call `register('games', stub)`, then `vi.stubGlobal('gsd', buildMockGsd())` so the component under test gets a fully-typed `window.gsd`. Call `clear()` in `afterEach`. |
+
+The `test-mock-registry` module is **not** imported by the preload script or any production code; it exists only for jsdom-environment test helpers.
+
 **Integration test conventions (tier 2):**
 - Specs live under `app/packages/web/e2e/integration-specs/`. Import `{ test, expect }` from `./index.js` (NOT from `@playwright/test`) — the extended `test` includes the `serverMocks`, `authedPage`, and `dashboard` fixtures.
 - `serverMocks` (`ServerMocks` from `e2e/fixtures/server-mocks.ts`) pushes queued responses to the test server via `POST /api/test/mocks/*`. Always include it in test parameters — it resets the MockStore before and after each spec automatically.
