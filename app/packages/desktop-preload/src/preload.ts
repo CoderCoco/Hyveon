@@ -39,16 +39,6 @@ function registerMock(channel: string, handler: unknown): void {
 }
 
 /**
- * Removes a previously registered mock so subsequent calls fall through
- * to the real IPC layer.
- *
- * @param channel - IPC channel name to deregister.
- */
-function deregisterMock(channel: string): void {
-  mockRegistry.delete(channel);
-}
-
-/**
  * Mock-aware `ipcRenderer.invoke` wrapper.  If a mock is registered for
  * the channel it is called with the supplied args and its return value
  * (synchronous or Promise) is awaited; otherwise the call is forwarded to
@@ -203,15 +193,21 @@ const api: GsdApi = {
   },
 };
 
-contextBridge.exposeInMainWorld('gsd', api);
+/** Whether this process was started in test mode by the integration test harness. */
+const isTestMode = process.env['HYVEON_TEST_MODE'] === '1';
 
-/**
- * Test-only mock injection surface.  Exposed as `window.__gsdMocks` so
- * Playwright / Vitest can register channel overrides without touching the
- * real IPC layer.  Only available when `contextBridge` allows it; production
- * builds gain nothing from this because no code calls it outside tests.
- */
-contextBridge.exposeInMainWorld('__gsdMocks', {
-  register: registerMock,
-  deregister: deregisterMock,
-});
+const gsdBridge: Record<string, unknown> = { ...api };
+
+if (isTestMode) {
+  /**
+   * Test-only injection surface, present only when `HYVEON_TEST_MODE=1`.
+   *
+   * Exposes `mock(channel, handler)` so Playwright / Vitest can register
+   * per-channel IPC overrides without touching the real Electron IPC layer.
+   */
+  gsdBridge['__test'] = {
+    mock: registerMock,
+  };
+}
+
+contextBridge.exposeInMainWorld('gsd', gsdBridge);
