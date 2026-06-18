@@ -304,10 +304,22 @@ export type GsdMockNamespaces = {
 /**
  * Test-only API surface injected under `window.gsd.__test`.
  *
- * Present only when the renderer runs inside a Vitest/jsdom environment where
- * the test harness has replaced `window.gsd` with a mock object.  Production
- * code must **never** reference this property — guard every access with an
- * `if (window.gsd?.__test)` check or, better, avoid it entirely outside tests.
+ * Present in two distinct scenarios:
+ *
+ * 1. **Vitest / jsdom unit tests** — the test harness replaces the entire
+ *    `window.gsd` object with a mock built from `test-mock-registry`; the mock
+ *    object includes this property so individual test cases can register
+ *    per-channel overrides via `window.gsd.__test.mock(channel, handler)`.
+ *
+ * 2. **Electron preload at runtime** — when the app is launched with
+ *    `HYVEON_TEST_MODE=1` (set by the Playwright integration-test harness),
+ *    `preload.ts` appends `__test` to the real `window.gsd` bridge so that
+ *    Playwright page scripts can inject IPC mocks without touching the real
+ *    Electron IPC layer.
+ *
+ * Production code must **never** reference this property — guard every access
+ * with an `if (window.gsd?.__test)` check or, better, avoid it entirely outside
+ * tests.
  */
 export interface GsdTestApi {
   /**
@@ -374,9 +386,14 @@ export interface GsdApi {
   /**
    * Test-only injection surface; `undefined` in production.
    *
-   * Present only when the renderer runs inside a Vitest/jsdom environment
-   * where the test harness has stubbed `window.gsd` with a mock object that
-   * includes this property.  Never reference this in production code paths.
+   * Present in two scenarios:
+   * - **Vitest / jsdom** — the test harness stubs the whole `window.gsd`
+   *   object with a mock that includes this property.
+   * - **Electron preload** — appended to the real bridge when the process is
+   *   started with `HYVEON_TEST_MODE=1` by the Playwright integration-test
+   *   harness.
+   *
+   * Never reference this in production code paths.
    */
   __test?: GsdTestApi;
 }
