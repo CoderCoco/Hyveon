@@ -286,6 +286,67 @@ export interface GsdDiagnosticsApi {
 }
 
 // ---------------------------------------------------------------------------
+// Test-only injection surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Mock namespace bag: a partial copy of every `GsdApi` namespace so test
+ * harnesses can supply only the methods they care about.
+ */
+export interface GsdMockNamespaces {
+  /** Optional games namespace mock. */
+  games?: Partial<GsdGamesApi>;
+  /** Optional costs namespace mock. */
+  costs?: Partial<GsdCostsApi>;
+  /** Optional logs namespace mock. */
+  logs?: Partial<GsdLogsApi>;
+  /** Optional files namespace mock. */
+  files?: Partial<GsdFilesApi>;
+  /** Optional discord namespace mock. */
+  discord?: Partial<GsdDiscordApi>;
+  /** Optional env namespace mock. */
+  env?: Partial<GsdEnvApi>;
+  /** Optional config namespace mock. */
+  config?: Partial<GsdConfigApi>;
+  /** Optional diagnostics namespace mock. */
+  diagnostics?: Partial<GsdDiagnosticsApi>;
+}
+
+/**
+ * Test-only API surface injected under `window.gsd.__test`.
+ *
+ * Present only when the renderer runs inside a Vitest/jsdom environment where
+ * the test harness has replaced `window.gsd` with a mock object.  Production
+ * code must **never** reference this property — guard every access with an
+ * `if (window.gsd?.__test)` check or, better, avoid it entirely outside tests.
+ */
+export interface GsdTestApi {
+  /**
+   * Partial mock implementations keyed by namespace name.
+   *
+   * Tests set individual namespace mocks here before rendering the component
+   * under test.  The API client reads the real namespace (e.g. `window.gsd.games`)
+   * at call time, so simply replacing `window.gsd.games` is sufficient — the
+   * `mock` bag is provided as a structured alternative for registries that need
+   * to enumerate which namespaces were mocked.
+   */
+  mock: GsdMockNamespaces;
+  /**
+   * Clears all mock implementations stored in `mock` and resets any recorded
+   * call counts on injected `vi.fn()` spies.
+   *
+   * Intended for use in `afterEach` hooks to prevent state leaking between
+   * test cases.
+   */
+  clearMocks: () => void;
+  /**
+   * Alias for {@link clearMocks} — provided for symmetry with Vitest's
+   * `vi.resetAllMocks()` naming convention.
+   */
+  reset: () => void;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level interface
 // ---------------------------------------------------------------------------
 
@@ -319,4 +380,12 @@ export interface GsdApi {
   config: GsdConfigApi;
   /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
   diagnostics: GsdDiagnosticsApi;
+  /**
+   * Test-only injection surface; `undefined` in production.
+   *
+   * Present only when the renderer runs inside a Vitest/jsdom environment
+   * where the test harness has stubbed `window.gsd` with a mock object that
+   * includes this property.  Never reference this in production code paths.
+   */
+  __test?: GsdTestApi;
 }
