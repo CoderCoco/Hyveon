@@ -204,9 +204,15 @@ if (isTestMode) {
    *
    * Exposes `mock(channel, handler)` so Playwright / Vitest can register
    * per-channel IPC overrides without touching the real Electron IPC layer.
+   * `clearMocks` and `reset` both clear the registry so state does not leak
+   * between test cases (mirror the {@link GsdTestApi} contract).
    */
   gsdBridge['__test'] = {
     mock: registerMock,
+    /** Clears all registered mock handlers from the registry. */
+    clearMocks: () => mockRegistry.clear(),
+    /** Alias for {@link clearMocks} — symmetry with `vi.resetAllMocks()`. */
+    reset: () => mockRegistry.clear(),
   };
 }
 
