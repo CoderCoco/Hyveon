@@ -8,11 +8,6 @@ import type { Page, Locator } from '@playwright/test';
 export class DiscordPage {
   constructor(public readonly page: Page) {}
 
-  /** Navigate to the Discord settings route. */
-  async goto(): Promise<void> {
-    await this.page.goto('/discord');
-  }
-
   // ── Page-level headings ──────────────────────────────────────────────
 
   /** The main "Discord" page heading shown when the bot is configured. */
