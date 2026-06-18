@@ -41,31 +41,6 @@ test.afterEach(async () => {
   await clearElectronMocks(win);
 });
 
-// ── Navigation helper ─────────────────────────────────────────────────────────
-//
-// `page.goto('/discord')` resolves against the `file://` base URL used by
-// `loadFile()`, producing `file:///discord` which won't match any route.
-// Instead, we use `history.pushState` so React Router re-renders at `/discord`
-// without a full page reload.
-//
-// We first push to `/` to unmount the Discord component (in case a prior test
-// left the window at `/discord`), then push to `/discord` to remount it fresh.
-// Both steps must happen after mocks are seeded, so the global polling providers
-// and the Discord page's own `useEffect` each see a response for every channel.
-
-async function gotoDiscord(page: Page): Promise<void> {
-  // Step 1 — unmount any previously mounted Discord page.
-  await page.evaluate(() => {
-    window.history.pushState({}, '', '/');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  });
-  // Step 2 — navigate to /discord so the component mounts with mocks in place.
-  await page.evaluate(() => {
-    window.history.pushState({}, '', '/discord');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  });
-}
-
 // ── Base mock seeder ──────────────────────────────────────────────────────────
 //
 // Seeds every non-Discord IPC channel consumed by the global providers
@@ -110,7 +85,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, FIRST_RUN_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await expect(discord.wizardHeading()).toBeVisible();
     await expect(discord.developerPortalLink()).toBeVisible();
@@ -120,7 +95,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await expect(discord.pageHeading()).toBeVisible();
     await expect(discord.wizardHeading()).not.toBeVisible();
@@ -130,7 +105,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, { ...CONFIGURED_DISCORD_CONFIG, allowedGuilds: [] });
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await expect(discord.wizardHeading()).toBeVisible();
   });
@@ -141,7 +116,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, { ...CONFIGURED_DISCORD_CONFIG, allowedGuilds: [] });
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await expect(discord.wizardHeading()).toBeVisible();
     // The credentials step should be struck through (done) because both secrets are set
@@ -154,7 +129,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await expect(discord.clientIdField()).toBeVisible();
     await expect(discord.saveCredentialsButton()).toBeVisible();
@@ -164,7 +139,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     // Both the green-check badge (aria-label) and the helper text render when
     // the secret is already set server-side.
@@ -176,7 +151,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     const tokenField = discord.botTokenField();
     await expect(tokenField).toHaveAttribute('type', 'password');
@@ -188,35 +163,21 @@ test.describe('discord settings', () => {
     await expect(tokenField).toHaveAttribute('type', 'password');
   });
 
-  test('should never echo the bot token or public key in the config response', async () => {
-    await seedBaseMocks(win);
-    await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
-    await gotoDiscord(win);
-
-    // Wait for the Discord page to finish loading its config by waiting for
-    // the credentials form to appear, then verify that the value returned by
-    // `getConfig()` never carries the raw secrets — only boolean flags.
-    const discord = new DiscordPage(win);
-    await expect(discord.clientIdField()).toBeVisible();
-
-    const configBody = await win.evaluate(async () => {
-      const gsd = (window as Record<string, unknown>)['gsd'] as {
-        discord: { getConfig: () => Promise<Record<string, unknown>> };
-      };
-      return gsd.discord.getConfig();
-    });
-
-    expect(configBody).not.toHaveProperty('botToken');
-    expect(configBody).not.toHaveProperty('publicKey');
-    expect(configBody).toHaveProperty('botTokenSet');
-    expect(configBody).toHaveProperty('publicKeySet');
-  });
+  // NOTE: A "never echo bot token / public key" test was removed from this file.
+  // The IPC handler's TypeScript return type (`DiscordConfigRedacted`) enforces
+  // the redaction contract statically — `botToken` and `publicKey` cannot appear
+  // on the type. A live contract check (asserting that a *real* Nest server
+  // response omits the raw secrets) belongs in tier-2 integration specs
+  // (`e2e/integration-specs/`) where the Nest server actually answers the
+  // request, not here where `gsd.discord.getConfig()` is mocked to return the
+  // `CONFIGURED_DISCORD_CONFIG` fixture (typed as `DiscordConfigRedacted`),
+  // making any `not.toHaveProperty('botToken')` assertion vacuously true.
 
   test('should switch to the Guilds tab when clicked', async () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     await discord.guildsTab().click();
     await expect(discord.addGuildInput()).toBeVisible();
@@ -239,7 +200,7 @@ test.describe('discord settings', () => {
     }, CONFIGURED_DISCORD_CONFIG.allowedGuilds);
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
 
     await discord.addGuildInput().fill('not-a-snowflake');
@@ -275,7 +236,7 @@ test.describe('discord settings', () => {
     }, { existingGuilds: CONFIGURED_DISCORD_CONFIG.allowedGuilds, newGuild: VALID_GUILD_ID_2 });
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
     await discord.addGuildInput().fill(VALID_GUILD_ID_2);
     await discord.addGuildButton().click();
@@ -289,7 +250,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
 
     for (const id of CONFIGURED_DISCORD_CONFIG.allowedGuilds) {
@@ -301,7 +262,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
 
     await expect(discord.guildRowNotRegisteredBadge(VALID_GUILD_ID)).toBeVisible();
@@ -330,7 +291,7 @@ test.describe('discord settings', () => {
     }, CONFIGURED_DISCORD_CONFIG.allowedGuilds);
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
 
     // VALID_GUILD_ID is already in allowedGuilds — adding it again would
@@ -365,7 +326,7 @@ test.describe('discord settings', () => {
     });
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.guildsTab().click();
 
     await expect(discord.guildRowNotRegisteredBadge(VALID_GUILD_ID)).toBeVisible();
@@ -386,7 +347,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win, MULTI_GAME_STATUSES);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.perGamePermissionsTab().click();
 
     for (const s of MULTI_GAME_STATUSES) {
@@ -427,7 +388,7 @@ test.describe('discord settings', () => {
     );
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await discord.perGamePermissionsTab().click();
 
     await expect(discord.permissionsRowUserId('minecraft', VALID_USER_ID)).toBeVisible();
@@ -454,7 +415,7 @@ test.describe('discord settings', () => {
     });
 
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
     await expect(discord.notDeployedMessage()).toBeVisible();
   });
 
@@ -462,7 +423,7 @@ test.describe('discord settings', () => {
     await seedBaseMocks(win);
     await seedDiscordMocks(win, CONFIGURED_DISCORD_CONFIG);
     const discord = new DiscordPage(win);
-    await gotoDiscord(win);
+    await discord.goto();
 
     // Credentials tab is the default — wait for the form to be ready.
     await expect(discord.saveCredentialsButton()).toBeVisible();

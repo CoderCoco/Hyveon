@@ -8,6 +8,30 @@ import type { Page, Locator } from '@playwright/test';
 export class DiscordPage {
   constructor(public readonly page: Page) {}
 
+  /**
+   * Navigate to `/discord` using a two-step `history.pushState` / `PopStateEvent`
+   * pattern so React Router re-renders at the correct route without a full page
+   * reload. A direct `page.goto('/discord')` would resolve against the `file://`
+   * base URL used by `loadFile()` and produce `file:///discord`, which matches no
+   * route.
+   *
+   * Step 1 pushes to `/` to unmount any previously mounted Discord component;
+   * Step 2 pushes to `/discord` so the component mounts fresh with mocks already
+   * in place for the global polling providers and the Discord page's own effects.
+   */
+  async goto(): Promise<void> {
+    // Step 1 — unmount any previously mounted Discord page.
+    await this.page.evaluate(() => {
+      window.history.pushState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    // Step 2 — navigate to /discord so the component mounts with mocks in place.
+    await this.page.evaluate(() => {
+      window.history.pushState({}, '', '/discord');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+  }
+
   // ── Page-level headings ──────────────────────────────────────────────
 
   /** The main "Discord" page heading shown when the bot is configured. */
