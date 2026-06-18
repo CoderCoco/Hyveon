@@ -225,7 +225,7 @@ The Electron project in Playwright launches the packaged app via `_electron.laun
 
 | Surface | File | When to use |
 |---------|------|-------------|
-| `window.gsd.__test.mock(channel, handler)` | `desktop-preload/src/preload.ts` | Playwright Electron e2e specs (`electron` project) that need to control IPC responses without running the Nest server. Called via `win.evaluate(...)` inside each test body (or a `beforeEach` when all tests in a describe share the same mock). |
+| `window.gsd.__test.mock(channel, handler)` | `desktop-preload/src/preload.ts` | Playwright Electron e2e specs (`electron` project) that need to control IPC responses without running the Nest server. Called via `win.evaluate(...)` inside each test body (or a `beforeEach` when all tests in a describe share the same mock). When tests share a single `ElectronApplication`, call `win.evaluate(() => window.gsd.__test.clearMocks())` (alias: `reset()`) in `afterEach` so stale mock handlers don't bleed into later tests. |
 | `register(namespace, mock)` from `@hyveon/desktop-preload/test-mock-registry` | `desktop-preload/src/test-mock-registry.ts` | Vitest unit tests running under jsdom. Build a partial namespace stub with `vi.fn()`, call `register('games', stub)`, then `vi.stubGlobal('gsd', buildMockGsd())` so the component under test gets a fully-typed `window.gsd`. Call `clear()` in `afterEach`. |
 
 The `test-mock-registry` module is **not** imported by the preload script or any production code; it exists only for jsdom-environment test helpers.
