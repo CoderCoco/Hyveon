@@ -75,10 +75,17 @@ vi.mock('electron', () => ({
  * The dynamic import forces the module's top-level side-effects (the
  * `contextBridge.exposeInMainWorld` call and the `isTestMode` check) to run
  * again with the current env value.
+ *
+ * Pass `undefined` to simulate the production case where `HYVEON_TEST_MODE` is
+ * never set in the environment.
  */
-async function loadPreloadBridge(testMode: '0' | '1'): Promise<Record<string, unknown>> {
+async function loadPreloadBridge(testMode: '0' | '1' | undefined): Promise<Record<string, unknown>> {
   vi.resetModules();
-  process.env['HYVEON_TEST_MODE'] = testMode;
+  if (testMode === undefined) {
+    delete process.env['HYVEON_TEST_MODE'];
+  } else {
+    process.env['HYVEON_TEST_MODE'] = testMode;
+  }
   await import('./preload.js');
   return exposed['gsd'] as Record<string, unknown>;
 }
@@ -206,6 +213,16 @@ describe('preload dispatcher', () => {
       expect(second).toHaveBeenCalledOnce();
       expect(result).toEqual({ games: ['second'] });
     });
+
+    it('should propagate a rejection from a mock handler without swallowing it', async () => {
+      const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+      testApi.mock('games.list', vi.fn().mockRejectedValue(new Error('mock-error')));
+
+      const games = bridge['games'] as { list: () => Promise<unknown> };
+
+      await expect(games.list()).rejects.toThrow('mock-error');
+      expect(ipcInvoke).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -229,6 +246,11 @@ describe('preload dispatcher', () => {
       expect(bridge['__test']).toBeUndefined();
     });
 
+    it('should not expose __test on the bridge when HYVEON_TEST_MODE is absent (production default)', async () => {
+      const bridge = await loadPreloadBridge(undefined);
+      expect(bridge['__test']).toBeUndefined();
+    });
+
     it('should still expose all real API namespaces when HYVEON_TEST_MODE is "0"', async () => {
       const bridge = await loadPreloadBridge('0');
       expect(bridge['games']).toBeDefined();
@@ -243,6 +265,47 @@ describe('preload dispatcher', () => {
       expect(bridge['env']).toBeDefined();
       expect(bridge['costs']).toBeDefined();
       expect(bridge['discord']).toBeDefined();
+    });
+
+    it('should flush the mock registry when clearMocks is called so ipcRenderer.invoke is used for the channel again', async () => {
+      const bridge = await loadPreloadBridge('1');
+      const testApi = bridge['__test'] as {
+        mock: (channel: string, handler: unknown) => void;
+        clearMocks: () => void;
+      };
+      // Register a mock so the channel is covered.
+      testApi.mock('games.list', vi.fn().mockResolvedValue({ games: ['mock-game'] }));
+
+      // Clear all mocks — the channel should now fall through to ipcRenderer.invoke.
+      testApi.clearMocks();
+
+      ipcInvoke.mockResolvedValue({ games: ['real-game'] });
+      const games = bridge['games'] as { list: () => Promise<unknown> };
+      await games.list();
+
+      expect(ipcInvoke).toHaveBeenCalledWith('games.list');
+    });
+
+    it('should flush the mock registry when reset is called so ipcRenderer.invoke is used for the channel again', async () => {
+      const bridge = await loadPreloadBridge('1');
+      const testApi = bridge['__test'] as {
+        mock: (channel: string, handler: unknown) => void;
+        reset: () => void;
+      };
+      // Register a mock so the channel is covered.
+      testApi.mock(
+        'env.get',
+        vi.fn().mockResolvedValue({ region: 'us-east-1', domain: 'example.com', environment: 'dev' }),
+      );
+
+      // Reset all mocks — the channel should now fall through to ipcRenderer.invoke.
+      testApi.reset();
+
+      ipcInvoke.mockResolvedValue({ region: 'eu-west-1', domain: 'game.io', environment: 'prod' });
+      const env = bridge['env'] as { get: () => Promise<unknown> };
+      await env.get();
+
+      expect(ipcInvoke).toHaveBeenCalledWith('env.get');
     });
   });
 });
