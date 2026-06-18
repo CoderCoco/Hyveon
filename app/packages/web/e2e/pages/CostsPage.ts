@@ -51,6 +51,15 @@ export class CostsPage {
     return this.page.getByText(/vs prior|no prior period/);
   }
 
+  /**
+   * KPI value text by its exact display string (e.g. `'$7.00'`).
+   * Scoped to the first matching element so it survives pages where
+   * the same formatted number could appear more than once.
+   */
+  kpiValue(text: string): Locator {
+    return this.page.getByText(text).first();
+  }
+
   // ── Range selector ───────────────────────────────────────────────────
 
   /** Time-range button by visible label. Only `7d` / `30d` are rendered — sub-day ranges are intentionally omitted (Cost Explorer is daily-only). */
@@ -85,6 +94,14 @@ export class CostsPage {
   /** All `<tr>` rows including the header — index 0 is the header, 1.. are games. */
   tableRows(): Locator {
     return this.page.getByRole('row');
+  }
+
+  /**
+   * A `<td>` or `<th>` cell whose accessible name matches `name` (string or
+   * regex). Pass a `RegExp` for partial matches, e.g. `/valheim/`.
+   */
+  tableCell(name: string | RegExp): Locator {
+    return this.page.getByRole('cell', { name });
   }
 
   /** Sortable column header button by its visible label (`Game`, `vCPU`, `$/hour`, etc.). */

@@ -79,7 +79,7 @@ test.describe('costs page', () => {
       await costs.gotoElectron();
 
       await expect(costs.totalLabel(7)).toBeVisible();
-      await expect(win.getByText('$7.00').first()).toBeVisible();
+      await expect(costs.kpiValue('$7.00')).toBeVisible();
     } finally {
       await app.close();
     }
@@ -117,7 +117,7 @@ test.describe('costs page', () => {
 
       await costs.gotoElectron();
 
-      await expect(win.getByText('vs prior')).toBeVisible();
+      await expect(costs.deltaPill()).toBeVisible();
     } finally {
       await app.close();
     }
@@ -275,9 +275,9 @@ test.describe('costs page', () => {
       await costs.gotoElectron();
       await costs.filter('val');
 
-      await expect(win.getByRole('cell', { name: /valheim/ })).toBeVisible();
-      await expect(win.getByRole('cell', { name: /minecraft/ })).toHaveCount(0);
-      await expect(win.getByRole('cell', { name: /palworld/ })).toHaveCount(0);
+      await expect(costs.tableCell(/valheim/)).toBeVisible();
+      await expect(costs.tableCell(/minecraft/)).toHaveCount(0);
+      await expect(costs.tableCell(/palworld/)).toHaveCount(0);
     } finally {
       await app.close();
     }
