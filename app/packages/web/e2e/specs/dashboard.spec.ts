@@ -1,4 +1,4 @@
-import type { Page, ElectronApplication } from 'playwright-core';
+import type { Page, ElectronApplication } from '../fixtures/index.js';
 import {
   test,
   expect,
@@ -37,6 +37,7 @@ test.describe('dashboard', () => {
   });
 
   test.afterEach(async () => {
+    if (!win) return;
     await win.evaluate(() => {
       const gsd = (window as Record<string, unknown>)['gsd'] as {
         __test: { clearMocks: () => void };
