@@ -1,4 +1,4 @@
-export type { GsdApi } from './gsd-api.js';
+export type { GsdApi, GsdTestApi, GsdMockNamespaces } from './gsd-api.js';
 
 declare global {
   interface Window {
