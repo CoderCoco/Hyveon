@@ -50,7 +50,7 @@ function registerMock(channel: string, handler: unknown): void {
 function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
   const mock = mockRegistry.get(channel);
   if (mock !== undefined) {
-    return Promise.resolve().then(() => mock(...args) as T);
+    return Promise.resolve(mock(...args)) as Promise<T>;
   }
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
 }
