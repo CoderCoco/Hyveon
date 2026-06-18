@@ -1,5 +1,4 @@
-import type { Page } from '@playwright/test';
-import type { ElectronApplication } from 'playwright-core';
+import type { Page, ElectronApplication } from 'playwright-core';
 import {
   test,
   expect,
@@ -22,7 +21,7 @@ import { DashboardPage, AppLayout } from '../pages/index.js';
  * handlers do not bleed into later tests.
  */
 test.describe('dashboard', () => {
-  let app: ElectronApplication;
+  let app: ElectronApplication | undefined;
   let win: Page;
   let dashboard: DashboardPage;
   let layout: AppLayout;
@@ -34,7 +33,7 @@ test.describe('dashboard', () => {
   });
 
   test.afterAll(async () => {
-    await app.close();
+    if (app) await app.close();
   });
 
   test.afterEach(async () => {
@@ -59,7 +58,7 @@ test.describe('dashboard', () => {
     await dashboard.goto();
 
     await expect(dashboard.statusBadge('RUNNING')).toBeVisible();
-    await expect(win.getByText('minecraft.example.com')).toBeVisible();
+    await expect(dashboard.gameIpAddress('minecraft.example.com')).toBeVisible();
   });
 
   test('should render multiple game cards', async () => {
@@ -82,7 +81,7 @@ test.describe('dashboard', () => {
     await dashboard.goto();
 
     await expect(dashboard.setupGuideLink()).toBeVisible();
-    await expect(win.getByRole('link', { name: /terraform\.tfvars/i })).toBeVisible();
+    await expect(dashboard.tfvarsLink()).toBeVisible();
   });
 
   test('should fire games.start IPC channel when Start is clicked', async () => {
@@ -168,7 +167,7 @@ test.describe('dashboard', () => {
     await layout.navigateTo('Logs', '/logs');
     // The /logs route is no longer a placeholder — verify the redesigned
     // page actually renders so a regression to the placeholder breaks here.
-    await expect(win.getByRole('heading', { name: 'Server Logs' })).toBeVisible();
+    await expect(layout.logsPageHeading()).toBeVisible();
   });
 
   test('should navigate to the Discord page via sidebar', async () => {
@@ -216,7 +215,7 @@ test.describe('dashboard', () => {
     await dashboard.stopButton().click();
 
     // ConfirmDialog appears — confirm the stop.
-    await win.getByRole('button', { name: /stop server/i }).click();
+    await dashboard.confirmStopButton().click();
 
     await expect(layout.toastMessage('minecraft stopped')).toBeVisible();
     await expect(layout.toastUndoButton()).toBeVisible();
