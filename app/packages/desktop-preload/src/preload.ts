@@ -197,8 +197,17 @@ const api: GsdApi = {
   },
 };
 
+/**
+ * Returns `true` when this process was started in test mode by the integration
+ * test harness (`HYVEON_TEST_MODE=1`).  Extracted as a function so tests can
+ * stub the env read via `vi.spyOn` instead of mutating `process.env` directly.
+ */
+export function isTestModeEnabled(): boolean {
+  return process.env['HYVEON_TEST_MODE'] === '1';
+}
+
 /** Whether this process was started in test mode by the integration test harness. */
-const isTestMode = process.env['HYVEON_TEST_MODE'] === '1';
+const isTestMode = isTestModeEnabled();
 
 const gsdBridge: GsdApi & { __test?: GsdTestApi } = { ...api };
 
