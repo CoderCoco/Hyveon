@@ -266,3 +266,7 @@ export const test = base.extend<E2EFixtures>({
 // fixtures, but those are lazy — an Electron spec that drives its own
 // `_electron.launch()` and requests no page fixtures never instantiates them.
 export { expect, _electron } from '@playwright/test';
+
+// Electron IPC mock helpers — seed all Discord channels from a fixture or
+// clear the entire mock registry via `window.gsd.__test`.
+export { seedDiscordMocks, clearElectronMocks } from './electron-mock.js';
