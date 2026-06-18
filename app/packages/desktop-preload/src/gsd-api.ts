@@ -292,25 +292,14 @@ export interface GsdDiagnosticsApi {
 /**
  * Mock namespace bag: a partial copy of every `GsdApi` namespace so test
  * harnesses can supply only the methods they care about.
+ *
+ * Derived as a mapped type over every `GsdApi` namespace key (everything
+ * except the `__test` injection surface itself) so a namespace added to
+ * `GsdApi` flows in automatically — no hand-maintained property list to drift.
  */
-export interface GsdMockNamespaces {
-  /** Optional games namespace mock. */
-  games?: Partial<GsdGamesApi>;
-  /** Optional costs namespace mock. */
-  costs?: Partial<GsdCostsApi>;
-  /** Optional logs namespace mock. */
-  logs?: Partial<GsdLogsApi>;
-  /** Optional files namespace mock. */
-  files?: Partial<GsdFilesApi>;
-  /** Optional discord namespace mock. */
-  discord?: Partial<GsdDiscordApi>;
-  /** Optional env namespace mock. */
-  env?: Partial<GsdEnvApi>;
-  /** Optional config namespace mock. */
-  config?: Partial<GsdConfigApi>;
-  /** Optional diagnostics namespace mock. */
-  diagnostics?: Partial<GsdDiagnosticsApi>;
-}
+export type GsdMockNamespaces = {
+  [K in Exclude<keyof GsdApi, '__test'>]?: Partial<GsdApi[K]>;
+};
 
 /**
  * Test-only API surface injected under `window.gsd.__test`.
