@@ -20,7 +20,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { GsdApi, LogChunk } from './gsd-api.js';
 
 /**
- * Per-channel mock registry populated by tests via `window.__gsdMocks`.
+ * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
  * Each entry is a function (or a plain value) that replaces the real IPC call
  * for that channel.  A `() => value` handler is treated as the mock; a
  * non-function entry is wrapped so the resolver always returns that value.
@@ -50,7 +50,7 @@ function registerMock(channel: string, handler: unknown): void {
 function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
   const mock = mockRegistry.get(channel);
   if (mock !== undefined) {
-    return Promise.resolve(mock(...args)) as Promise<T>;
+    return Promise.resolve().then(() => mock(...args) as T);
   }
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
 }
