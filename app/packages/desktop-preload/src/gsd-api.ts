@@ -329,7 +329,7 @@ export interface GsdTestApi {
    * the registered handler is called instead and its return value is resolved.
    * Pass a plain value (non-function) to have it returned verbatim.
    *
-   * @param channel - The IPC channel name to intercept (e.g. `'games:list'`).
+   * @param channel - The IPC channel name to intercept (e.g. `'games.list'`).
    * @param handler - A function `(...args) => result` or a static return value.
    */
   mock: (channel: string, handler: unknown) => void;
