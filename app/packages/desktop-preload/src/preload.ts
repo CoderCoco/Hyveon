@@ -17,7 +17,47 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-import type { GsdApi, LogChunk } from './gsd-api.js';
+import type { GsdApi, GsdTestApi, LogChunk } from './gsd-api.js';
+
+/**
+ * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
+ * Each entry is a function (or a plain value) that replaces the real IPC call
+ * for that channel.  A `() => value` handler is treated as the mock; a
+ * non-function entry is wrapped so the resolver always returns that value.
+ */
+const mockRegistry: Map<string, (...args: unknown[]) => unknown> = new Map();
+
+/**
+ * Registers a mock for the given IPC channel.  If `handler` is not a
+ * function it is wrapped in one so callers always receive a Promise.
+ *
+ * @param channel - IPC channel name, e.g. `'games.list'`.
+ * @param handler - Replacement implementation or a plain return value.
+ */
+function registerMock(channel: string, handler: unknown): void {
+  mockRegistry.set(channel, typeof handler === 'function' ? (handler as (...args: unknown[]) => unknown) : () => handler);
+}
+
+/**
+ * Mock-aware `ipcRenderer.invoke` wrapper.  If a mock is registered for
+ * the channel it is called with the supplied args and its return value
+ * (synchronous or Promise) is awaited; otherwise the call is forwarded to
+ * the real Electron IPC.
+ *
+ * @param channel - IPC channel name.
+ * @param args    - Arguments forwarded to the handler or IPC channel.
+ */
+function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
+  const mock = mockRegistry.get(channel);
+  if (mock !== undefined) {
+    try {
+      return Promise.resolve(mock(...args)) as Promise<T>;
+    } catch (err) {
+      return Promise.reject(err) as Promise<T>;
+    }
+  }
+  return ipcRenderer.invoke(channel, ...args) as Promise<T>;
+}
 
 /**
  * Bridges the per-stream chunk/end/cancel IPC channels into an
@@ -34,7 +74,7 @@ import type { GsdApi, LogChunk } from './gsd-api.js';
  * the prior callback implementation, so there is no new dropped-chunk window.
  */
 async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<LogChunk> {
-  const { streamId } = (await ipcRenderer.invoke('logs.stream', game)) as { streamId: string };
+  const { streamId } = (await invoke('logs.stream', game)) as { streamId: string };
   const chunkChannel = `logs.stream.${streamId}.chunk`;
   const endChannel = `logs.stream.${streamId}.end`;
   const sendCancel = () => ipcRenderer.send(`logs.stream.${streamId}.cancel`);
@@ -96,65 +136,97 @@ async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<Lo
 
 const api: GsdApi = {
   games: {
-    list: () => ipcRenderer.invoke('games.list'),
-    status: () => ipcRenderer.invoke('games.status'),
-    getStatus: (game: string) => ipcRenderer.invoke('games.getStatus', game),
-    start: (game: string) => ipcRenderer.invoke('games.start', game),
-    stop: (game: string) => ipcRenderer.invoke('games.stop', game),
+    list: () => invoke('games.list'),
+    status: () => invoke('games.status'),
+    getStatus: (game: string) => invoke('games.getStatus', game),
+    start: (game: string) => invoke('games.start', game),
+    stop: (game: string) => invoke('games.stop', game),
   },
 
   costs: {
-    estimate: () => ipcRenderer.invoke('costs.estimate'),
-    actual: (days?: number) => ipcRenderer.invoke('costs.actual', days),
+    estimate: () => invoke('costs.estimate'),
+    actual: (days?: number) => invoke('costs.actual', days),
   },
 
   logs: {
-    get: (game: string, limit?: number) => ipcRenderer.invoke('logs.get', { game, limit }),
+    get: (game: string, limit?: number) => invoke('logs.get', { game, limit }),
     stream: streamLogs,
   },
 
   files: {
-    list: (game: string) => ipcRenderer.invoke('files.list', game),
-    start: (game: string) => ipcRenderer.invoke('files.start', game),
-    stop: (game: string) => ipcRenderer.invoke('files.stop', game),
+    list: (game: string) => invoke('files.list', game),
+    start: (game: string) => invoke('files.start', game),
+    stop: (game: string) => invoke('files.stop', game),
   },
 
   discord: {
-    getConfig: () => ipcRenderer.invoke('discord.getConfig'),
+    getConfig: () => invoke('discord.getConfig'),
     putConfig: (body: { botToken?: string; clientId?: string; publicKey?: string }) =>
-      ipcRenderer.invoke('discord.putConfig', body),
-    listGuilds: () => ipcRenderer.invoke('discord.listGuilds'),
-    addGuild: (guildId: string) => ipcRenderer.invoke('discord.addGuild', { guildId }),
-    removeGuild: (guildId: string) => ipcRenderer.invoke('discord.removeGuild', guildId),
-    registerCommands: (guildId: string) => ipcRenderer.invoke('discord.registerCommands', guildId),
-    getAdmins: () => ipcRenderer.invoke('discord.getAdmins'),
+      invoke('discord.putConfig', body),
+    listGuilds: () => invoke('discord.listGuilds'),
+    addGuild: (guildId: string) => invoke('discord.addGuild', { guildId }),
+    removeGuild: (guildId: string) => invoke('discord.removeGuild', guildId),
+    registerCommands: (guildId: string) => invoke('discord.registerCommands', guildId),
+    getAdmins: () => invoke('discord.getAdmins'),
     putAdmins: (body: { userIds?: string[]; roleIds?: string[] }) =>
-      ipcRenderer.invoke('discord.putAdmins', body),
-    getPermissions: () => ipcRenderer.invoke('discord.getPermissions'),
+      invoke('discord.putAdmins', body),
+    getPermissions: () => invoke('discord.getPermissions'),
     putPermission: (
       game: string,
       body: { userIds?: string[]; roleIds?: string[]; actions?: string[] },
-    ) => ipcRenderer.invoke('discord.putPermission', { game, body }),
-    deletePermission: (game: string) => ipcRenderer.invoke('discord.deletePermission', game),
+    ) => invoke('discord.putPermission', { game, body }),
+    deletePermission: (game: string) => invoke('discord.deletePermission', game),
   },
 
   env: {
-    get: () => ipcRenderer.invoke('env.get'),
+    get: () => invoke('env.get'),
   },
 
   config: {
-    get: () => ipcRenderer.invoke('config.get'),
+    get: () => invoke('config.get'),
     update: (body: {
       watchdog_interval_minutes?: number;
       watchdog_idle_checks?: number;
       watchdog_min_packets?: number;
-    }) => ipcRenderer.invoke('config.update', body),
+    }) => invoke('config.update', body),
   },
 
   diagnostics: {
-    tail: () => ipcRenderer.invoke('diagnostics.tail'),
-    path: () => ipcRenderer.invoke('diagnostics.path'),
+    tail: () => invoke('diagnostics.tail'),
+    path: () => invoke('diagnostics.path'),
   },
 };
 
-contextBridge.exposeInMainWorld('gsd', api);
+/**
+ * Returns `true` when this process was started in test mode by the integration
+ * test harness (`HYVEON_TEST_MODE=1`).  Extracted as a function so tests can
+ * stub the env read via `vi.spyOn` instead of mutating `process.env` directly.
+ */
+export function isTestModeEnabled(): boolean {
+  return process.env['HYVEON_TEST_MODE'] === '1';
+}
+
+/** Whether this process was started in test mode by the integration test harness. */
+const isTestMode = isTestModeEnabled();
+
+const gsdBridge: GsdApi & { __test?: GsdTestApi } = { ...api };
+
+if (isTestMode) {
+  /**
+   * Test-only injection surface, present only when `HYVEON_TEST_MODE=1`.
+   *
+   * Exposes `mock(channel, handler)` so Playwright / Vitest can register
+   * per-channel IPC overrides without touching the real Electron IPC layer.
+   * `clearMocks` and `reset` both clear the registry so state does not leak
+   * between test cases (mirror the {@link GsdTestApi} contract).
+   */
+  gsdBridge.__test = {
+    mock: registerMock,
+    /** Clears all registered mock handlers from the registry. */
+    clearMocks: () => mockRegistry.clear(),
+    /** Alias for {@link clearMocks} — symmetry with `vi.resetAllMocks()`. */
+    reset: () => mockRegistry.clear(),
+  };
+}
+
+contextBridge.exposeInMainWorld('gsd', gsdBridge);

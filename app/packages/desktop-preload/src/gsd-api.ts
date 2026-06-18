@@ -286,6 +286,70 @@ export interface GsdDiagnosticsApi {
 }
 
 // ---------------------------------------------------------------------------
+// Test-only injection surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Mock namespace bag: a partial copy of every `GsdApi` namespace so test
+ * harnesses can supply only the methods they care about.
+ *
+ * Derived as a mapped type over every `GsdApi` namespace key (everything
+ * except the `__test` injection surface itself) so a namespace added to
+ * `GsdApi` flows in automatically — no hand-maintained property list to drift.
+ */
+export type GsdMockNamespaces = {
+  [K in Exclude<keyof GsdApi, '__test'>]?: Partial<GsdApi[K]>;
+};
+
+/**
+ * Test-only API surface injected under `window.gsd.__test`.
+ *
+ * Present in two distinct scenarios:
+ *
+ * 1. **Vitest / jsdom unit tests** — the test harness replaces the entire
+ *    `window.gsd` object with a mock built from `test-mock-registry`; the mock
+ *    object includes this property so individual test cases can register
+ *    per-channel overrides via `window.gsd.__test.mock(channel, handler)`.
+ *
+ * 2. **Electron preload at runtime** — when the app is launched with
+ *    `HYVEON_TEST_MODE=1` (set by the Playwright integration-test harness),
+ *    `preload.ts` appends `__test` to the real `window.gsd` bridge so that
+ *    Playwright page scripts can inject IPC mocks without touching the real
+ *    Electron IPC layer.
+ *
+ * Production code must **never** reference this property — guard every access
+ * with an `if (window.gsd?.__test)` check or, better, avoid it entirely outside
+ * tests.
+ */
+export interface GsdTestApi {
+  /**
+   * Registers a per-channel mock handler.
+   *
+   * Call `mock(channel, handler)` before rendering the component under test.
+   * When the preload bridge later invokes `ipcRenderer.invoke(channel, ...args)`,
+   * the registered handler is called instead and its return value is resolved.
+   * Pass a plain value (non-function) to have it returned verbatim.
+   *
+   * @param channel - The IPC channel name to intercept (e.g. `'games.list'`).
+   * @param handler - A function `(...args) => result` or a static return value.
+   */
+  mock: (channel: string, handler: unknown) => void;
+  /**
+   * Clears all mock implementations stored in `mock` and resets any recorded
+   * call counts on injected `vi.fn()` spies.
+   *
+   * Intended for use in `afterEach` hooks to prevent state leaking between
+   * test cases.
+   */
+  clearMocks: () => void;
+  /**
+   * Alias for {@link clearMocks} — provided for symmetry with Vitest's
+   * `vi.resetAllMocks()` naming convention.
+   */
+  reset: () => void;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level interface
 // ---------------------------------------------------------------------------
 
@@ -319,4 +383,17 @@ export interface GsdApi {
   config: GsdConfigApi;
   /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
   diagnostics: GsdDiagnosticsApi;
+  /**
+   * Test-only injection surface; `undefined` in production.
+   *
+   * Present in two scenarios:
+   * - **Vitest / jsdom** — the test harness stubs the whole `window.gsd`
+   *   object with a mock that includes this property.
+   * - **Electron preload** — appended to the real bridge when the process is
+   *   started with `HYVEON_TEST_MODE=1` by the Playwright integration-test
+   *   harness.
+   *
+   * Never reference this in production code paths.
+   */
+  __test?: GsdTestApi;
 }

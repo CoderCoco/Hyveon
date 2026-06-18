@@ -10,6 +10,10 @@
     "./preload": {
       "types": "./dist/preload.d.ts",
       "default": "./dist/preload.js"
+    },
+    "./test-mock-registry": {
+      "types": "./dist/test-mock-registry.d.ts",
+      "default": "./dist/test-mock-registry.js"
     }
   },
   "scripts": {
