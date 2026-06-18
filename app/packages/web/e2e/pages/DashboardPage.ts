@@ -45,12 +45,22 @@ export class DashboardPage {
     return this.page.getByRole('link', { name: /open setup guide/i });
   }
 
+  /** "Edit terraform.tfvars" CTA link inside the no-games card. */
+  tfvarsLink(): Locator {
+    return this.page.getByRole('link', { name: /terraform\.tfvars/i });
+  }
+
   /** Empty-state when the search input filters out every card. */
   emptySearchMessage(): Locator {
     return this.page.getByText(/no games match/i);
   }
 
   // ── Card action buttons ──────────────────────────────────────────────
+
+  /** IP address / hostname text rendered on a running game card. */
+  gameIpAddress(hostname: string): Locator {
+    return this.page.getByText(hostname);
+  }
 
   /** Primary CTA shown on a stopped/not-deployed/error card. */
   startButton(): Locator {
@@ -60,6 +70,11 @@ export class DashboardPage {
   /** Primary CTA shown on a running/starting card. */
   stopButton(): Locator {
     return this.page.getByRole('button', { name: 'Stop' });
+  }
+
+  /** Confirmation button inside the stop-confirmation dialog. */
+  confirmStopButton(): Locator {
+    return this.page.getByRole('button', { name: /stop server/i });
   }
 
   // ── Search filter ────────────────────────────────────────────────────

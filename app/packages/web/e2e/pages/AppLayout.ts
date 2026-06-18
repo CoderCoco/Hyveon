@@ -24,6 +24,11 @@ export class AppLayout {
     await this.page.waitForURL(expectedPath);
   }
 
+  /** Main heading rendered by the Logs page (`/logs`). */
+  logsPageHeading(): Locator {
+    return this.page.getByRole('heading', { name: 'Server Logs' });
+  }
+
   /** A visible Sonner toast matched by its message text. */
   toastMessage(text: string | RegExp): import('@playwright/test').Locator {
     return this.page.locator('[data-sonner-toast]').filter({ hasText: text });
