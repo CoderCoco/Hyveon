@@ -17,6 +17,22 @@ export class CostsPage {
     await this.page.goto('/costs');
   }
 
+  /**
+   * Navigate to `/costs` inside the Electron shell where `page.goto()` cannot
+   * change the React Router route. Pushes the path via `history.pushState` and
+   * dispatches a synthetic `popstate` event so React Router picks up the change.
+   *
+   * TODO(#190): replace with a sidebar navigation click once the Costs link is
+   * wired into the sidebar in the Electron project.
+   */
+  async gotoElectron(): Promise<void> {
+    await this.page.evaluate(() => {
+      window.history.pushState({}, '', '/costs');
+      window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+    });
+    await this.heading().waitFor();
+  }
+
   // ── Headline ─────────────────────────────────────────────────────────
 
   /** "Cost Analysis" page heading — used as a "the page mounted" smoke check. */
