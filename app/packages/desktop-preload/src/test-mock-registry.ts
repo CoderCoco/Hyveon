@@ -11,17 +11,7 @@
  * `vi.mock` factory functions in the `@hyveon/web` test suite.
  */
 
-import type {
-  GsdApi,
-  GsdCostsApi,
-  GsdDiscordApi,
-  GsdDiagnosticsApi,
-  GsdEnvApi,
-  GsdFilesApi,
-  GsdGamesApi,
-  GsdLogsApi,
-  GsdConfigApi,
-} from './gsd-api.js';
+import type { GsdApi } from './gsd-api.js';
 
 // ---------------------------------------------------------------------------
 // Namespace key union — derived from GsdApi so it stays in sync automatically.
@@ -39,19 +29,12 @@ export type GsdNamespace = Exclude<keyof GsdApi, '__test'>;
 
 /**
  * Maps each {@link GsdNamespace} key to the sub-interface it holds on
- * {@link GsdApi}.  Overloads on `register` / `lookup` use this to give the
- * caller the correct concrete sub-type for the namespace they pass.
+ * {@link GsdApi}.  Derived directly from `GsdApi` via a mapped type so that
+ * adding a new namespace to `GsdApi` automatically propagates here — the
+ * compiler will enforce value-type correctness in `register` / `lookup`
+ * without any manual update to this alias.
  */
-export interface GsdNamespaceMap {
-  games: GsdGamesApi;
-  costs: GsdCostsApi;
-  logs: GsdLogsApi;
-  files: GsdFilesApi;
-  discord: GsdDiscordApi;
-  env: GsdEnvApi;
-  config: GsdConfigApi;
-  diagnostics: GsdDiagnosticsApi;
-}
+export type GsdNamespaceMap = { [K in GsdNamespace]: GsdApi[K] };
 
 // ---------------------------------------------------------------------------
 // Internal registry store

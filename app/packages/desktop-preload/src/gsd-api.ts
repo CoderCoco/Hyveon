@@ -322,15 +322,17 @@ export interface GsdMockNamespaces {
  */
 export interface GsdTestApi {
   /**
-   * Partial mock implementations keyed by namespace name.
+   * Registers a per-channel mock handler.
    *
-   * Tests set individual namespace mocks here before rendering the component
-   * under test.  The API client reads the real namespace (e.g. `window.gsd.games`)
-   * at call time, so simply replacing `window.gsd.games` is sufficient — the
-   * `mock` bag is provided as a structured alternative for registries that need
-   * to enumerate which namespaces were mocked.
+   * Call `mock(channel, handler)` before rendering the component under test.
+   * When the preload bridge later invokes `ipcRenderer.invoke(channel, ...args)`,
+   * the registered handler is called instead and its return value is resolved.
+   * Pass a plain value (non-function) to have it returned verbatim.
+   *
+   * @param channel - The IPC channel name to intercept (e.g. `'games:list'`).
+   * @param handler - A function `(...args) => result` or a static return value.
    */
-  mock: GsdMockNamespaces;
+  mock: (channel: string, handler: unknown) => void;
   /**
    * Clears all mock implementations stored in `mock` and resets any recorded
    * call counts on injected `vi.fn()` spies.
