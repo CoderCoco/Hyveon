@@ -36,12 +36,18 @@ export type GsdNamespace = Exclude<keyof GsdApi, '__test'>;
  */
 export type GsdNamespaceMap = { [K in GsdNamespace]: GsdApi[K] };
 
+/**
+ * Like {@link GsdNamespaceMap} but each namespace value is `Partial<…>` so
+ * that test stubs only need to supply the methods the test actually exercises.
+ */
+export type GsdPartialNamespaceMap = { [K in GsdNamespace]: Partial<GsdApi[K]> };
+
 // ---------------------------------------------------------------------------
 // Internal registry store
 // ---------------------------------------------------------------------------
 
-/** Mutable store keyed by namespace. */
-const _registry: Partial<GsdNamespaceMap> = {};
+/** Mutable store keyed by namespace, each value being a partial stub of that namespace. */
+const _registry: Partial<GsdPartialNamespaceMap> = {};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -57,11 +63,11 @@ const _registry: Partial<GsdNamespaceMap> = {};
  * @example
  * ```ts
  * import { register } from '@hyveon/desktop-preload/test-mock-registry';
- * register('games', { list: vi.fn().mockResolvedValue({ games: ['minecraft'] }), ... });
+ * register('games', { list: vi.fn().mockResolvedValue({ games: ['minecraft'] }) });
  * ```
  */
-export function register<K extends GsdNamespace>(namespace: K, mock: GsdNamespaceMap[K]): void {
-  (_registry as GsdNamespaceMap)[namespace] = mock;
+export function register<K extends GsdNamespace>(namespace: K, mock: Partial<GsdNamespaceMap[K]>): void {
+  (_registry as GsdPartialNamespaceMap)[namespace] = mock;
 }
 
 /**
@@ -70,8 +76,8 @@ export function register<K extends GsdNamespace>(namespace: K, mock: GsdNamespac
  * Returns `undefined` if nothing has been registered for that namespace yet.
  * Tests that rely on a mock being present should call {@link register} first.
  */
-export function lookup<K extends GsdNamespace>(namespace: K): GsdNamespaceMap[K] | undefined {
-  return (_registry as GsdNamespaceMap)[namespace];
+export function lookup<K extends GsdNamespace>(namespace: K): Partial<GsdNamespaceMap[K]> | undefined {
+  return (_registry as GsdPartialNamespaceMap)[namespace];
 }
 
 /**
@@ -81,7 +87,7 @@ export function lookup<K extends GsdNamespace>(namespace: K): GsdNamespaceMap[K]
  * tests.
  */
 export function clear(): void {
-  for (const key of Object.keys(_registry) as GsdNamespace[]) {
+  for (const key of Object.keys(_registry) as (keyof GsdPartialNamespaceMap)[]) {
     delete _registry[key];
   }
 }
@@ -98,5 +104,5 @@ export function clear(): void {
  * it directly from the `test-mock-registry` export path.
  */
 export function buildMockGsd(): Partial<GsdApi> {
-  return { ..._registry };
+  return { ..._registry } as Partial<GsdApi>;
 }
