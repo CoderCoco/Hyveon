@@ -11,7 +11,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -54,9 +54,41 @@ jobs:
       - name: Install Playwright system dependencies
         # Installs the shared libs needed by both the Chromium project and the
         # Electron runtime; xvfb provides the virtual display Electron requires.
-        run: DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium && sudo apt-get install -y xvfb
+        #
+        # The Azure apt mirror intermittently stalls mid-download (font packages
+        # especially), which used to hang until the step timeout and fail the
+        # whole job. Two layers of resilience guard against that:
+        #   1. Short per-download apt timeouts + retries turn a stalled mirror
+        #      connection into a fast failure instead of an indefinite hang.
+        #   2. A retry loop re-runs the whole install up to 3 times, since the
+        #      mirror usually recovers within a minute.
+        # DPkg::Lock::Timeout lets a retry wait out any lock left by a prior run.
+        run: |
+          printf '%s\n' \
+            'Acquire::Retries "5";' \
+            'Acquire::http::Timeout "30";' \
+            'Acquire::https::Timeout "30";' \
+            'DPkg::Lock::Timeout "120";' \
+            | sudo tee /etc/apt/apt.conf.d/99hyveon-ci >/dev/null
+          install_deps() {
+            DEBIAN_FRONTEND=noninteractive npx playwright install-deps chromium \
+              && sudo apt-get install -y xvfb
+          }
+          for attempt in 1 2 3; do
+            echo "::group::Playwright system deps — attempt ${attempt}"
+            if install_deps; then
+              echo "::endgroup::"
+              echo "Installed Playwright system dependencies on attempt ${attempt}"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::apt install attempt ${attempt} failed; retrying in 20s"
+            sleep 20
+          done
+          echo "::error::Playwright system dependencies failed to install after 3 attempts"
+          exit 1
         working-directory: app/packages/web
-        timeout-minutes: 5
+        timeout-minutes: 12
 
       # The Electron project (electron-smoke.spec.ts) needs a display server on
       # Linux; xvfb-run supplies a headless one. The Chromium project runs in
