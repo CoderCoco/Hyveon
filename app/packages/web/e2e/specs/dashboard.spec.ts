@@ -48,7 +48,7 @@ test.describe('dashboard', () => {
 
   test('should render a game card for a stopped game', async () => {
     await applyGsdMocks(win, { statuses: [STOPPED_GAME] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.gameCardHeading('minecraft')).toBeVisible();
     await expect(dashboard.statusBadge('STOPPED')).toBeVisible();
@@ -56,7 +56,7 @@ test.describe('dashboard', () => {
 
   test('should render a game card for a running game with IP', async () => {
     await applyGsdMocks(win, { statuses: [RUNNING_GAME] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.statusBadge('RUNNING')).toBeVisible();
     await expect(dashboard.gameIpAddress('minecraft.example.com')).toBeVisible();
@@ -64,7 +64,7 @@ test.describe('dashboard', () => {
 
   test('should render multiple game cards', async () => {
     await applyGsdMocks(win, { statuses: MULTI_GAME_STATUSES });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.gameCardHeading('minecraft')).toBeVisible();
     await expect(dashboard.gameCardHeading('valheim')).toBeVisible();
@@ -72,14 +72,14 @@ test.describe('dashboard', () => {
 
   test('should show empty-state message when no games are configured', async () => {
     await applyGsdMocks(win, { statuses: [] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.emptyConfiguredMessage()).toBeVisible();
   });
 
   test('should show setup guide and terraform.tfvars CTAs in the no-games card', async () => {
     await applyGsdMocks(win, { statuses: [] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.setupGuideLink()).toBeVisible();
     await expect(dashboard.tfvarsLink()).toBeVisible();
@@ -103,7 +103,7 @@ test.describe('dashboard', () => {
       });
     });
 
-    await dashboard.goto();
+    await dashboard.gotoElectron();
     await dashboard.startButton().click();
 
     await expect
@@ -120,7 +120,7 @@ test.describe('dashboard', () => {
 
   test('should show only Stop as the primary action for a running game', async () => {
     await applyGsdMocks(win, { statuses: [RUNNING_GAME] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     // The redesigned card swaps the primary CTA based on state instead of
     // disabling the inactive button — Start should not exist while running.
@@ -130,7 +130,7 @@ test.describe('dashboard', () => {
 
   test('should filter game cards by name in real time', async () => {
     await applyGsdMocks(win, { statuses: MULTI_GAME_STATUSES });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.gameCardHeading('minecraft')).toBeVisible();
     await expect(dashboard.gameCardHeading('valheim')).toBeVisible();
@@ -143,7 +143,7 @@ test.describe('dashboard', () => {
 
   test('should show empty-state message when search has no matches', async () => {
     await applyGsdMocks(win, { statuses: MULTI_GAME_STATUSES });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await dashboard.filter('nonexistent');
     await expect(dashboard.emptySearchMessage()).toBeVisible();
@@ -151,7 +151,7 @@ test.describe('dashboard', () => {
 
   test('should render the KPI strip with the four ops tiles', async () => {
     await applyGsdMocks(win, { statuses: MULTI_GAME_STATUSES });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await expect(dashboard.kpiTileLabel('Servers running')).toBeVisible();
     await expect(dashboard.kpiTileLabel('Spend today')).toBeVisible();
@@ -163,7 +163,7 @@ test.describe('dashboard', () => {
 
   test('should navigate to the Logs page via sidebar', async () => {
     await applyGsdMocks(win, { statuses: [] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await layout.navigateTo('Logs', '/logs');
     // The /logs route is no longer a placeholder — verify the redesigned
@@ -173,21 +173,21 @@ test.describe('dashboard', () => {
 
   test('should navigate to the Discord page via sidebar', async () => {
     await applyGsdMocks(win, { statuses: [] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await layout.navigateTo('Discord', '/discord');
   });
 
   test('should navigate to the Settings page via sidebar', async () => {
     await applyGsdMocks(win, { statuses: [] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await layout.navigateTo('Settings', '/settings');
   });
 
   test('should show a success toast after starting a game', async () => {
     await applyGsdMocks(win, { statuses: [STOPPED_GAME] });
-    await dashboard.goto();
+    await dashboard.gotoElectron();
 
     await dashboard.startButton().click();
 
@@ -212,7 +212,7 @@ test.describe('dashboard', () => {
       });
     });
 
-    await dashboard.goto();
+    await dashboard.gotoElectron();
     await dashboard.stopButton().click();
 
     // ConfirmDialog appears — confirm the stop.
