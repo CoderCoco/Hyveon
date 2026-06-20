@@ -1,7 +1,7 @@
 import { test, expect, _electron, SAMPLE_LOG_LINES } from '../fixtures/index.js';
+import type { ElectronApplication, Page } from '../fixtures/index.js';
 import { electronMain, electronEnv } from '../../playwright.config.js';
 import { LogsPage } from '../pages/index.js';
-import type { ElectronApplication, Page } from '@playwright/test';
 
 /**
  * `/logs` route specs migrated to the Electron project (issue #191).
