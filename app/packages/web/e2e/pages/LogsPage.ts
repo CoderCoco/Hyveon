@@ -13,9 +13,20 @@ export type LogLevelLabel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 export class LogsPage {
   constructor(public readonly page: Page) {}
 
-  /** Navigate to `/logs` directly. */
+  /** Navigate to `/logs` directly via URL. */
   async goto(): Promise<void> {
     await this.page.goto('/logs');
+  }
+
+  /**
+   * Navigate to `/logs` by clicking the "Logs" sidebar link and waiting for
+   * the URL to settle. Use this in Electron e2e specs where the renderer is
+   * already at a route and navigation must go through the rendered sidebar
+   * rather than a raw `page.goto()` call.
+   */
+  async gotoViaSidebar(): Promise<void> {
+    await this.page.getByRole('link', { name: 'Logs' }).click();
+    await this.page.waitForURL('**/logs');
   }
 
   // ── Header ───────────────────────────────────────────────────────────
