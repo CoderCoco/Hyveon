@@ -63,17 +63,31 @@ function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
  * Bridges the per-stream chunk/end/cancel IPC channels into an
  * {@link AsyncIterable} of log chunks.
  *
- * Opens the stream via `ipcRenderer.invoke('logs.stream', game)`, buffers
- * incoming chunks, and yields them in order. Completes when the `.end` event
- * fires (throwing if it carried an `error`). If the consumer aborts the
- * `signal` or breaks out of the loop early, the `finally` block detaches all
- * listeners and sends `.cancel` so the main process tears the stream down.
+ * When a mock is registered for the `'logs.stream'` channel (test mode only),
+ * the mock handler is called with `(game, signal)` and its return value is
+ * treated as an `AsyncIterable<LogChunk>` — the real IPC listener path is
+ * never touched. The `signal` is forwarded to the mock so test code can honour
+ * cancellation if needed.
+ *
+ * In production (no mock registered), opens the stream via
+ * `ipcRenderer.invoke('logs.stream', game)`, buffers incoming chunks, and
+ * yields them in order. Completes when the `.end` event fires (throwing if it
+ * carried an `error`). If the consumer aborts the `signal` or breaks out of
+ * the `for await` loop early, the `finally` block detaches all listeners and
+ * sends `.cancel` so the main process tears the stream down.
  *
  * The listener-attach happens after the `invoke` resolves with the `streamId`,
  * which is the only point the chunk/end channel names are known — identical to
  * the prior callback implementation, so there is no new dropped-chunk window.
  */
 async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<LogChunk> {
+  const streamMock = mockRegistry.get('logs.stream');
+  if (streamMock !== undefined) {
+    const mockIterable = streamMock(game, signal) as AsyncIterable<LogChunk>;
+    yield* mockIterable;
+    return;
+  }
+
   const { streamId } = (await invoke('logs.stream', game)) as { streamId: string };
   const chunkChannel = `logs.stream.${streamId}.chunk`;
   const endChannel = `logs.stream.${streamId}.end`;

@@ -1,33 +1,97 @@
-import { test, expect, stubApis, SAMPLE_LOG_LINES } from '../fixtures/index.js';
+import { test, expect, _electron, SAMPLE_LOG_LINES } from '../fixtures/index.js';
+import type { ElectronApplication, Page } from '../fixtures/index.js';
+import { electronMain, electronEnv } from '../../playwright.config.js';
+import { LogsPage } from '../pages/index.js';
 
 /**
- * `/logs` route specs (issue #63). The Nest server is never started — every
- * `/api/*` call goes through Playwright route stubs. `LogsPage` now fetches
- * its initial snapshot via `window.gsd.logs.get` (IPC bridge) instead of
- * the HTTP API; `stubApis()` injects a `window.gsd.logs` stub via
- * `addInitScript` that returns the seeded lines from `logLines` and resolves
- * the stream call immediately without firing any chunks, so specs drive the
- * page entirely off the seeded snapshot.
+ * `/logs` route specs migrated to the Electron project (issue #191).
+ *
+ * Each test manages its own `ElectronApplication` lifecycle and seeds IPC
+ * responses exclusively via `window.gsd.__test.mock(channel, handler)` — the
+ * mock seam provided by the preload script when `HYVEON_TEST_MODE=1`.
+ *
+ * The `logs.get` mock seeds the initial snapshot displayed by `LogsPage`.
+ * The `logs.stream` mock is an async generator that yields nothing and returns
+ * immediately, so specs drive the UI off the seeded snapshot only.
+ * `games.list` supplies the game selector, and `games.status` silences the
+ * `GameStatusProvider` poller that runs in the background.
  */
+
+/** IPC channel mocked for every test — silences the background status poller. */
+const STOPPED_STATUSES = [{ game: 'minecraft', state: 'stopped' }];
+
+/**
+ * Seed IPC mocks via the `__test` surface and navigate to the Logs page via
+ * the sidebar.
+ *
+ * @param win       - The Electron renderer window handle.
+ * @param games     - Game names returned by `games.list`.
+ * @param logLines  - Map of game name → initial log lines returned by `logs.get`.
+ */
+async function setupLogsPage(
+  win: Page,
+  games: string[],
+  logLines: Record<string, string[]>,
+): Promise<void> {
+  await win.evaluate(
+    ({ games: g, logLines: ll, statuses }) => {
+      const gsd = (window as Record<string, unknown>)['gsd'] as {
+        __test: { mock: (channel: string, handler: unknown) => void };
+      };
+
+      // Silence the background GameStatusProvider poller.
+      gsd.__test.mock('games.status', () => Promise.resolve(statuses));
+
+      // Seed the game list for the combobox selector.
+      gsd.__test.mock('games.list', () => Promise.resolve({ games: g }));
+
+      // Seed the initial log snapshot for each game.
+      gsd.__test.mock('logs.get', ({ game }: { game: string }) =>
+        Promise.resolve({ game, lines: ll[game] ?? [] }),
+      );
+
+      // Stream mock: async generator that yields nothing so specs drive off the
+      // seeded snapshot and never wait for live chunks.
+      gsd.__test.mock('logs.stream', async function* () {});
+    },
+    { games, logLines, statuses: STOPPED_STATUSES },
+  );
+}
+
 test.describe('logs page', () => {
-  test('should render LIVE badge and seeded log lines', async ({ logs }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
+  let app: ElectronApplication;
+  let win: Page;
+  let logs: LogsPage;
+
+  test.beforeEach(async () => {
+    app = await _electron.launch({ args: [electronMain], env: electronEnv });
+    win = await app.firstWindow();
+    logs = new LogsPage(win);
+  });
+
+  test.afterEach(async () => {
+    // Clear mocks so stale handlers do not bleed into later tests.
+    await win.evaluate(() => {
+      const gsd = (window as Record<string, unknown>)['gsd'] as {
+        __test: { clearMocks: () => void };
+      };
+      gsd.__test.clearMocks();
     });
-    await logs.goto();
+    await app.close();
+  });
+
+  test('should render LIVE badge and seeded log lines', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
     await expect(logs.heading()).toBeVisible();
     await expect(logs.liveBadge()).toBeVisible();
-    await expect(logs.page.getByText('Server started on port 25565')).toBeVisible();
+    await expect(win.getByText('Server started on port 25565')).toBeVisible();
   });
 
-  test('should toggle to Paused badge and back via the Pause/Resume button', async ({ logs }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
-    });
-    await logs.goto();
+  test('should toggle to Paused badge and back via the Pause/Resume button', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
     await logs.pauseButton().click();
     await expect(logs.pausedBadge()).toBeVisible();
@@ -37,12 +101,9 @@ test.describe('logs page', () => {
     await expect(logs.liveBadge()).toBeVisible();
   });
 
-  test('should color-code lines containing INFO/WARN/ERROR/DEBUG with badges', async ({ logs }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
-    });
-    await logs.goto();
+  test('should color-code lines containing INFO/WARN/ERROR/DEBUG with badges', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
     // Each level token should appear at least once as a small badge alongside
     // the matching line.
@@ -51,70 +112,55 @@ test.describe('logs page', () => {
     }
   });
 
-  test('should highlight matches via <mark> when typing into the search box without filtering lines out', async ({
-    logs,
-  }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
-    });
-    await logs.goto();
+  test('should highlight matches via <mark> when typing into the search box without filtering lines out', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
     await expect(logs.highlightMarks()).toHaveCount(0);
 
     await logs.search('Connection');
     await expect(logs.highlightMark('Connection').first()).toBeVisible();
     // The matched line must remain in the buffer — search highlights, never filters.
-    await expect(logs.page.getByText('refused from 10.0.0.5')).toBeVisible();
+    await expect(win.getByText('refused from 10.0.0.5')).toBeVisible();
   });
 
-  test('should hide ERROR-level lines when ERROR is unchecked in the Levels filter', async ({
-    logs,
-  }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
-    });
-    await logs.goto();
+  test('should hide ERROR-level lines when ERROR is unchecked in the Levels filter', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
-    await expect(logs.page.getByText('Connection refused from 10.0.0.5')).toBeVisible();
+    await expect(win.getByText('Connection refused from 10.0.0.5')).toBeVisible();
     await expect(logs.levelsTriggerWithCount(4)).toBeVisible();
 
     await logs.toggleLevel('ERROR');
 
-    await expect(logs.page.getByText('Connection refused from 10.0.0.5')).not.toBeVisible();
+    await expect(win.getByText('Connection refused from 10.0.0.5')).not.toBeVisible();
     await expect(logs.levelsTriggerWithCount(3)).toBeVisible();
   });
 
-  test('should switch streams via the searchable game combobox', async ({ logs }) => {
-    await stubApis(logs.page, {
-      statuses: [
-        { game: 'minecraft', state: 'stopped' },
-        { game: 'valheim', state: 'stopped' },
-      ],
-      logLines: {
+  test('should switch streams via the searchable game combobox', async () => {
+    await setupLogsPage(
+      win,
+      ['minecraft', 'valheim'],
+      {
         minecraft: ['minecraft seeded line'],
         valheim: ['valheim seeded line'],
       },
-    });
-    await logs.goto();
+    );
+    await logs.gotoViaSidebar();
 
-    await expect(logs.page.getByText('minecraft seeded line')).toBeVisible();
+    await expect(win.getByText('minecraft seeded line')).toBeVisible();
 
     await logs.selectGame('valheim');
 
-    await expect(logs.page.getByText('valheim seeded line')).toBeVisible();
+    await expect(win.getByText('valheim seeded line')).toBeVisible();
     // Switching games resets the buffer — the previous game's seeded line
     // must be gone, not just hidden.
-    await expect(logs.page.getByText('minecraft seeded line')).not.toBeVisible();
+    await expect(win.getByText('minecraft seeded line')).not.toBeVisible();
   });
 
-  test('should display line count and oldest-line age in the footer', async ({ logs }) => {
-    await stubApis(logs.page, {
-      statuses: [{ game: 'minecraft', state: 'stopped' }],
-      logLines: { minecraft: SAMPLE_LOG_LINES },
-    });
-    await logs.goto();
+  test('should display line count and oldest-line age in the footer', async () => {
+    await setupLogsPage(win, ['minecraft'], { minecraft: SAMPLE_LOG_LINES });
+    await logs.gotoViaSidebar();
 
     // SAMPLE_LOG_LINES has 5 entries; "oldest" follows the count.
     await expect(logs.footerLineCount(5)).toBeVisible();

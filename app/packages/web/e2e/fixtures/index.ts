@@ -44,7 +44,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -266,3 +266,12 @@ export const test = base.extend<E2EFixtures>({
 // fixtures, but those are lazy — an Electron spec that drives its own
 // `_electron.launch()` and requests no page fixtures never instantiates them.
 export { expect, _electron } from '@playwright/test';
+export type { Page } from '@playwright/test';
+export type { ElectronApplication } from 'playwright-core';
+
+export { launchElectron, applyGsdMocks } from './electron-launch.js';
+export type { ElectronHandle } from './electron-launch.js';
+
+// Electron IPC mock helpers — seed all Discord channels from a fixture or
+// clear the entire mock registry via `window.gsd.__test`.
+export { seedDiscordMocks, clearElectronMocks } from './electron-mock.js';
