@@ -18,10 +18,23 @@ export class AppLayout {
     return this.page.getByRole('link', { name: label });
   }
 
-  /** Click a sidebar nav link and wait for the URL to change to `expectedPath`. */
+  /**
+   * Click a sidebar nav link and wait for the route to change to `expectedPath`.
+   *
+   * Matches on `url.pathname` rather than passing `expectedPath` as a glob:
+   * under chromium a bare path is resolved against `baseURL`, but the Electron
+   * shell has no `baseURL` and serves from a `file://` origin, so a bare-path
+   * glob would never match `file:///logs`. Comparing pathnames works for both
+   * (`http://localhost:4173/logs` and `file:///logs` both resolve to `/logs`).
+   */
   async navigateTo(label: string, expectedPath: string): Promise<void> {
     await this.sidebarLink(label).click();
-    await this.page.waitForURL(expectedPath);
+    await this.page.waitForURL((url) => url.pathname === expectedPath);
+  }
+
+  /** Main heading rendered by the Logs page (`/logs`). */
+  logsPageHeading(): Locator {
+    return this.page.getByRole('heading', { name: 'Server Logs' });
   }
 
   /** A visible Sonner toast matched by its message text. */

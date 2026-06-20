@@ -41,11 +41,18 @@ export const electronEnv: Record<string, string> = {
  *    seam spec against the packaged main bundle. Each spec manages its own
  *    ElectronApplication.
  *
- * `electron-smoke.spec.ts`, `ipc-mock.spec.ts`, and `logs.spec.ts` are matched
- * only by the `electron` project and ignored by `chromium`; every other spec is
- * the reverse.
+ * `electron-smoke.spec.ts`, `ipc-mock.spec.ts`, `dashboard.spec.ts`,
+ * `costs.spec.ts` (migrated in #193), and `logs.spec.ts` (migrated in #191) are
+ * matched only by the `electron` project and ignored by `chromium`; every other
+ * spec is the reverse.
  */
-const ELECTRON_SPECS = ['**/electron-smoke.spec.ts', '**/ipc-mock.spec.ts', '**/logs.spec.ts'];
+const ELECTRON_SPECS = [
+  '**/electron-smoke.spec.ts',
+  '**/ipc-mock.spec.ts',
+  '**/dashboard.spec.ts',
+  '**/costs.spec.ts',
+  '**/logs.spec.ts',
+];
 
 export default defineConfig({
   testDir: './e2e/specs',
