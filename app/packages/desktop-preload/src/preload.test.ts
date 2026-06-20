@@ -308,4 +308,220 @@ describe('preload dispatcher', () => {
       expect(ipcInvoke).toHaveBeenCalledWith('env.get');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // streamLogs
+  // -------------------------------------------------------------------------
+
+  describe('streamLogs', () => {
+    /**
+     * Helper to collect all chunks from the `logs.stream` async iterable into
+     * an array.  Drives the generator to completion without a `for await` loop
+     * so we can also exercise early-break behaviour in a separate test.
+     */
+    async function collectChunks(iterable: AsyncIterable<string>): Promise<string[]> {
+      const chunks: string[] = [];
+      for await (const chunk of iterable) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    }
+
+    // -----------------------------------------------------------------------
+    // Mocked-delegation branch
+    // -----------------------------------------------------------------------
+
+    describe('mocked-delegation branch', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should delegate to the registered mock iterable instead of ipcRenderer when logs.stream is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* fakeStream() {
+          yield 'chunk-a';
+          yield 'chunk-b';
+        }
+
+        const mockHandler = vi.fn().mockReturnValue(fakeStream());
+        testApi.mock('logs.stream', mockHandler);
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        const chunks = await collectChunks(logs.stream('valheim'));
+
+        expect(mockHandler).toHaveBeenCalledOnce();
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(ipcSend).not.toHaveBeenCalled();
+        expect(chunks).toEqual(['chunk-a', 'chunk-b']);
+      });
+
+      it('should forward the game argument to the mock handler', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* emptyStream() {}
+        const mockHandler = vi.fn().mockReturnValue(emptyStream());
+        testApi.mock('logs.stream', mockHandler);
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        await collectChunks(logs.stream('minecraft'));
+
+        expect(mockHandler).toHaveBeenCalledWith('minecraft', undefined);
+      });
+
+      it('should forward the AbortSignal to the mock handler when one is provided', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* emptyStream() {}
+        const mockHandler = vi.fn().mockReturnValue(emptyStream());
+        testApi.mock('logs.stream', mockHandler);
+
+        const controller = new AbortController();
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        await collectChunks(logs.stream('terraria', controller.signal));
+
+        expect(mockHandler).toHaveBeenCalledWith('terraria', controller.signal);
+      });
+
+      it('should not attach any ipcRenderer listeners when the mock handles the stream', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* singleChunk() {
+          yield 'only-chunk';
+        }
+        testApi.mock('logs.stream', vi.fn().mockReturnValue(singleChunk()));
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        await collectChunks(logs.stream('factorio'));
+
+        expect(ipcOn).not.toHaveBeenCalled();
+        expect(ipcOnce).not.toHaveBeenCalled();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Unmocked passthrough branch
+    // -----------------------------------------------------------------------
+
+    describe('unmocked passthrough branch', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        // Load with test-mode OFF so no mock registry is active — the real IPC
+        // path is always exercised.
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke logs.stream on ipcRenderer to obtain a streamId when no mock is registered', async () => {
+        const streamId = 'sid-001';
+        ipcInvoke.mockResolvedValue({ streamId });
+
+        // Simulate the main process sending an end event synchronously after the
+        // invoke so the generator completes without hanging.
+        ipcOnce.mockImplementation((_channel: string, listener: (...args: unknown[]) => void) => {
+          // Fire the end event on the next microtask so the generator has
+          // already attached the listener before it resolves.
+          Promise.resolve().then(() => listener({} as unknown, {}));
+        });
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        const chunks = await collectChunks(logs.stream('minecraft'));
+
+        expect(ipcInvoke).toHaveBeenCalledWith('logs.stream', 'minecraft');
+        expect(chunks).toEqual([]);
+      });
+
+      it('should yield chunks received over the chunk IPC channel', async () => {
+        const streamId = 'sid-002';
+        ipcInvoke.mockResolvedValue({ streamId });
+
+        const chunkChannel = `logs.stream.${streamId}.chunk`;
+        const endChannel = `logs.stream.${streamId}.end`;
+
+        // Capture the chunk listener so we can fire chunks after setup.
+        let capturedChunkListener: ((_evt: unknown, chunk: string) => void) | null = null;
+        ipcOn.mockImplementation((channel: string, listener: (_evt: unknown, chunk: string) => void) => {
+          if (channel === chunkChannel) {
+            capturedChunkListener = listener;
+          }
+        });
+
+        // Fire two chunks then end the stream.
+        ipcOnce.mockImplementation((channel: string, listener: (_evt: unknown, data: { error?: string }) => void) => {
+          if (channel === endChannel) {
+            Promise.resolve()
+              .then(() => {
+                capturedChunkListener?.({}, 'line-1');
+                capturedChunkListener?.({}, 'line-2');
+              })
+              .then(() => listener({} as unknown, {}));
+          }
+        });
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        const chunks = await collectChunks(logs.stream('factorio'));
+
+        expect(chunks).toEqual(['line-1', 'line-2']);
+      });
+
+      it('should throw when the end event carries an error field', async () => {
+        const streamId = 'sid-003';
+        ipcInvoke.mockResolvedValue({ streamId });
+
+        const endChannel = `logs.stream.${streamId}.end`;
+
+        ipcOnce.mockImplementation((channel: string, listener: (_evt: unknown, data: { error?: string }) => void) => {
+          if (channel === endChannel) {
+            Promise.resolve().then(() => listener({} as unknown, { error: 'stream-failed' }));
+          }
+        });
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+
+        await expect(collectChunks(logs.stream('valheim'))).rejects.toThrow('stream-failed');
+      });
+
+      it('should send cancel and remove listeners when the consumer breaks early', async () => {
+        const streamId = 'sid-004';
+        ipcInvoke.mockResolvedValue({ streamId });
+
+        const chunkChannel = `logs.stream.${streamId}.chunk`;
+        const cancelChannel = `logs.stream.${streamId}.cancel`;
+
+        // Keep the stream alive — never fire the end event — so the consumer
+        // must break out of the loop manually.
+        let capturedChunkListener: ((_evt: unknown, chunk: string) => void) | null = null;
+        ipcOn.mockImplementation((channel: string, listener: (_evt: unknown, chunk: string) => void) => {
+          if (channel === chunkChannel) capturedChunkListener = listener;
+        });
+        ipcOnce.mockImplementation(
+          (_channel: string, _listener: (_evt: unknown, data: { error?: string }) => void) => {
+            // Never fires — stream stays open until consumer breaks.
+          },
+        );
+
+        const logs = bridge['logs'] as { stream: (game: string, signal?: AbortSignal) => AsyncIterable<string> };
+        const gen = logs.stream('terraria')[Symbol.asyncIterator]();
+
+        // Call next() to start the generator — it will suspend at the inner
+        // `await new Promise` because no chunk has arrived yet and the buffer
+        // is empty.  Deliver a chunk to wake it, then immediately return.
+        const nextPromise = gen.next();
+        // Flush the ipcInvoke promise so the generator reaches its first await.
+        await Promise.resolve();
+        // Now fire a chunk to wake the suspended generator.
+        capturedChunkListener?.({}, 'first-chunk');
+        // Let the generator resume and yield the chunk.
+        await nextPromise;
+        // The generator is now at its next inner await (waiting for more chunks).
+        // Calling return() interrupts it and triggers the finally block.
+        await gen.return!(undefined);
+
+        expect(ipcSend).toHaveBeenCalledWith(cancelChannel);
+        expect(ipcRemoveListener).toHaveBeenCalledWith(chunkChannel, expect.any(Function));
+      }, 10_000);
+    });
+  });
 });
