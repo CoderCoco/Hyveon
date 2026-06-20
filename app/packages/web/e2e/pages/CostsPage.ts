@@ -17,6 +17,22 @@ export class CostsPage {
     await this.page.goto('/costs');
   }
 
+  /**
+   * Navigate to `/costs` inside the Electron shell where `page.goto()` cannot
+   * change the React Router route. Pushes the path via `history.pushState` and
+   * dispatches a synthetic `popstate` event so React Router picks up the change.
+   *
+   * TODO(#190): replace with a sidebar navigation click once the Costs link is
+   * wired into the sidebar in the Electron project.
+   */
+  async gotoElectron(): Promise<void> {
+    await this.page.evaluate(() => {
+      window.history.pushState({}, '', '/costs');
+      window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+    });
+    await this.heading().waitFor();
+  }
+
   // ── Headline ─────────────────────────────────────────────────────────
 
   /** "Cost Analysis" page heading — used as a "the page mounted" smoke check. */
@@ -33,6 +49,15 @@ export class CostsPage {
   /** Delta-vs-prior pill (or the "no prior period" fallback badge). */
   deltaPill(): Locator {
     return this.page.getByText(/vs prior|no prior period/);
+  }
+
+  /**
+   * KPI value text by its exact display string (e.g. `'$7.00'`).
+   * Scoped to the first matching element so it survives pages where
+   * the same formatted number could appear more than once.
+   */
+  kpiValue(text: string): Locator {
+    return this.page.getByText(text).first();
   }
 
   // ── Range selector ───────────────────────────────────────────────────
@@ -69,6 +94,14 @@ export class CostsPage {
   /** All `<tr>` rows including the header — index 0 is the header, 1.. are games. */
   tableRows(): Locator {
     return this.page.getByRole('row');
+  }
+
+  /**
+   * A `<td>` or `<th>` cell whose accessible name matches `name` (string or
+   * regex). Pass a `RegExp` for partial matches, e.g. `/valheim/`.
+   */
+  tableCell(name: string | RegExp): Locator {
+    return this.page.getByRole('cell', { name });
   }
 
   /** Sortable column header button by its visible label (`Game`, `vCPU`, `$/hour`, etc.). */
