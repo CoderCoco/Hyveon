@@ -18,65 +18,14 @@ import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { mockClient } from 'aws-sdk-client-mock';
-import {
-  ECSClient,
-  ListTasksCommand,
-  DescribeTasksCommand,
-  RunTaskCommand,
-  StopTaskCommand,
-} from '@aws-sdk/client-ecs';
 import { AppModule } from './app.module.js';
 import { TestMocksModule } from './test-mocks/test-mocks.module.js';
-import { mockStore } from './test-mocks/mock-store.js';
+import { installEcsMock } from './test-mocks/ecs-mock.js';
 import { logger } from './logger.js';
 
 // ── Patch ECSClient prototype before DI container creates any instances ──
 
-const ecsMock = mockClient(ECSClient);
-
-ecsMock.on(ListTasksCommand).callsFake(async () => {
-  const next = mockStore.dequeueListTasks();
-  if (next?.type === 'error') {
-    throw Object.assign(new Error(next.message ?? 'Mock ListTasks error'), {
-      name: next.code ?? 'ServiceException',
-    });
-  }
-  return (next?.data as object | undefined) ?? { taskArns: [] };
-});
-
-ecsMock.on(DescribeTasksCommand).callsFake(async () => {
-  const next = mockStore.dequeueDescribeTasks();
-  if (next?.type === 'error') {
-    throw Object.assign(new Error(next.message ?? 'Mock DescribeTasks error'), {
-      name: next.code ?? 'ServiceException',
-    });
-  }
-  return (next?.data as object | undefined) ?? { tasks: [] };
-});
-
-ecsMock.on(RunTaskCommand).callsFake(async () => {
-  const next = mockStore.dequeueRunTask();
-  if (next?.type === 'error') {
-    throw Object.assign(new Error(next.message ?? 'Mock RunTask error'), {
-      name: next.code ?? 'ServiceException',
-    });
-  }
-  return (next?.data as object | undefined) ?? {
-    tasks: [{ taskArn: 'arn:aws:ecs:us-east-1:123456789012:task/test-cluster/test-task-id' }],
-    failures: [],
-  };
-});
-
-ecsMock.on(StopTaskCommand).callsFake(async () => {
-  const next = mockStore.dequeueStopTask();
-  if (next?.type === 'error') {
-    throw Object.assign(new Error(next.message ?? 'Mock StopTask error'), {
-      name: next.code ?? 'ServiceException',
-    });
-  }
-  return (next?.data as object | undefined) ?? {};
-});
+installEcsMock();
 
 // ── Boot the Nest application ──
 
