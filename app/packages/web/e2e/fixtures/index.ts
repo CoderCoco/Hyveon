@@ -217,42 +217,32 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
 }
 
 type E2EFixtures = {
-  /**
-   * Raw page handle for specs that need direct page access (e.g. to call
-   * `stubApis` or `addInitScript`); prefer `dashboard` / `costs` / `layout`
-   * for higher-level interactions. Retained as a named alias now that the API
-   * no longer requires a pre-seeded token.
-   */
-  authedPage: Page;
-  /** Page object for the dashboard route — use in any authed-dashboard spec. */
+  /** Page object for the dashboard route. */
   dashboard: DashboardPage;
-  /** Page object for the `/costs` route — use in any authed-costs spec. */
+  /** Page object for the `/costs` route. */
   costs: CostsPage;
-  /** Page object for the `/logs` route — use in any authed-logs spec. */
+  /** Page object for the `/logs` route. */
   logs: LogsPage;
-  /** Page object for the `/settings` route — use in any authed-settings spec. */
+  /** Page object for the `/settings` route. */
   settings: SettingsPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
 };
 
 export const test = base.extend<E2EFixtures>({
-  authedPage: async ({ page }, use) => {
-    await use(page);
+  // Every page object wraps the raw `page` fixture directly — there's no
+  // token seeding or auth gate to resolve through.
+  dashboard: async ({ page }, use) => {
+    await use(new DashboardPage(page));
   },
-  // `dashboard` and `costs` resolve through `authedPage`; `layout` uses the raw
-  // `page`. Both are plain page handles now that no token seeding is required.
-  dashboard: async ({ authedPage }, use) => {
-    await use(new DashboardPage(authedPage));
+  costs: async ({ page }, use) => {
+    await use(new CostsPage(page));
   },
-  costs: async ({ authedPage }, use) => {
-    await use(new CostsPage(authedPage));
+  logs: async ({ page }, use) => {
+    await use(new LogsPage(page));
   },
-  logs: async ({ authedPage }, use) => {
-    await use(new LogsPage(authedPage));
-  },
-  settings: async ({ authedPage }, use) => {
-    await use(new SettingsPage(authedPage));
+  settings: async ({ page }, use) => {
+    await use(new SettingsPage(page));
   },
   layout: async ({ page }, use) => {
     await use(new AppLayout(page));
@@ -260,11 +250,10 @@ export const test = base.extend<E2EFixtures>({
 });
 
 // `_electron` is re-exported so Electron specs import their whole Playwright
-// surface (`test`, `expect`, `_electron`) from this single shared entrypoint,
-// matching the convention that non-auth-gate specs never reach into
-// `@playwright/test` directly. The extended `test` carries browser-page
-// fixtures, but those are lazy — an Electron spec that drives its own
-// `_electron.launch()` and requests no page fixtures never instantiates them.
+// surface (`test`, `expect`, `_electron`) from this single shared entrypoint.
+// The extended `test` carries browser-page fixtures, but those are lazy — an
+// Electron spec that drives its own `_electron.launch()` and requests no page
+// fixtures never instantiates them.
 export { expect, _electron } from '@playwright/test';
 export type { Page } from '@playwright/test';
 export type { ElectronApplication } from 'playwright-core';
