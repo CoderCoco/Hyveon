@@ -40,7 +40,7 @@ class MockStore {
   dequeueRunTask(): MockResponse | null       { return this.runTaskQueue.shift() ?? null; }
   dequeueStopTask(): MockResponse | null      { return this.stopTaskQueue.shift() ?? null; }
 
-  /** Clear all queues — called between tests via `POST /api/test/mocks/reset`. */
+  /** Clear all queues — called between tests in-process via the `ServerMocks`/`IpcHarness` fixtures. */
   reset(): void {
     this.listTasksQueue = [];
     this.describeTasksQueue = [];
