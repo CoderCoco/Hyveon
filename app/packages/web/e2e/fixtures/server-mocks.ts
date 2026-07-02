@@ -1,5 +1,5 @@
 import { test as base } from '@playwright/test';
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext } from '@playwright/test';
 import { DashboardPage } from '../pages/DashboardPage.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
@@ -51,12 +51,7 @@ type IntegrationFixtures = {
    * test so no queued responses leak between specs.
    */
   serverMocks: ServerMocks;
-  /**
-   * Page with the `window.gsd` HTTP bridge installed so every navigation to the
-   * Vite preview can reach the real Nest server on :3002.
-   */
-  authedPage: Page;
-  /** Dashboard page object backed by `authedPage`. */
+  /** Dashboard page object backed by `page`. */
   dashboard: DashboardPage;
 };
 
@@ -68,7 +63,7 @@ export const test = base.extend<IntegrationFixtures>({
     await mocks.reset();
   },
 
-  authedPage: async ({ page }, use) => {
+  page: async ({ page }, use) => {
     // The web client talks to `window.gsd.*`; install a browser-side bridge
     // that forwards each IPC call to the matching `/api/*` route, which the
     // integration preview proxies to the real Nest server on :3002.
@@ -76,7 +71,7 @@ export const test = base.extend<IntegrationFixtures>({
     await use(page);
   },
 
-  dashboard: async ({ authedPage }, use) => {
-    await use(new DashboardPage(authedPage));
+  dashboard: async ({ page }, use) => {
+    await use(new DashboardPage(page));
   },
 });

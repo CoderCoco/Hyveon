@@ -3,7 +3,7 @@ import type { Page, Locator } from '@playwright/test';
 /**
  * Page object for the persistent navigation shell rendered by `AppLayout.tsx`
  * (sidebar + top bar). Encapsulates locators that are shared across every
- * authenticated route so individual specs don't reach into the layout chrome.
+ * route so individual specs don't reach into the layout chrome.
  */
 export class AppLayout {
   constructor(public readonly page: Page) {}
