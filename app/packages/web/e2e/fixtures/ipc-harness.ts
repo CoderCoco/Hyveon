@@ -2,8 +2,7 @@ import 'reflect-metadata';
 import { fileURLToPath } from 'node:url';
 import { NestFactory } from '@nestjs/core';
 import type { INestApplicationContext, Type } from '@nestjs/common';
-// Deep imports into @hyveon/desktop-main's compiled `dist/`, mirroring
-// playwright.integration.config.ts's `node dist/test-main.js` launch. The
+// Deep imports into @hyveon/desktop-main's compiled `dist/` output. The
 // package has no `exports` map, so subpath resolution is unrestricted;
 // `npm run app:build` must have produced `dist/` before this module loads.
 import { AppModule } from '@hyveon/desktop-main/dist/app.module.js';
