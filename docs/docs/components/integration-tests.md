@@ -1,6 +1,6 @@
 # Integration Test Suite (Tier 2)
 
-Full-stack Playwright tests that run a **real Nest.js server** with **mocked AWS SDK** calls, wired to a **Vite preview build** that proxies `/api` requests to it. The goal is to validate the HTTP contract between the frontend and the server without spinning up real AWS infrastructure.
+Playwright-driven tests that dispatch directly into the real `AppModule` Nest.js DI container — built in-process via `NestFactory.createApplicationContext()` — with the AWS SDK mocked. There is no HTTP server, no Vite build/preview, and no `BrowserWindow`: everything runs in a single Node process. The goal is to validate controller-level business logic (permission checks, tfstate parsing, ECS command orchestration, error propagation) against the exact provider wiring the Electron IPC transport uses at runtime, without spinning up real AWS infrastructure.
 
 ## How to Run
 
@@ -10,42 +10,36 @@ npm run app:test:integration
 ```
 
 This command (from the repo root):
-1. Builds `@hyveon/desktop-main` via `tsc`.
-2. Builds the `@hyveon/web` integration bundle (port 4174, `dist-integration/`).
-3. Starts the test Nest server on `:3002` and the Vite preview on `:4174`.
-4. Runs `playwright test --config playwright.integration.config.ts`.
+1. Builds `@hyveon/desktop-main` via `tsc` (produces `dist/`, which the harness deep-imports).
+2. Runs `playwright test --config playwright.integration.config.ts` from `@hyveon/web`.
+
+`playwright.integration.config.ts` has no `webServer` and no `projects` entries — each spec builds its own `ipc` harness (a fresh `AppModule` application context) via the `ipc` fixture, so there's nothing to boot ahead of time.
 
 ## Architecture
 
 ```
-Playwright test process
-  ├── request (APIRequestContext) ─────────────── HTTP directly to :3002
-  └── page (Browser)
-        └── http://localhost:4174 (Vite preview)
-              └── /api/* proxy ────────────────── http://localhost:3002
-                    └── Nest test server (test-main.js)
-                          ├── AppModule (real controllers, services, guards)
-                          ├── TestMocksModule   (POST /api/test/mocks/*)
-                          └── aws-sdk-client-mock (ECSClient prototype patched)
-                                └── MockStore  (per-command FIFO queues)
+Playwright test process (single Node process, no HTTP server, no BrowserWindow)
+  ├── ipc (IpcHarness) ─────────────────────────── NestFactory.createApplicationContext(AppModule)
+  │     └── dispatch(Controller, 'method', ...) ── invokes the controller instance directly
+  └── serverMocks (ServerMocks) ────────────────── pushes into the shared MockStore singleton
+        └── aws-sdk-client-mock (ECSClient prototype patched) ── installEcsMock() reads from MockStore
 ```
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `app/packages/desktop-main/src/test-main.ts` | Integration server entry point. Patches `ECSClient` via `mockClient()` before `NestFactory.create()`, then boots `TestAppModule`. |
 | `app/packages/desktop-main/src/test-mocks/mock-store.ts` | In-process `MockStore` singleton with per-command FIFO queues. |
-| `app/packages/desktop-main/src/test-mocks/test-mocks.controller.ts` | `POST /api/test/mocks/{reset,ecs/list-tasks,...}` — Playwright uses these to seed responses. |
-| `app/packages/web/vite.integration.config.ts` | Vite build config for integration tests (port 4174, `/api` proxy, `VITE_STATUS_POLL_MS=3000`). |
-| `app/packages/web/playwright.integration.config.ts` | Playwright config: `testDir: e2e/integration-specs`, `workers: 1`, two `webServer` entries. |
-| `app/packages/web/e2e/fixtures/server-mocks.ts` | `ServerMocks` class + extended `test` with `serverMocks`, `authedPage`, `dashboard` fixtures. |
-| `app/packages/web/e2e/fixtures/tfstate.fixture.json` | Synthetic Terraform state (`minecraft` + `valheim`, `us-east-1`, `test.example.com`). |
-| `app/packages/web/e2e/integration-specs/` | All integration specs. |
+| `app/packages/desktop-main/src/test-mocks/ecs-mock.ts` | Installs `aws-sdk-client-mock` interceptors on `ECSClient`, wired to `MockStore`. |
+| `app/packages/web/e2e/fixtures/ipc-harness.ts` | Builds the in-process IPC test harness (`createIpcHarness()`) via `NestFactory.createApplicationContext(AppModule)`, deep-importing `@hyveon/desktop-main`'s compiled `dist/`, and dispatches directly to controller methods. |
+| `app/packages/web/e2e/fixtures/server-mocks.ts` | `ServerMocks` class + extended `test` with `serverMocks` and `ipc` fixtures. |
+| `app/packages/web/playwright.integration.config.ts` | Playwright config: `testDir: e2e/integration-specs`, `workers: 1`, no `webServer`, no `projects`. |
+| `app/packages/web/e2e/fixtures/tfstate.fixture.json` | Synthetic Terraform state (`minecraft` + `valheim`, `us-east-1`, `test.example.com`), injected via `TF_STATE_PATH` when the `ipc` harness boots. |
+| `app/packages/web/e2e/integration-specs/` | All integration specs; import `test`/`expect` from `./index.js`, not `@playwright/test`. |
 
 ## How Mock Responses Work
 
-The test server's `MockStore` holds separate FIFO queues for `ListTasks`, `DescribeTasks`, `RunTask`, and `StopTask`. When a queue is empty, the corresponding interceptor returns a safe default:
+The in-process `MockStore` singleton holds separate FIFO queues for `ListTasks`, `DescribeTasks`, `RunTask`, and `StopTask`. When a queue is empty, the corresponding interceptor returns a safe default:
 
 | Command | Default (empty queue) |
 |---------|-----------------------|
@@ -54,7 +48,7 @@ The test server's `MockStore` holds separate FIFO queues for `ListTasks`, `Descr
 | `RunTaskCommand` | `{ tasks: [{ taskArn: 'arn:…/test-task-id' }], failures: [] }` |
 | `StopTaskCommand` | `{}` |
 
-Push a response before navigating or clicking:
+Push a response before dispatching the controller call that will consume it:
 
 ```ts
 await serverMocks.pushListTasks({
@@ -65,6 +59,8 @@ await serverMocks.pushDescribeTasks({
   type: 'success',
   data: { tasks: [{ taskArn: '…', lastStatus: 'RUNNING' }] },
 });
+
+const status = await ipc.dispatch(GamesController, 'getStatus', 'minecraft');
 ```
 
 Push an error to test propagation:
@@ -81,17 +77,16 @@ await serverMocks.pushRunTask({
 
 | Spec | What it tests |
 |------|---------------|
-| `api-token-guard.spec.ts` | 401 on missing/wrong token; 200 with valid Bearer; 200 with `?token=` query param. |
-| `config-service.spec.ts` | `GET /api/env` returns region + domain from the fixture; `GET /api/games` returns the fixture game list. |
-| `start-stop.spec.ts` | Dashboard renders STOPPED games on load; confirm dialog appears when Stop is clicked on a RUNNING game. |
-| `status-polling.spec.ts` | Pushing RUNNING mock responses causes the dashboard badge to update within the 3 s poll cycle. |
-| `error-propagation.spec.ts` | `AccessDeniedException` from `RunTaskCommand` surfaces as `{ success: false, message: '…' }` in the start response. |
-| `can-run.spec.ts` | Placeholder — skipped until Discord module is wired into the test server. |
+| `config-service.spec.ts` | `EnvController.getEnv` returns region + domain from the tfstate fixture; `GamesController.listGames`/`listStatus` return the fixture game list. |
+| `discord-config.spec.ts` | `DiscordController.getConfig` never echoes the raw bot token or public key — only the redacted `botTokenSet`/`publicKeySet` booleans. |
+| `start-stop.spec.ts` | `GamesController.listGames`/`listStatus` report STOPPED games on initial load; a game seeded as RUNNING via mocked ECS responses can be stopped. |
+| `status-polling.spec.ts` | Pushing RUNNING mock responses causes the next `GamesController.listStatus` dispatch to reflect the state change (the in-process analogue of the dashboard's poller). |
+| `error-propagation.spec.ts` | `AccessDeniedException` from `RunTaskCommand` surfaces as `{ success: false, message: '…' }` from `GamesController.start`. |
+| `can-run.spec.ts` | Placeholder — skipped until Discord permission enforcement (`canRun()`) is wired into the `ipc` test harness. |
 
 ## Design Constraints
 
 - **`workers: 1`, `fullyParallel: false`** — the `MockStore` is an in-process singleton; concurrent tests would corrupt each other's queues.
-- **`serverMocks` resets before and after every test** — the fixture calls `POST /api/test/mocks/reset` in setup and teardown.
-- **`VITE_STATUS_POLL_MS=3000`** — the integration Vite build shortens the poller interval from 20 s to 3 s so status-change assertions complete in < 10 s.
-- **`TestMocksModule` is never imported by `AppModule`** — it only exists in `TestAppModule` (defined inline in `test-main.ts`), so it cannot accidentally reach the production server.
-- **`TF_STATE_PATH`** — the integration Playwright config injects `e2e/fixtures/tfstate.fixture.json` via this env var so `ConfigService` reads the fixture instead of requiring a real Terraform state file.
+- **`serverMocks` resets before and after every test** — the fixture calls `mockStore.reset()` in-process in setup and teardown; there is no HTTP round-trip.
+- **No HTTP server, no Vite build/preview, no `BrowserWindow`** — every integration spec dispatches directly to the `AppModule` DI container via the `ipc` fixture (`ipc-harness.ts`) and pushes mock ECS responses straight into the in-process `MockStore` singleton via the `serverMocks` fixture (`server-mocks.ts`), so there is no test-only route surface and nothing for Playwright to boot as a `webServer`.
+- **`TF_STATE_PATH`** — `createIpcHarness()` (`ipc-harness.ts`) sets this env var to `e2e/fixtures/tfstate.fixture.json` before building the `AppModule` context, so `ConfigService` reads the fixture instead of requiring a real Terraform state file.
