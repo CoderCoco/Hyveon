@@ -9,9 +9,14 @@ export interface MockResponse {
 
 /**
  * Singleton in-process store of queued AWS SDK mock responses.
- * `test-main.ts` sets up `aws-sdk-client-mock` interceptors that read from
- * this store via `dequeue*()`. Playwright tests push responses via the
- * `TestMocksController` HTTP endpoints before exercising each flow.
+ * `test-mocks/ecs-mock.ts` sets up `aws-sdk-client-mock` interceptors that
+ * read from this store via `dequeue*()`. The Playwright-side `ServerMocks`
+ * fixture (`e2e/fixtures/server-mocks.ts`) imports this module's compiled
+ * `dist/` output directly and calls the `push*()` methods in-process — no
+ * HTTP round-trip and no BrowserWindow involved. Since this module is a
+ * process-wide singleton, state pushed here is immediately visible to any
+ * `IpcHarness` (`e2e/fixtures/ipc-harness.ts`) dispatched in the same test
+ * process.
  *
  * Default (empty queue) behaviour per command:
  *  - ListTasks    → \{ taskArns: [] \}   (no running tasks)
