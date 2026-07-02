@@ -13,10 +13,8 @@ import { mockStore } from './mock-store.js';
  * wired to the shared {@link mockStore} FIFO queues (`ListTasks`,
  * `DescribeTasks`, `RunTask`, `StopTask`).
  *
- * Extracted from `test-main.ts` so both the HTTP integration server
- * (`test-main.ts`, port 3002) and the in-process IPC test harness
- * (`e2e/fixtures/ipc-harness.ts`) can patch `ECSClient` identically without
- * duplicating the four command handlers.
+ * Extracted so the in-process IPC test harness (`e2e/fixtures/ipc-harness.ts`)
+ * can patch `ECSClient` without duplicating the four command handlers.
  *
  * `EcsService` creates its `ECSClient` lazily (on first request), so patching
  * the *prototype* is sufficient — this only needs to run once, before the
