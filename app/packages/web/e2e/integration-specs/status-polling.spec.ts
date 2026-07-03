@@ -1,23 +1,23 @@
+import { GamesController } from '@hyveon/desktop-main/dist/controllers/games.controller.js';
 import { test, expect } from './index.js';
 
 const TASK_ARN = 'arn:aws:ecs:us-east-1:123456789012:task/test-cluster/abc12345';
 
 /**
- * Verifies that the dashboard's status poller picks up AWS state changes
- * without a page reload. The integration build sets VITE_STATUS_POLL_MS=3000
- * so the test can push new mock responses after the initial load and observe
- * the badge transition within a generous timeout.
+ * Verifies that `GamesController.listStatus` picks up AWS state changes on
+ * the next call without any caching getting in the way — the in-process
+ * analogue of the dashboard's poller re-hitting `/api/status` on an interval.
  */
 test.describe('Status polling', () => {
-  test('should update game badge from STOPPED to RUNNING after mock state changes', async ({
-    dashboard,
+  test('should reflect a game transition from STOPPED to RUNNING on the next status call after mock state changes', async ({
+    ipc,
     serverMocks,
   }) => {
-    // Navigate — initial poll fires immediately on mount (default: no tasks → stopped)
-    await dashboard.goto();
-    await expect(dashboard.statusBadge('STOPPED').first()).toBeVisible();
+    // Initial call — default mock behaviour (no tasks queued → stopped)
+    const initial = await ipc.dispatch(GamesController, 'listStatus');
+    initial.forEach((s) => expect(s.state).toBe('stopped'));
 
-    // Push 2 RUNNING responses — one per game in the next concurrent poll
+    // Push 2 RUNNING responses — one per game in the next listStatus call
     for (let i = 0; i < 2; i++) {
       await serverMocks.pushListTasks({
         type: 'success',
@@ -29,7 +29,7 @@ test.describe('Status polling', () => {
       });
     }
 
-    // The next poll (≤3 s) consumes the RUNNING responses and updates the badges
-    await expect(dashboard.statusBadge('RUNNING').first()).toBeVisible({ timeout: 10_000 });
+    const next = await ipc.dispatch(GamesController, 'listStatus');
+    next.forEach((s) => expect(s.state).toBe('running'));
   });
 });

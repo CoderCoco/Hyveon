@@ -2,13 +2,15 @@
  * Browser-side test shim that installs `window.gsd` as a thin HTTP forwarder.
  *
  * Production builds receive `window.gsd` from the Electron preload script, but
- * the Playwright tiers run the web bundle in a plain browser with no Electron
- * host. Since `api.service.ts` now talks exclusively to `window.gsd.*`, this
- * shim re-routes each IPC-shaped call back to the matching `/api/*` HTTP
- * endpoint — which is exactly what both tiers already provide: tier-1 e2e
- * intercepts `/api/*` with `page.route`, and tier-2 integration proxies it to
- * the real Nest server. That keeps every existing stub and HTTP-contract
- * assertion working unchanged while the app speaks IPC.
+ * the tier-1 `chromium` Playwright project runs the web bundle in a plain
+ * browser with no Electron host. Since `api.service.ts` now talks exclusively
+ * to `window.gsd.*`, this shim re-routes each IPC-shaped call back to the
+ * matching `/api/*` HTTP endpoint — which is exactly what the chromium
+ * stub-based specs already provide via `page.route`. That keeps every
+ * existing stub and HTTP-contract assertion working unchanged while the app
+ * speaks IPC. The tier-1 `electron` project drives the real preload bridge
+ * instead, and tier-2 integration specs exercise the app through the
+ * in-process IPC test harness — neither uses this shim.
  *
  * Pass this function (not a call to it) to `page.addInitScript` so it runs in
  * the browser before any app code:

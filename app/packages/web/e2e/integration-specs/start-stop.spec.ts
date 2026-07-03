@@ -1,3 +1,4 @@
+import { GamesController } from '@hyveon/desktop-main/dist/controllers/games.controller.js';
 import { test, expect } from './index.js';
 
 /**
@@ -6,35 +7,32 @@ import { test, expect } from './index.js';
  */
 const TASK_ARN = 'arn:aws:ecs:us-east-1:123456789012:task/test-cluster/abc12345';
 
-test.describe('Start / Stop game server (browser)', () => {
+test.describe('Start / Stop game server', () => {
   /**
-   * Golden path: the dashboard loads, polls the real Nest server, and renders
-   * both games from the tfstate fixture as STOPPED (default mock behaviour —
-   * empty ListTasks queue → taskArns [] → stopped).
+   * Golden path: `GamesController.listGames` returns both games from the
+   * tfstate fixture, and `listStatus` reports them as STOPPED — default mock
+   * behaviour (empty ListTasks queue → taskArns [] → stopped).
    */
-  test('should display game cards from tfstate and show STOPPED status on initial load', async ({
-    dashboard,
+  test('should list games from tfstate and report STOPPED status on initial load', async ({
+    ipc,
     serverMocks: _reset,
   }) => {
-    await dashboard.goto();
-    await expect(dashboard.gameCardHeading('minecraft')).toBeVisible();
-    await expect(dashboard.gameCardHeading('valheim')).toBeVisible();
-    // At least one STOPPED badge must be visible (both games are stopped)
-    await expect(dashboard.statusBadge('STOPPED').first()).toBeVisible();
+    const { games } = await ipc.dispatch(GamesController, 'listGames');
+    expect(games.slice().sort()).toEqual(['minecraft', 'valheim']);
+
+    const statuses = await ipc.dispatch(GamesController, 'listStatus');
+    expect(statuses.map((s) => s.game).sort()).toEqual(['minecraft', 'valheim']);
+    statuses.forEach((s) => expect(s.state).toBe('stopped'));
   });
 
   /**
-   * Seeds one game as RUNNING (one ListTasks response consumed by whichever
-   * game's status call executes first), then verifies that exactly one Stop
-   * button is rendered and that clicking it opens the confirm dialog.
-   *
-   * Two games call ListTasksCommand concurrently; the first dequeues the
-   * RUNNING ARN and the second falls through to the default (no task → stopped).
-   * The result is always one RUNNING + one STOPPED card, with exactly one Stop
-   * button visible.
+   * Seeds a running task for one game (one ListTasks/DescribeTasks pair
+   * consumed by `getStatus`), verifies the status flips to RUNNING, then
+   * seeds a second pair for `stop()`'s own `findRunningTask` lookup and
+   * verifies the stop call succeeds.
    */
-  test('should show confirm dialog when Stop is clicked on a running game', async ({
-    dashboard,
+  test('should stop a running game once ECS reports it as RUNNING', async ({
+    ipc,
     serverMocks,
   }) => {
     await serverMocks.pushListTasks({
@@ -46,15 +44,21 @@ test.describe('Start / Stop game server (browser)', () => {
       data: { tasks: [{ taskArn: TASK_ARN, lastStatus: 'RUNNING' }] },
     });
 
-    await dashboard.goto();
+    const status = await ipc.dispatch(GamesController, 'getStatus', 'minecraft');
+    expect(status.state).toBe('running');
 
-    // One game is running — its Stop button is the only one on the page
-    await expect(dashboard.stopButton()).toBeVisible();
-    await dashboard.stopButton().click();
+    // stop() re-queries ECS for the running task via its own findRunningTask
+    // call — seed the same lookup pair again.
+    await serverMocks.pushListTasks({
+      type: 'success',
+      data: { taskArns: [TASK_ARN] },
+    });
+    await serverMocks.pushDescribeTasks({
+      type: 'success',
+      data: { tasks: [{ taskArn: TASK_ARN, lastStatus: 'RUNNING' }] },
+    });
 
-    // Confirmation dialog must appear with the game name in the heading.
-    // Radix AlertDialog renders with role="alertdialog", not "dialog".
-    await expect(dashboard.page.getByRole('alertdialog')).toBeVisible();
-    await expect(dashboard.page.getByRole('heading', { name: /Stop .+\?/ })).toBeVisible();
+    const result = await ipc.dispatch(GamesController, 'stop', 'minecraft');
+    expect(result).toMatchObject({ success: true });
   });
 });

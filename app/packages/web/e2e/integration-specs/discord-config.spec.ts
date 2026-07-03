@@ -1,15 +1,13 @@
+import { DiscordController } from '@hyveon/desktop-main/dist/controllers/discord.controller.js';
 import { test, expect } from './index.js';
 
-const BASE = 'http://localhost:3002';
-const HEADERS = { Authorization: 'Bearer test-token' };
-
 /**
- * Verifies the server-side secret-redaction contract for `GET /api/discord/config`.
+ * Verifies the server-side secret-redaction contract for `DiscordController.getConfig`.
  *
- * `DiscordHttpController.getConfig()` delegates to `DiscordConfigService.getRedacted()`,
+ * `DiscordController.getConfig()` delegates to `DiscordConfigService.getRedacted()`,
  * which returns `botTokenSet`/`publicKeySet` booleans in place of the raw secrets.
- * This spec issues a real HTTP request against the running Nest server and asserts
- * that the raw `botToken` and `publicKey` fields are absent from the response body.
+ * This spec dispatches directly to the IPC controller and asserts that the raw
+ * `botToken` and `publicKey` fields are absent from the response body.
  *
  * DynamoDB and Secrets Manager calls fail gracefully in the test environment
  * (no real AWS credentials), so the service returns an empty config with both
@@ -17,15 +15,10 @@ const HEADERS = { Authorization: 'Bearer test-token' };
  */
 test.describe('Discord config — secret redaction', () => {
   test('should never echo the bot token or public key in the config response', async ({
-    request,
+    ipc,
     serverMocks: _reset,
   }) => {
-    const resp = await request.get(`${BASE}/api/discord/config`, { headers: HEADERS });
-
-    // The endpoint must respond successfully even when AWS is unreachable.
-    expect(resp.status()).toBe(200);
-
-    const body = await resp.json() as Record<string, unknown>;
+    const body = (await ipc.dispatch(DiscordController, 'getConfig')) as Record<string, unknown>;
 
     // Raw secrets must not be present — the contract is booleans-only.
     expect(body).not.toHaveProperty('botToken');
