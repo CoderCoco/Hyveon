@@ -155,7 +155,11 @@ describe('fake-terraform.mjs', () => {
   });
 
   it('should honor per-line delayMs while still emitting lines in array order', () => {
-    const scriptedDelayMs = 50;
+    // Large enough to dominate spawnSync's process-startup overhead
+    // (~30-35ms locally, often higher on loaded CI). A smaller delayMs would
+    // let the lower-bound assertion below pass on process-startup time alone
+    // even if delayMs handling were removed entirely.
+    const scriptedDelayMs = 300;
     const fixturePath = writeFixture({
       apply: {
         lines: [
