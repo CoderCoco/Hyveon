@@ -113,7 +113,19 @@ export interface AwsCloudProviderLogger {
  */
 export class AwsCloudProvider implements CloudProvider {
   private ecsClient: ECSClient | null = null;
+  private ecsClientRegion: string | null = null;
   private ec2Client: EC2Client | null = null;
+  private ec2ClientRegion: string | null = null;
+
+  /**
+   * Per-game tail of the in-flight critical-section chain, used by {@link
+   * withGameLock} to serialize `startWorkload`/`stopWorkload` calls for the
+   * same game. Without this, two overlapping requests for the same game
+   * could both pass the "already running" / "not currently running" guard
+   * check before either call's `RunTask`/`StopTask` lands, letting duplicate
+   * tasks start or a stop race a start.
+   */
+  private readonly gameLocks = new Map<string, Promise<unknown>>();
 
   /**
    * @param getConfig - Resolves the current Terraform-derived configuration
@@ -130,18 +142,50 @@ export class AwsCloudProvider implements CloudProvider {
     private readonly logger?: AwsCloudProviderLogger,
   ) {}
 
+  /**
+   * Lazily constructs the ECS client, recreating it whenever `region` differs
+   * from the region the cached client was built with — otherwise a stale
+   * client (e.g. left over from a Terraform re-apply that changed regions)
+   * would keep targeting the old region indefinitely.
+   */
   private getEcsClient(region: string): ECSClient {
-    if (!this.ecsClient) {
+    if (!this.ecsClient || this.ecsClientRegion !== region) {
       this.ecsClient = new ECSClient({ region });
+      this.ecsClientRegion = region;
     }
     return this.ecsClient;
   }
 
+  /**
+   * Lazily constructs the EC2 client, recreating it whenever `region` differs
+   * from the region the cached client was built with — see {@link
+   * getEcsClient} for why this matters.
+   */
   private getEc2Client(region: string): EC2Client {
-    if (!this.ec2Client) {
+    if (!this.ec2Client || this.ec2ClientRegion !== region) {
       this.ec2Client = new EC2Client({ region });
+      this.ec2ClientRegion = region;
     }
     return this.ec2Client;
+  }
+
+  /**
+   * Serializes calls for the same `game` so overlapping `startWorkload`/
+   * `stopWorkload` requests can't both pass their guard check before either
+   * one's AWS call lands. Chains `fn` onto the previous in-flight promise
+   * for `game` (if any), so calls for the same game run one at a time in
+   * call order, while calls for *different* games remain fully concurrent.
+   * A rejected/thrown `fn` still unblocks the next queued call for that
+   * game — only the caller that triggered it observes the rejection.
+   */
+  private async withGameLock<T>(game: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.gameLocks.get(game) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    this.gameLocks.set(
+      game,
+      run.catch(() => undefined),
+    );
+    return run;
   }
 
   /**
@@ -228,31 +272,33 @@ export class AwsCloudProvider implements CloudProvider {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const existing = await this.findRunningTask(region, cluster, game);
-    if (existing) throw new WorkloadGuardError(`${game} is already running.`);
+    return this.withGameLock(game, async () => {
+      const existing = await this.findRunningTask(region, cluster, game);
+      if (existing) throw new WorkloadGuardError(`${game} is already running.`);
 
-    // Deliberately no try/catch here: RunTask failures (including non-`Error`
-    // throws from the SDK) propagate to the caller unchanged, so
-    // `EcsService`'s `describeError`'s `String(err)` fallback renders
-    // identically to the pre-migration `EcsService.start` (a raw string
-    // throw must surface unprefixed, not wrapped as `'Error: <string>'`).
-    const resp = await this.getEcsClient(region).send(
-      new RunTaskCommand({
-        cluster,
-        taskDefinition: `${game}-server`,
-        count: 1,
-        launchType: 'FARGATE',
-        networkConfiguration: {
-          awsvpcConfiguration: { subnets, securityGroups: [sg], assignPublicIp: 'ENABLED' },
-        },
-      }),
-    );
-    if (resp.tasks?.length) {
-      const taskArn = resp.tasks[0]!.taskArn!;
-      return { workloadId: taskArn };
-    }
-    const reason = resp.failures?.[0]?.reason ?? 'unknown';
-    throw new WorkloadLaunchError(`Failed to start ${game}: ${reason}`);
+      // Deliberately no try/catch here: RunTask failures (including non-`Error`
+      // throws from the SDK) propagate to the caller unchanged, so
+      // `EcsService`'s `describeError`'s `String(err)` fallback renders
+      // identically to the pre-migration `EcsService.start` (a raw string
+      // throw must surface unprefixed, not wrapped as `'Error: <string>'`).
+      const resp = await this.getEcsClient(region).send(
+        new RunTaskCommand({
+          cluster,
+          taskDefinition: `${game}-server`,
+          count: 1,
+          launchType: 'FARGATE',
+          networkConfiguration: {
+            awsvpcConfiguration: { subnets, securityGroups: [sg], assignPublicIp: 'ENABLED' },
+          },
+        }),
+      );
+      if (resp.tasks?.length) {
+        const taskArn = resp.tasks[0]!.taskArn!;
+        return { workloadId: taskArn };
+      }
+      const reason = resp.failures?.[0]?.reason ?? 'unknown';
+      throw new WorkloadLaunchError(`Failed to start ${game}: ${reason}`);
+    });
   }
 
   /**
@@ -270,14 +316,17 @@ export class AwsCloudProvider implements CloudProvider {
     if (!config) throw new WorkloadGuardError('Terraform not applied.');
 
     const cluster = config.ecsClusterName;
-    const task = await this.findRunningTask(config.region, cluster, game);
-    if (!task) throw new WorkloadGuardError(`${game} is not currently running.`);
 
-    // Deliberately no try/catch here — see the matching comment in
-    // `startWorkload`: StopTask failures propagate unchanged.
-    await this.getEcsClient(config.region).send(
-      new StopTaskCommand({ cluster, task: task.taskArn, reason: 'Stopped via management app' }),
-    );
+    await this.withGameLock(game, async () => {
+      const task = await this.findRunningTask(config.region, cluster, game);
+      if (!task) throw new WorkloadGuardError(`${game} is not currently running.`);
+
+      // Deliberately no try/catch here — see the matching comment in
+      // `startWorkload`: StopTask failures propagate unchanged.
+      await this.getEcsClient(config.region).send(
+        new StopTaskCommand({ cluster, task: task.taskArn, reason: 'Stopped via management app' }),
+      );
+    });
   }
 
   /**
