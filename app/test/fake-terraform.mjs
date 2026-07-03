@@ -44,14 +44,26 @@ const KNOWN_SUBCOMMANDS = ['init', 'plan', 'apply', 'destroy', 'output'];
 
 /**
  * Writes a single fatal error message to stderr, prefixed for easy
- * identification in test failure output, and exits the process.
+ * identification in test failure output, and marks the process to exit
+ * with the given code once the event loop drains.
+ *
+ * Deliberately does not call process.exit(): on platforms where stderr is
+ * piped asynchronously (macOS, Windows) process.exit() does not wait for
+ * the write to flush, which can truncate the error message. Setting
+ * process.exitCode and returning lets Node exit naturally once the write
+ * completes and nothing else keeps the event loop alive, mirroring the
+ * drain-safe approach used for the scripted exit path in main().
+ *
+ * Callers that need to stop further execution after calling fail() must
+ * do so explicitly (e.g. by returning), since this function no longer
+ * halts the process itself.
  *
  * @param message - Human-readable description of what went wrong.
  * @param exitCode - Process exit code, defaults to 1.
  */
 function fail(message, exitCode = 1) {
   process.stderr.write(`fake-terraform: ${message}\n`);
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 /**
@@ -66,10 +78,14 @@ function sleep(ms) {
 
 /**
  * Loads and parses the fixture JSON pointed at by FAKE_TERRAFORM_SCRIPT.
- * Exits the process with a clear stderr message on any failure (missing
- * env var, unreadable file, invalid JSON).
+ * Marks the process to exit with a clear stderr message on any failure
+ * (missing env var, unreadable file, invalid JSON) via fail(), which sets
+ * process.exitCode rather than exiting immediately (see fail()'s doc
+ * comment) — callers must check for a null return and bail out rather
+ * than continuing to use the (invalid) fixture.
  *
- * @returns The resolved fixture path and its parsed contents.
+ * @returns The resolved fixture path and its parsed contents, or null if
+ *   the fixture could not be loaded.
  */
 function loadFixture() {
   const scriptPath = process.env.FAKE_TERRAFORM_SCRIPT;
@@ -77,6 +93,7 @@ function loadFixture() {
     fail(
       'FAKE_TERRAFORM_SCRIPT env var is not set. Point it at a JSON fixture file describing the scripted terraform output.',
     );
+    return null;
   }
 
   let raw;
@@ -84,6 +101,7 @@ function loadFixture() {
     raw = readFileSync(scriptPath, 'utf8');
   } catch (err) {
     fail(`could not read fixture file at "${scriptPath}": ${err.message}`);
+    return null;
   }
 
   let fixture;
@@ -91,10 +109,12 @@ function loadFixture() {
     fixture = JSON.parse(raw);
   } catch (err) {
     fail(`fixture file at "${scriptPath}" is not valid JSON: ${err.message}`);
+    return null;
   }
 
   if (typeof fixture !== 'object' || fixture === null || Array.isArray(fixture)) {
     fail(`fixture file at "${scriptPath}" must contain a JSON object keyed by subcommand.`);
+    return null;
   }
 
   return { scriptPath, fixture };
@@ -127,11 +147,16 @@ async function emitLines(entry) {
  * scripted exit code.
  */
 async function main() {
-  const { scriptPath, fixture } = loadFixture();
+  const loaded = loadFixture();
+  if (!loaded) {
+    return;
+  }
+  const { scriptPath, fixture } = loaded;
 
   const subcommand = process.argv[2];
   if (!subcommand) {
     fail('no subcommand provided. Expected one of: ' + KNOWN_SUBCOMMANDS.join(', '));
+    return;
   }
 
   const entry = fixture[subcommand];
@@ -141,6 +166,7 @@ async function main() {
       `no scripted response for subcommand "${subcommand}" in fixture "${scriptPath}". ` +
         `Scripted subcommands: ${scripted.length > 0 ? scripted.join(', ') : '(none)'}`,
     );
+    return;
   }
 
   await emitLines(entry);
