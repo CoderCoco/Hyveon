@@ -18,6 +18,42 @@ import type {
 } from '@hyveon/shared';
 
 /**
+ * Thrown by {@link AwsCloudProvider.startWorkload} / {@link
+ * AwsCloudProvider.stopWorkload} for expected precondition refusals — a task
+ * is already running, nothing is running to stop, or Terraform hasn't been
+ * applied yet — as opposed to a genuine AWS/SDK failure. Callers (e.g.
+ * `EcsService`) can `instanceof`-check for this type to route these refusals
+ * to `warn`-level logging instead of `error`, without relying on message
+ * string matching that would silently break if the message wording changes.
+ */
+export class WorkloadGuardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkloadGuardError';
+  }
+}
+
+/**
+ * Thrown by {@link AwsCloudProvider.startWorkload} when ECS's `RunTask`
+ * response comes back with zero launched tasks and an explicit failure
+ * reason (e.g. `CAPACITY`, `RESOURCE:FARGATE`) — a genuine AWS-side launch
+ * failure, as opposed to a precondition refusal ({@link WorkloadGuardError}).
+ * Kept as a distinct, separately-`instanceof`-checkable type instead of
+ * reusing `WorkloadGuardError` so callers (e.g. `EcsService`) can still
+ * surface `err.message` unprefixed — matching the exact string the previous,
+ * pre-`AwsCloudProvider` `EcsService.start` returned in its `StartResult.message`
+ * field — while continuing to log this at `error` level (not `warn`), since
+ * this is not an expected/normal operator situation the way a guard refusal
+ * is.
+ */
+export class WorkloadLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkloadLaunchError';
+  }
+}
+
+/**
  * Narrow, Terraform-outputs-shaped subset of configuration
  * {@link AwsCloudProvider} needs to drive ECS + EC2 for the workload methods.
  * Kept local to this package (not imported from desktop-main's
@@ -37,6 +73,29 @@ export interface AwsCloudProviderConfig {
   securityGroupId: string;
   /** Root domain used to build a game's public hostname (`{game}.{domain}`). */
   domainName?: string;
+}
+
+/**
+ * Minimal logging seam {@link AwsCloudProvider} accepts so swallowed
+ * ListTasks/DescribeTasks/DescribeNetworkInterfaces failures remain
+ * diagnosable without pulling `@hyveon/desktop-main`'s Winston logger (or any
+ * other logging dependency) into this package. Callers wire in whatever
+ * logger they already have (e.g. by adapting Winston's `.error`, as
+ * `EcsService.ts`'s `awsCloudProviderLogger` and `AwsModule`'s `useFactory`
+ * provider both do) — the previous `EcsService.findRunningTask` /
+ * `Ec2Service.getPublicIp` this class replaces both called `logger.error` on
+ * these same failures, so omitting this seam would be a regression, not a
+ * return to prior behaviour; it exists precisely so callers preserve that
+ * logging instead of losing it.
+ */
+export interface AwsCloudProviderLogger {
+  /**
+   * Logs a caught error at error level.
+   *
+   * @param message - Human-readable description of what failed.
+   * @param err - The caught error/value.
+   */
+  error(message: string, err: unknown): void;
 }
 
 /**
@@ -62,8 +121,14 @@ export class AwsCloudProvider implements CloudProvider {
    *   run — mirrors `ConfigService.getTfOutputs()` returning `null`. Optional
    *   so the class remains constructible with no arguments while the
    *   cost/logs methods are still stubs.
+   * @param logger - Optional sink for errors swallowed by `findRunningTask`
+   *   and `getPublicIp` so operators can diagnose ECS/EC2 SDK failures
+   *   instead of them silently masquerading as "stopped" / "no IP".
    */
-  constructor(private readonly getConfig?: () => AwsCloudProviderConfig | null | undefined) {}
+  constructor(
+    private readonly getConfig?: () => AwsCloudProviderConfig | null | undefined,
+    private readonly logger?: AwsCloudProviderLogger,
+  ) {}
 
   private getEcsClient(region: string): ECSClient {
     if (!this.ecsClient) {
@@ -117,7 +182,8 @@ export class AwsCloudProvider implements CloudProvider {
           (t) => t.lastStatus !== 'STOPPED' && t.lastStatus !== 'DEPROVISIONING',
         ) ?? null
       );
-    } catch {
+    } catch (err) {
+      this.logger?.error('Failed to find running task', err);
       return null;
     }
   }
@@ -133,7 +199,8 @@ export class AwsCloudProvider implements CloudProvider {
         new DescribeNetworkInterfacesCommand({ NetworkInterfaceIds: [eniId] }),
       );
       return resp.NetworkInterfaces?.[0]?.Association?.PublicIp ?? null;
-    } catch {
+    } catch (err) {
+      this.logger?.error('Failed to resolve public IP', err);
       return null;
     }
   }
@@ -153,7 +220,7 @@ export class AwsCloudProvider implements CloudProvider {
    */
   async startWorkload(game: string, _opts: StartOpts): Promise<WorkloadHandle> {
     const config = this.getConfig?.() ?? null;
-    if (!config) throw new Error("Terraform not applied. Run 'terraform apply' first.");
+    if (!config) throw new WorkloadGuardError("Terraform not applied. Run 'terraform apply' first.");
 
     const { region, ecsClusterName: cluster, subnetIds, securityGroupId: sg } = config;
     const subnets = subnetIds
@@ -162,29 +229,30 @@ export class AwsCloudProvider implements CloudProvider {
       .filter(Boolean);
 
     const existing = await this.findRunningTask(region, cluster, game);
-    if (existing) throw new Error(`${game} is already running.`);
+    if (existing) throw new WorkloadGuardError(`${game} is already running.`);
 
-    try {
-      const resp = await this.getEcsClient(region).send(
-        new RunTaskCommand({
-          cluster,
-          taskDefinition: `${game}-server`,
-          count: 1,
-          launchType: 'FARGATE',
-          networkConfiguration: {
-            awsvpcConfiguration: { subnets, securityGroups: [sg], assignPublicIp: 'ENABLED' },
-          },
-        }),
-      );
-      if (resp.tasks?.length) {
-        const taskArn = resp.tasks[0]!.taskArn!;
-        return { workloadId: taskArn };
-      }
-      const reason = resp.failures?.[0]?.reason ?? 'unknown';
-      throw new Error(`Failed to start ${game}: ${reason}`);
-    } catch (err) {
-      throw err instanceof Error ? err : new Error(String(err));
+    // Deliberately no try/catch here: RunTask failures (including non-`Error`
+    // throws from the SDK) propagate to the caller unchanged, so
+    // `EcsService`'s `describeError`'s `String(err)` fallback renders
+    // identically to the pre-migration `EcsService.start` (a raw string
+    // throw must surface unprefixed, not wrapped as `'Error: <string>'`).
+    const resp = await this.getEcsClient(region).send(
+      new RunTaskCommand({
+        cluster,
+        taskDefinition: `${game}-server`,
+        count: 1,
+        launchType: 'FARGATE',
+        networkConfiguration: {
+          awsvpcConfiguration: { subnets, securityGroups: [sg], assignPublicIp: 'ENABLED' },
+        },
+      }),
+    );
+    if (resp.tasks?.length) {
+      const taskArn = resp.tasks[0]!.taskArn!;
+      return { workloadId: taskArn };
     }
+    const reason = resp.failures?.[0]?.reason ?? 'unknown';
+    throw new WorkloadLaunchError(`Failed to start ${game}: ${reason}`);
   }
 
   /**
@@ -199,19 +267,17 @@ export class AwsCloudProvider implements CloudProvider {
    */
   async stopWorkload(game: string): Promise<void> {
     const config = this.getConfig?.() ?? null;
-    if (!config) throw new Error('Terraform not applied.');
+    if (!config) throw new WorkloadGuardError('Terraform not applied.');
 
     const cluster = config.ecsClusterName;
     const task = await this.findRunningTask(config.region, cluster, game);
-    if (!task) throw new Error(`${game} is not currently running.`);
+    if (!task) throw new WorkloadGuardError(`${game} is not currently running.`);
 
-    try {
-      await this.getEcsClient(config.region).send(
-        new StopTaskCommand({ cluster, task: task.taskArn, reason: 'Stopped via management app' }),
-      );
-    } catch (err) {
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    // Deliberately no try/catch here — see the matching comment in
+    // `startWorkload`: StopTask failures propagate unchanged.
+    await this.getEcsClient(config.region).send(
+      new StopTaskCommand({ cluster, task: task.taskArn, reason: 'Stopped via management app' }),
+    );
   }
 
   /**

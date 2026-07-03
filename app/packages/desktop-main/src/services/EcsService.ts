@@ -8,7 +8,13 @@ import {
   DescribeTaskDefinitionCommand,
   type Task,
 } from '@aws-sdk/client-ecs';
-import { AwsCloudProvider, type AwsCloudProviderConfig } from '@hyveon/cloud-aws';
+import {
+  AwsCloudProvider,
+  WorkloadGuardError,
+  WorkloadLaunchError,
+  type AwsCloudProviderConfig,
+  type AwsCloudProviderLogger,
+} from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { Ec2Service } from './Ec2Service.js';
@@ -30,6 +36,53 @@ export function buildProviderConfig(config: ConfigService): AwsCloudProviderConf
     securityGroupId: outputs.security_group_id,
     domainName: outputs.domain_name,
   };
+}
+
+/**
+ * Adapts the module-level Winston {@link logger} to the minimal
+ * {@link AwsCloudProviderLogger} seam `AwsCloudProvider` accepts, so
+ * ListTasks/DescribeTasks/DescribeNetworkInterfaces failures swallowed inside
+ * `findRunningTask` / `getPublicIp` still land in the app's log files instead
+ * of masquerading silently as "stopped" / "no IP". Exported so `AwsModule`'s
+ * `useFactory` provider can wire the same adapter into the shared
+ * `AwsCloudProvider` instance.
+ */
+export const awsCloudProviderLogger: AwsCloudProviderLogger = {
+  error: (message: string, err: unknown) => logger.error(message, { err }),
+};
+
+/**
+ * Renders a caught error for a caller-visible {@link StartResult.message}.
+ * `AwsCloudProvider`'s guard clauses throw a {@link WorkloadGuardError} with
+ * the exact string the app should surface (e.g. "minecraft is already
+ * running."), and `startWorkload` throws a {@link WorkloadLaunchError} with
+ * the exact `Failed to start {game}: {reason}` string when ECS's `RunTask`
+ * reports a failure reason — for both, we return `err.message` unprefixed to
+ * preserve the original message contract `EcsService.start`/`stop` used to
+ * return directly before delegating to `AwsCloudProvider`. Any other error
+ * (AWS SDK exceptions, plain unnamed `Error`s, or non-`Error` throws) falls
+ * through to `String(err)`, which renders as "<name>: <message>" for `Error`
+ * instances (e.g. "AccessDeniedException: ...", or "Error: throttled" for a
+ * generic `Error`).
+ */
+function describeError(err: unknown): string {
+  if (err instanceof WorkloadGuardError || err instanceof WorkloadLaunchError) return err.message;
+  return String(err);
+}
+
+/**
+ * True if `err` is a {@link WorkloadGuardError} — the type
+ * {@link AwsCloudProvider.startWorkload} / {@link AwsCloudProvider.stopWorkload}
+ * throw for expected precondition refusals (a task is already running,
+ * nothing is running to stop, Terraform hasn't been applied yet) rather than
+ * a genuine AWS/SDK failure. `start()` / `stop()` check this so refusals log
+ * at `warn` instead of `error` — they're normal operator situations, not
+ * exceptions worth alerting on. Using `instanceof` instead of message-pattern
+ * matching means a wording change to a guard message can't silently
+ * misclassify a refusal as an unexpected exception (or vice versa).
+ */
+function isGuardRefusal(err: unknown): boolean {
+  return err instanceof WorkloadGuardError;
 }
 
 /**
@@ -83,7 +136,10 @@ export class EcsService {
     // ENI-to-public-IP resolution now happens inside `AwsCloudProvider`
     // itself, so `getStatus` no longer needs to call through to `Ec2Service`.
     _ec2: Ec2Service,
-    private readonly provider: AwsCloudProvider = new AwsCloudProvider(() => buildProviderConfig(config)),
+    private readonly provider: AwsCloudProvider = new AwsCloudProvider(
+      () => buildProviderConfig(config),
+      awsCloudProviderLogger,
+    ),
   ) {}
 
   private getClient(): ECSClient {
@@ -163,6 +219,7 @@ export class EcsService {
    * reaches RUNNING.
    */
   async start(game: string): Promise<StartResult> {
+    logger.info('Starting game server', { game });
     try {
       const handle = await this.provider.startWorkload(game, {});
       logger.info('Game server started', { game, taskArn: handle.workloadId });
@@ -172,8 +229,12 @@ export class EcsService {
         taskArn: handle.workloadId,
       };
     } catch (err) {
-      logger.error('Exception starting game server', { err, game });
-      return { success: false, message: String(err) };
+      if (isGuardRefusal(err)) {
+        logger.warn('Refused to start game server', { game, message: describeError(err) });
+      } else {
+        logger.error('Exception starting game server', { err, game });
+      }
+      return { success: false, message: describeError(err) };
     }
   }
 
@@ -189,8 +250,12 @@ export class EcsService {
       await this.provider.stopWorkload(game);
       return { success: true, message: `${game} is stopping.` };
     } catch (err) {
-      logger.error('Exception stopping game server', { err, game });
-      return { success: false, message: String(err) };
+      if (isGuardRefusal(err)) {
+        logger.warn('Refused to stop game server', { game, message: describeError(err) });
+      } else {
+        logger.error('Exception stopping game server', { err, game });
+      }
+      return { success: false, message: describeError(err) };
     }
   }
 

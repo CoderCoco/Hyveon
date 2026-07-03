@@ -8,7 +8,7 @@ import {
   StopTaskCommand,
 } from '@aws-sdk/client-ecs';
 import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
-import { AwsCloudProvider, type AwsCloudProviderConfig } from './AwsCloudProvider.js';
+import { AwsCloudProvider, WorkloadLaunchError, type AwsCloudProviderConfig } from './AwsCloudProvider.js';
 
 /** Typed stand-in for the AWS ECS SDK client. */
 const ecsMock = mockClient(ECSClient);
@@ -89,6 +89,11 @@ describe('AwsCloudProvider', () => {
         failures: [{ reason: 'CAPACITY' }],
       });
       const provider = makeProvider();
+      // Must be a WorkloadLaunchError (not a plain Error) so callers like
+      // EcsService's describeError() surface `message` unprefixed instead of
+      // falling through to String(err), which would render the wrong
+      // 'Error: Failed to start minecraft: CAPACITY' shape.
+      await expect(provider.startWorkload('minecraft', {})).rejects.toThrow(WorkloadLaunchError);
       await expect(provider.startWorkload('minecraft', {})).rejects.toThrow(
         'Failed to start minecraft: CAPACITY',
       );
@@ -110,13 +115,22 @@ describe('AwsCloudProvider', () => {
       await expect(provider.startWorkload('minecraft', {})).rejects.toThrow('throttled');
     });
 
-    it('should wrap a non-Error throw from RunTask in a new Error', async () => {
+    it('should rethrow a non-Error throw from RunTask unchanged', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      ecsMock.on(RunTaskCommand).callsFake(() => {
-        throw 'raw-string-failure';
-      });
+      // `Promise.reject(...)` (rather than a synchronous `throw`) is used
+      // here because `aws-sdk-client-mock`'s `callsFake` wrapper normalizes
+      // any *synchronously thrown* non-Error value into an `Error` before it
+      // ever reaches our code (see `CommandBehavior.normalizeError`) — that
+      // would mask the exact bug this test guards against. Returning a
+      // rejected promise bypasses that normalization so the raw string
+      // reaches `AwsCloudProvider`'s catch block unchanged, same as a
+      // genuine non-Error rejection from the underlying SDK would.
+      ecsMock.on(RunTaskCommand).callsFake(() => Promise.reject('raw-string-failure'));
       const provider = makeProvider();
-      await expect(provider.startWorkload('minecraft', {})).rejects.toThrow('raw-string-failure');
+      // Asserts the exact raw value survives (not wrapped in an `Error`), so
+      // `EcsService`'s `describeError` `String(err)` fallback still renders
+      // the unprefixed string instead of `'Error: raw-string-failure'`.
+      await expect(provider.startWorkload('minecraft', {})).rejects.toBe('raw-string-failure');
     });
   });
 
@@ -160,16 +174,19 @@ describe('AwsCloudProvider', () => {
       await expect(provider.stopWorkload('minecraft')).rejects.toThrow('stop-error');
     });
 
-    it('should wrap a non-Error throw from StopTask in a new Error', async () => {
+    it('should rethrow a non-Error throw from StopTask unchanged', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: ['arn1'] });
       ecsMock.on(DescribeTasksCommand).resolves({
         tasks: [{ taskArn: 'arn1', lastStatus: 'RUNNING' }],
       });
-      ecsMock.on(StopTaskCommand).callsFake(() => {
-        throw 'raw-stop-failure';
-      });
+      // See the matching comment in the `startWorkload` non-Error-throw test
+      // for why `Promise.reject(...)` is used instead of a synchronous `throw`.
+      ecsMock.on(StopTaskCommand).callsFake(() => Promise.reject('raw-stop-failure'));
       const provider = makeProvider();
-      await expect(provider.stopWorkload('minecraft')).rejects.toThrow('raw-stop-failure');
+      // Asserts the exact raw value survives (not wrapped in an `Error`), so
+      // `EcsService`'s `describeError` `String(err)` fallback still renders
+      // the unprefixed string instead of `'Error: raw-stop-failure'`.
+      await expect(provider.stopWorkload('minecraft')).rejects.toBe('raw-stop-failure');
     });
   });
 

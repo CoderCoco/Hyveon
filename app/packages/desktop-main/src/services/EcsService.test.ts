@@ -269,7 +269,12 @@ describe('EcsService', () => {
       const service = new EcsService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
-      expect(result.message).toContain('CAPACITY');
+      // Exact match (not toContain): this is a WorkloadLaunchError, whose
+      // message must surface unprefixed — the same string EcsService.start
+      // returned directly before delegating to AwsCloudProvider. A loose
+      // toContain('CAPACITY') would still pass on the regressed
+      // 'Error: Failed to start minecraft: CAPACITY' shape.
+      expect(result.message).toBe('Failed to start minecraft: CAPACITY');
     });
 
     it('should return failure when RunTask throws', async () => {
