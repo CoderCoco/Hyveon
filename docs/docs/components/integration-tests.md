@@ -17,7 +17,7 @@ This command (from the repo root):
 
 ## Architecture
 
-```
+```text
 Playwright test process (single Node process, no HTTP server, no BrowserWindow)
   ├── ipc (IpcHarness) ─────────────────────────── NestFactory.createApplicationContext(AppModule)
   │     └── dispatch(Controller, 'method', ...) ── invokes the controller instance directly
