@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev --config ../electron.vite.config.ts",
-    "build": "npm run build -w @hyveon/shared && npm run build -w @hyveon/desktop-main && npm run build -w @hyveon/web",
+    "build": "npm run build -w @hyveon/shared && npm run build -w @hyveon/cloud-aws && npm run build -w @hyveon/desktop-main && npm run build -w @hyveon/web",
     "build:lambdas": "npm run build -w @hyveon/shared && npm run build -w @hyveon/lambda-interactions -w @hyveon/lambda-followup -w @hyveon/lambda-update-dns -w @hyveon/lambda-watchdog -w @hyveon/lambda-efs-seeder",
     "start": "electron ../out/main/index.js",
     "test": "vitest run",
