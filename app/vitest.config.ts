@@ -39,6 +39,8 @@ export default defineConfig({
       'packages/**/*.test.{ts,tsx}',
       // Explicitly include desktop-preload specs so they are always discovered.
       'packages/desktop-preload/**/*.test.{ts,tsx}',
+      // Top-level test helpers (e.g. fake-terraform.mjs) live outside packages/.
+      'test/**/*.test.{ts,tsx}',
     ],
     // Default environment for server-side and shared tests is Node.
     // React component tests under @hyveon/web override this via
