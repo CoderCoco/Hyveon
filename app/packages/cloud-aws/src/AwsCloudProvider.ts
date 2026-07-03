@@ -7,6 +7,7 @@ import {
   type Task,
 } from '@aws-sdk/client-ecs';
 import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
+import { CloudWatchLogsClient, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
 import type {
   CloudProvider,
   CostBreakdown,
@@ -16,6 +17,31 @@ import type {
   WorkloadHandle,
   WorkloadStatus,
 } from '@hyveon/shared';
+
+/**
+ * Sleep for `ms` milliseconds, but reject immediately if `signal` is aborted.
+ * Mirrors `LogsService`'s `sleepInterruptible` helper so `streamWorkloadLogs`'s
+ * poll loop exits promptly when the caller aborts, rather than waiting out a
+ * full cadence after the last poll.
+ */
+function sleepInterruptible(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort);
+  });
+}
 
 /**
  * Thrown by {@link AwsCloudProvider.startWorkload} / {@link
@@ -108,14 +134,18 @@ export interface AwsCloudProviderLogger {
  * `@hyveon/desktop-main` — configuration is supplied via the constructor's
  * `getConfig` callback instead of `ConfigService`.
  *
- * `streamWorkloadLogs`, `getCostEstimate` and `getActualCosts` remain stubs
- * until their own follow-up tasks (#172, #174, #176) land.
+ * `streamWorkloadLogs` reproduces `LogsService.streamLogs`'s CloudWatch Logs
+ * polling behaviour (see the method for details). `getCostEstimate` and
+ * `getActualCosts` remain stubs until their own follow-up tasks (#174, #176)
+ * land.
  */
 export class AwsCloudProvider implements CloudProvider {
   private ecsClient: ECSClient | null = null;
   private ecsClientRegion: string | null = null;
   private ec2Client: EC2Client | null = null;
   private ec2ClientRegion: string | null = null;
+  private logsClient: CloudWatchLogsClient | null = null;
+  private logsClientRegion: string | null = null;
 
   /**
    * Per-game tail of the in-flight critical-section chain, used by {@link
@@ -167,6 +197,19 @@ export class AwsCloudProvider implements CloudProvider {
       this.ec2ClientRegion = region;
     }
     return this.ec2Client;
+  }
+
+  /**
+   * Lazily constructs the CloudWatch Logs client, recreating it whenever
+   * `region` differs from the region the cached client was built with — see
+   * {@link getEcsClient} for why this matters.
+   */
+  private getLogsClient(region: string): CloudWatchLogsClient {
+    if (!this.logsClient || this.logsClientRegion !== region) {
+      this.logsClient = new CloudWatchLogsClient({ region });
+      this.logsClientRegion = region;
+    }
+    return this.logsClient;
   }
 
   /**
@@ -369,12 +412,62 @@ export class AwsCloudProvider implements CloudProvider {
   /**
    * Streams log chunks for a running game workload on AWS.
    *
-   * @param _game - The game identifier to stream logs for.
-   * @param _signal - Aborts the stream when triggered.
-   * @returns Never yields — stub throws until implemented.
+   * Reproduces `LogsService.streamLogs`'s polling behaviour: polls
+   * `FilterLogEvents` against the Terraform-provisioned `/ecs/{game}-server`
+   * log group every `pollInterval` ms (default 2000, matching the SSE
+   * client's expected cadence), de-duplicates by `eventId` (falling back to
+   * `{timestamp}-{message}` when a CloudWatch event has no `eventId`) so
+   * overlapping `startTime` windows never yield the same line twice, and
+   * exits cleanly once `signal` is aborted. A poll failure yields a single
+   * `[stream error] ...` sentinel chunk instead of terminating the generator,
+   * so a transient CloudWatch/SDK hiccup doesn't kill the whole stream —
+   * matching `LogsService.streamLogs`'s resiliency.
+   *
+   * @param game - The game identifier to stream logs for.
+   * @param signal - Aborts the stream when triggered.
+   * @param pollInterval - Milliseconds between polls. Defaults to 2000.
    */
-  streamWorkloadLogs(_game: string, _signal: AbortSignal): AsyncIterable<LogChunk> {
-    throw new Error('Not implemented: streamWorkloadLogs — see Epic #137');
+  async *streamWorkloadLogs(
+    game: string,
+    signal: AbortSignal,
+    pollInterval = 2000,
+  ): AsyncGenerator<LogChunk> {
+    const config = this.getConfig?.() ?? null;
+    if (!config) throw new WorkloadGuardError("Terraform not applied. Run 'terraform apply' first.");
+
+    const { region } = config;
+    const logGroup = `/ecs/${game}-server`;
+    let startTime = Date.now();
+    const seen = new Set<string>();
+
+    while (!signal.aborted) {
+      try {
+        const resp = await this.getLogsClient(region).send(
+          new FilterLogEventsCommand({ logGroupName: logGroup, startTime, limit: 100 }),
+          { abortSignal: signal },
+        );
+        for (const e of resp.events ?? []) {
+          const id = e.eventId ?? `${e.timestamp}-${e.message}`;
+          if (!seen.has(id)) {
+            seen.add(id);
+            yield { message: e.message ?? '', timestamp: new Date(e.timestamp ?? Date.now()) };
+          }
+          if ((e.timestamp ?? 0) >= startTime) {
+            startTime = (e.timestamp ?? startTime) + 1;
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') break;
+        this.logger?.error('Log stream poll error', err);
+        yield { message: `[stream error] ${String(err)}`, timestamp: new Date() };
+      }
+
+      try {
+        await sleepInterruptible(pollInterval, signal);
+      } catch {
+        break;
+      }
+    }
   }
 
   /**
