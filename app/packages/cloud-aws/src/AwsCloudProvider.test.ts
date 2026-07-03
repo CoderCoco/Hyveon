@@ -282,9 +282,8 @@ describe('AwsCloudProvider', () => {
       // `null` so callers fall back to the "stopped" branch), so the only way
       // to exercise `getWorkloadStatus`'s `error` branch is to force the
       // private helper itself to reject.
-      vi.spyOn(provider as unknown as { findRunningTask: () => Promise<never> }, 'findRunningTask').mockRejectedValue(
-        new Error('unexpected failure'),
-      );
+      type ProviderWithPrivates = { findRunningTask: () => Promise<never> };
+      vi.spyOn(provider as ProviderWithPrivates, 'findRunningTask').mockRejectedValue(new Error('unexpected failure'));
 
       const status = await provider.getWorkloadStatus('minecraft');
 
