@@ -12,6 +12,10 @@ export default defineConfig({
       // (Nest server + Lambda bundles) still use the built dist/ via the
       // package.json "main" field — this alias only applies inside Vitest.
       '@hyveon/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
+      // Same rationale as @hyveon/shared above — desktop-main imports
+      // @hyveon/cloud-aws directly, and CI runs `vitest run` without a prior
+      // `npm run build -w @hyveon/cloud-aws`, so its dist/ never exists.
+      '@hyveon/cloud-aws': resolve(__dirname, 'packages/cloud-aws/src/index.ts'),
       // The @hyveon/web package uses `@/foo` as a shortcut for `./src/foo`
       // (matches its tsconfig + Vite config). Re-declare it here so the
       // same imports resolve under Vitest.

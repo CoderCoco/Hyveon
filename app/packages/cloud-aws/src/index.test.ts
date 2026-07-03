@@ -8,31 +8,38 @@ import {
 
 /**
  * Smoke test for the `@hyveon/cloud-aws` barrel export. Verifies that every
- * AWS-backed stub class is re-exported from the package root so consumers
- * can `import { AwsCloudProvider } from '@hyveon/cloud-aws'` without reaching
- * into individual source files, and that each stub method surfaces the
- * expected "Not implemented" error rather than silently resolving.
+ * AWS-backed class is re-exported from the package root so consumers can
+ * `import { AwsCloudProvider } from '@hyveon/cloud-aws'` without reaching
+ * into individual source files.
  *
- * The stub methods are declared with `Promise<...>` / `AsyncIterable<...>`
+ * Most stub methods are declared with `Promise<...>` / `AsyncIterable<...>`
  * return types, but throw synchronously (they aren't `async` functions), so
- * these assertions use `expect(() => ...).toThrow(...)` rather than
- * `.rejects.toThrow(...)`.
+ * those assertions use `expect(() => ...).toThrow(...)` rather than
+ * `.rejects.toThrow(...)`. `AwsCloudProvider`'s workload methods
+ * (`startWorkload`/`stopWorkload`/`getWorkloadStatus`) are real `async`
+ * implementations, so their "no config supplied" branch is asserted via
+ * `.rejects`/`.resolves` instead.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
     expect(new AwsCloudProvider()).toBeInstanceOf(AwsCloudProvider);
   });
 
-  it('should throw a Not implemented error when startWorkload is called', () => {
-    expect(() => new AwsCloudProvider().startWorkload('x', {})).toThrow('Not implemented');
+  it('should reject with a "Terraform not applied" error when startWorkload is called without config', async () => {
+    await expect(new AwsCloudProvider().startWorkload('x', {})).rejects.toThrow(
+      "Terraform not applied. Run 'terraform apply' first.",
+    );
   });
 
-  it('should throw a Not implemented error when stopWorkload is called', () => {
-    expect(() => new AwsCloudProvider().stopWorkload('x')).toThrow('Not implemented');
+  it('should reject with a "Terraform not applied" error when stopWorkload is called without config', async () => {
+    await expect(new AwsCloudProvider().stopWorkload('x')).rejects.toThrow('Terraform not applied.');
   });
 
-  it('should throw a Not implemented error when getWorkloadStatus is called', () => {
-    expect(() => new AwsCloudProvider().getWorkloadStatus('x')).toThrow('Not implemented');
+  it('should return a not_deployed status when getWorkloadStatus is called without config', async () => {
+    await expect(new AwsCloudProvider().getWorkloadStatus('x')).resolves.toEqual({
+      state: 'not_deployed',
+      message: 'Run terraform apply first.',
+    });
   });
 
   it('should throw a Not implemented error when streamWorkloadLogs is called', () => {
