@@ -52,6 +52,17 @@ export const awsCloudProviderLogger: AwsCloudProviderLogger = {
 };
 
 /**
+ * Builds the single shared {@link AwsCloudProvider} instance, wiring
+ * {@link buildProviderConfig} and {@link awsCloudProviderLogger} to the given
+ * `ConfigService`. Extracted so `EcsService`'s constructor default and
+ * `AwsModule`'s `useFactory` provider construct the exact same thing rather
+ * than duplicating the `new AwsCloudProvider(...)` call in two places.
+ */
+export function createAwsCloudProvider(config: ConfigService): AwsCloudProvider {
+  return new AwsCloudProvider(() => buildProviderConfig(config), awsCloudProviderLogger);
+}
+
+/**
  * Renders a caught error for a caller-visible {@link StartResult.message}.
  * `AwsCloudProvider`'s guard clauses throw a {@link WorkloadGuardError} with
  * the exact string the app should surface (e.g. "minecraft is already
@@ -136,10 +147,7 @@ export class EcsService {
     // ENI-to-public-IP resolution now happens inside `AwsCloudProvider`
     // itself, so `getStatus` no longer needs to call through to `Ec2Service`.
     _ec2: Ec2Service,
-    private readonly provider: AwsCloudProvider = new AwsCloudProvider(
-      () => buildProviderConfig(config),
-      awsCloudProviderLogger,
-    ),
+    private readonly provider: AwsCloudProvider = createAwsCloudProvider(config),
   ) {}
 
   private getClient(): ECSClient {
