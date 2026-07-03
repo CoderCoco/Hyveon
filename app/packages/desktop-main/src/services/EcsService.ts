@@ -8,9 +8,29 @@ import {
   DescribeTaskDefinitionCommand,
   type Task,
 } from '@aws-sdk/client-ecs';
+import { AwsCloudProvider, type AwsCloudProviderConfig } from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { Ec2Service } from './Ec2Service.js';
+
+/**
+ * Maps `ConfigService`'s Terraform-outputs shape onto the narrow config
+ * {@link AwsCloudProvider} expects. Returns `null` before `terraform apply`
+ * has run, mirroring `ConfigService.getTfOutputs()` returning `null`.
+ * Exported so `AwsModule` can reuse it when constructing the shared
+ * `AwsCloudProvider` provider via `useFactory`.
+ */
+export function buildProviderConfig(config: ConfigService): AwsCloudProviderConfig | null {
+  const outputs = config.getTfOutputs();
+  if (!outputs) return null;
+  return {
+    region: config.getRegion(),
+    ecsClusterName: outputs.ecs_cluster_name,
+    subnetIds: outputs.subnet_ids,
+    securityGroupId: outputs.security_group_id,
+    domainName: outputs.domain_name,
+  };
+}
 
 /**
  * Snapshot of a game's current state as surfaced to the UI/Discord. The
@@ -44,6 +64,14 @@ export interface StartResult {
  * {@link FileManagerService}. There is intentionally no long-running ECS
  * Service here — the core cost-saving design is "run a one-off task only
  * when the user clicks Start, stop it when the watchdog or user decides".
+ *
+ * `getStatus` / `start` / `stop` delegate to {@link AwsCloudProvider}
+ * (provided by `AwsModule`) rather than issuing `RunTaskCommand` /
+ * `StopTaskCommand` or assembling status themselves — this class is a thin
+ * translation layer between the cloud-agnostic `CloudProvider` contract and
+ * the app's `GameStatus` / `StartResult` response shapes. The remaining
+ * methods (task-definition lookups, the FileBrowser task helpers) stay on
+ * the raw ECS SDK client since they're outside `CloudProvider`'s scope.
  */
 @Injectable()
 export class EcsService {
@@ -51,7 +79,11 @@ export class EcsService {
 
   constructor(
     private readonly config: ConfigService,
-    private readonly ec2: Ec2Service,
+    // Retained (unused) purely for constructor-signature/DI compatibility —
+    // ENI-to-public-IP resolution now happens inside `AwsCloudProvider`
+    // itself, so `getStatus` no longer needs to call through to `Ec2Service`.
+    _ec2: Ec2Service,
+    private readonly provider: AwsCloudProvider = new AwsCloudProvider(() => buildProviderConfig(config)),
   ) {}
 
   private getClient(): ECSClient {
@@ -106,77 +138,39 @@ export class EcsService {
 
   /**
    * Assemble the full status (state + IP + hostname) for a single game.
-   * Consolidates the task lookup, ENI resolution and DNS-name construction
-   * so controllers can map directly to an API response.
+   * Delegates to {@link AwsCloudProvider.getWorkloadStatus} and maps its
+   * cloud-agnostic `WorkloadStatus` onto the app's `GameStatus` response
+   * shape so controllers see no change.
    */
   async getStatus(game: string): Promise<GameStatus> {
-    const outputs = this.config.getTfOutputs();
-    if (!outputs) return { game, state: 'not_deployed', message: 'Run terraform apply first.' };
-
-    const cluster = outputs.ecs_cluster_name;
-    const domain = outputs.domain_name;
-
-    try {
-      const task = await this.findRunningTask(cluster, game);
-      if (task) {
-        if (task.lastStatus === 'RUNNING') {
-          const eniId = this.extractEniId(task);
-          const publicIp = eniId ? await this.ec2.getPublicIp(eniId) : null;
-          return {
-            game,
-            state: 'running',
-            publicIp: publicIp ?? undefined,
-            hostname: domain ? `${game}.${domain}` : undefined,
-            taskArn: task.taskArn,
-          };
-        }
-        return { game, state: 'starting', taskArn: task.taskArn };
-      }
-      return { game, state: 'stopped' };
-    } catch (err) {
-      logger.error('Failed to get server status', { err, game });
-      return { game, state: 'error', message: String(err) };
-    }
+    const status = await this.provider.getWorkloadStatus(game);
+    return {
+      game,
+      state: status.state,
+      publicIp: status.publicIp,
+      hostname: status.hostname,
+      taskArn: status.workloadId,
+      message: status.message,
+    };
   }
 
   /**
    * Launch a one-off Fargate task from the game's `{game}-server` task
-   * definition. Refuses to start a second task when one is already running
-   * (ECS would happily run duplicates otherwise). The DNS record is created
-   * asynchronously by the update-dns Lambda when the task reaches RUNNING.
+   * definition. Delegates to {@link AwsCloudProvider.startWorkload}, which
+   * refuses to start a second task when one is already running and throws
+   * the same message strings this method used to return directly. The DNS
+   * record is created asynchronously by the update-dns Lambda when the task
+   * reaches RUNNING.
    */
   async start(game: string): Promise<StartResult> {
-    const outputs = this.config.getTfOutputs();
-    if (!outputs)
-      return { success: false, message: "Terraform not applied. Run 'terraform apply' first." };
-
-    const { ecs_cluster_name: cluster, subnet_ids, security_group_id: sg } = outputs;
-    const subnets = subnet_ids.split(',').map((s) => s.trim()).filter(Boolean);
-
-    const existing = await this.findRunningTask(cluster, game);
-    if (existing) return { success: false, message: `${game} is already running.` };
-
-    logger.info('Starting game server', { game, cluster });
     try {
-      const resp = await this.getClient().send(
-        new RunTaskCommand({
-          cluster,
-          taskDefinition: `${game}-server`,
-          count: 1,
-          launchType: 'FARGATE',
-          networkConfiguration: {
-            awsvpcConfiguration: { subnets, securityGroups: [sg], assignPublicIp: 'ENABLED' },
-          },
-        }),
-      );
-      if (resp.tasks?.length) {
-        const taskArn = resp.tasks[0]!.taskArn;
-        logger.info('Game server started', { game, taskArn });
-        return { success: true, message: `${game} is starting. It may take 2–5 minutes.`, taskArn };
-      }
-      const reason = resp.failures?.[0]?.reason ?? 'unknown';
-      logger.error('RunTask failed', { game, reason, failures: resp.failures });
-      return { success: false, message: `Failed to start ${game}: ${reason}` };
+      const handle = await this.provider.startWorkload(game, {});
+      logger.info('Game server started', { game, taskArn: handle.workloadId });
+      return {
+        success: true,
+        message: `${game} is starting. It may take 2–5 minutes.`,
+        taskArn: handle.workloadId,
+      };
     } catch (err) {
       logger.error('Exception starting game server', { err, game });
       return { success: false, message: String(err) };
@@ -184,23 +178,15 @@ export class EcsService {
   }
 
   /**
-   * Stop the active task for `game`. The STOPPED state-change event fires
-   * the update-dns Lambda which deletes the Route 53 record — no DNS
-   * cleanup needed here.
+   * Stop the active task for `game`. Delegates to
+   * {@link AwsCloudProvider.stopWorkload}, which throws the same message
+   * strings this method used to return directly. The STOPPED state-change
+   * event fires the update-dns Lambda which deletes the Route 53 record —
+   * no DNS cleanup needed here.
    */
   async stop(game: string): Promise<StartResult> {
-    const outputs = this.config.getTfOutputs();
-    if (!outputs) return { success: false, message: 'Terraform not applied.' };
-
-    const cluster = outputs.ecs_cluster_name;
-    const task = await this.findRunningTask(cluster, game);
-    if (!task) return { success: false, message: `${game} is not currently running.` };
-
-    logger.info('Stopping game server', { game, taskArn: task.taskArn });
     try {
-      await this.getClient().send(
-        new StopTaskCommand({ cluster, task: task.taskArn, reason: 'Stopped via management app' }),
-      );
+      await this.provider.stopWorkload(game);
       return { success: true, message: `${game} is stopping.` };
     } catch (err) {
       logger.error('Exception stopping game server', { err, game });
