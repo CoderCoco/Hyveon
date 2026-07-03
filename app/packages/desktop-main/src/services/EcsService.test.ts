@@ -11,6 +11,7 @@ import {
   RegisterTaskDefinitionCommand,
   type Task,
 } from '@aws-sdk/client-ecs';
+import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
 
 vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -22,6 +23,15 @@ import type { Ec2Service } from './Ec2Service.js';
 
 /** Typed stand-in for the AWS ECS SDK client. */
 const ecsMock = mockClient(ECSClient);
+
+/**
+ * Typed stand-in for the AWS EC2 SDK client. `getStatus` now delegates public
+ * IP resolution to `AwsCloudProvider`, which instantiates its own internal
+ * `EC2Client` — mocking the class here (rather than the removed `Ec2Service`
+ * plumbing) covers that internal client too, since `mockClient` patches the
+ * `EC2Client` prototype globally.
+ */
+const ec2Mock = mockClient(EC2Client);
 
 /**
  * A canonical set of Terraform outputs used by most tests. Individual tests
@@ -68,6 +78,7 @@ function makeEc2(ip: string | null = '1.2.3.4'): Ec2Service {
 describe('EcsService', () => {
   beforeEach(() => {
     ecsMock.reset();
+    ec2Mock.reset();
   });
 
   describe('extractEniId', () => {
@@ -168,13 +179,17 @@ describe('EcsService', () => {
           },
         ],
       });
-      const ec2 = makeEc2('9.9.9.9');
-      const service = new EcsService(makeConfig(), ec2);
+      ec2Mock.on(DescribeNetworkInterfacesCommand).resolves({
+        NetworkInterfaces: [{ Association: { PublicIp: '9.9.9.9' } }],
+      });
+      const service = new EcsService(makeConfig(), makeEc2());
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('running');
       expect(status.publicIp).toBe('9.9.9.9');
       expect(status.hostname).toBe('minecraft.example.com');
-      expect(ec2.getPublicIp).toHaveBeenCalledWith('eni-xyz');
+      expect(ec2Mock.commandCalls(DescribeNetworkInterfacesCommand)[0]!.args[0].input.NetworkInterfaceIds).toEqual([
+        'eni-xyz',
+      ]);
     });
 
     it('should return starting when the task is not yet RUNNING', async () => {
