@@ -155,18 +155,25 @@ describe('fake-terraform.mjs', () => {
   });
 
   it('should honor per-line delayMs while still emitting lines in array order', () => {
+    const scriptedDelayMs = 50;
     const fixturePath = writeFixture({
       apply: {
         lines: [
-          { stream: 'stdout', text: 'first', delayMs: 5 },
+          { stream: 'stdout', text: 'first', delayMs: scriptedDelayMs },
           { stream: 'stdout', text: 'second' },
         ],
       },
     });
 
+    const startedAt = Date.now();
     const { exitCode, stdout } = runFakeTerraform(['apply'], fixturePath);
+    const elapsedMs = Date.now() - startedAt;
 
     expect(exitCode).toBe(0);
     expect(stdout).toBe('first\nsecond\n');
+    // Lower-bound only: proves the script actually awaited delayMs rather
+    // than emitting both lines immediately (which would make this a no-op
+    // assertion on delay behaviour despite the test name).
+    expect(elapsedMs).toBeGreaterThanOrEqual(scriptedDelayMs);
   });
 });
