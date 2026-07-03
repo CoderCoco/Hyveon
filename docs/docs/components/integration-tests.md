@@ -84,6 +84,47 @@ await serverMocks.pushRunTask({
 | `error-propagation.spec.ts` | `AccessDeniedException` from `RunTaskCommand` surfaces as `{ success: false, message: '…' }` from `GamesController.start`. |
 | `can-run.spec.ts` | Placeholder — skipped until Discord permission enforcement (`canRun()`) is wired into the `ipc` test harness. |
 
+## `fake-terraform.mjs` — Scripted Terraform Stand-In
+
+`app/test/fake-terraform.mjs` is a scripted stand-in for the real `terraform` binary. It lets the integration tier (and any orchestrator unit tests) exercise `TerraformService` against realistic `stdout`/`stderr` output and exit codes without shelling out to real Terraform or touching real AWS.
+
+**Wiring this into `TerraformService` integration coverage (stale-plan rejection, destroy confirmation gate, ANSI passthrough, run-record persistence) is deferred to #204** — this doc only covers the script's contract as implemented in #201.
+
+### Invocation
+
+```bash
+FAKE_TERRAFORM_SCRIPT=/path/to/fixture.json node app/test/fake-terraform.mjs plan -out=tfplan
+```
+
+- `FAKE_TERRAFORM_SCRIPT` (required) — absolute path to a JSON fixture file describing the scripted output. If unset, unreadable, or not valid JSON, the script writes a `fake-terraform: …` message to stderr and exits `1`.
+- The subcommand (`init`, `plan`, `apply`, `destroy`, or `output` — whatever `TerraformService` would invoke `terraform` with) is read from `process.argv[2]`. Any extra CLI args (`-out=tfplan`, `-auto-approve`, etc.) are accepted but ignored — only the subcommand name is used to look up the scripted response.
+- If no subcommand is given, or the fixture has no entry for the given subcommand, the script writes an error to stderr (listing the subcommands that *are* scripted) and exits `1`.
+
+### Fixture Schema
+
+The fixture is a JSON object keyed by subcommand name:
+
+```json
+{
+  "plan": {
+    "exitCode": 0,
+    "lines": [
+      { "stream": "stdout", "text": "Refreshing state...", "delayMs": 10 },
+      { "stream": "stderr", "text": "Warning: deprecated argument", "delayMs": 5 },
+      { "stream": "stdout", "text": "Plan: 1 to add, 0 to change, 0 to destroy." }
+    ]
+  }
+}
+```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `<subcommand>.exitCode` | `number` | `0` | Process exit code once every line has been written. |
+| `<subcommand>.lines` | `array` | `[]` | Emitted strictly in array order regardless of which stream each line targets, so fixtures can script realistic stdout/stderr interleaving. |
+| `lines[].stream` | `"stdout"` \| `"stderr"` | `"stdout"` | Any value other than `"stderr"` is treated as `"stdout"`. |
+| `lines[].text` | `string` | — | Written followed by a newline. |
+| `lines[].delayMs` | `number` | `0` | Awaited immediately before that line is written, per-line, so fixtures can simulate realistic Terraform timing (e.g. a slow `plan` refresh before later output). |
+
 ## Design Constraints
 
 - **`workers: 1`, `fullyParallel: false`** — the `MockStore` is an in-process singleton; concurrent tests would corrupt each other's queues.

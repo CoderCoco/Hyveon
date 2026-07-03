@@ -236,6 +236,7 @@ The `test-mock-registry` module is **not** imported by the preload script or any
 - `serverMocks` (`ServerMocks` from `e2e/fixtures/server-mocks.ts`) pushes queued ECS responses straight into the in-process `MockStore` singleton — no HTTP round-trip. Always include it in test parameters — it resets the MockStore before and after each spec automatically.
 - `playwright.integration.config.ts` has no `webServer` and no `projects` entries — each spec boots its own `ipc` harness, so there's nothing to start ahead of time. `workers: 1` and `fullyParallel: false` are intentional — the shared in-process `MockStore` cannot be used concurrently.
 - `createIpcHarness()` sets `TF_STATE_PATH` to `e2e/fixtures/tfstate.fixture.json` before building the `AppModule` context, so `ConfigService` reads the fixture instead of requiring a real Terraform state file.
+- `app/test/fake-terraform.mjs` is a scripted stand-in for the real `terraform` binary, driven by a `FAKE_TERRAFORM_SCRIPT` env var pointing at a JSON fixture keyed by subcommand (`init`/`plan`/`apply`/`destroy`/`output`); it lets specs exercise `TerraformService` against realistic stdout/stderr without shelling out to real terraform. See `docs/docs/components/integration-tests.md` for details.
 
 ## Git & Branch Workflow
 
