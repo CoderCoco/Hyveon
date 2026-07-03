@@ -146,7 +146,13 @@ async function main() {
   await emitLines(entry);
 
   const exitCode = typeof entry.exitCode === 'number' ? entry.exitCode : 0;
-  process.exit(exitCode);
+  // Set exitCode and let the process exit naturally instead of calling
+  // process.exit() here: writes to a piped stdout/stderr can be
+  // asynchronous, and process.exit() does not wait for them to drain,
+  // which can silently truncate scripted output once fixtures grow past
+  // the pipe buffer. Nothing else keeps the event loop alive, so the
+  // process still exits promptly once streams finish flushing.
+  process.exitCode = exitCode;
 }
 
 main().catch((err) => {
