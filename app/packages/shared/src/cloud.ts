@@ -133,6 +133,38 @@ export interface RemoteFileStore {
 }
 
 /**
+ * Thrown by `RemoteFileStore.put` implementations when an optimistic
+ * concurrency guard (`opts.ifMatch`) is provided but no longer matches the
+ * etag currently stored at `path` — i.e. the remote file was modified by
+ * another writer since the caller last read it. Cloud-agnostic: providers
+ * (e.g. `@hyveon/cloud-aws`'s `AwsRemoteFileStore`) must translate their SDK-specific
+ * precondition-failure errors into this type before surfacing them to callers.
+ */
+export class RemoteFileConflictError extends Error {
+  /** The store-relative path of the file that failed the conflict check. */
+  readonly path: string;
+
+  /** The stale `ifMatch` etag that was provided for the conflicting write, if any. */
+  readonly ifMatch?: string;
+
+  /**
+   * @param path - The store-relative path of the file that failed the
+   *   conflict check.
+   * @param message - Optional human-readable message; defaults to a message
+   *   derived from `path`.
+   * @param ifMatch - Optional stale `ifMatch` etag that was provided for the
+   *   conflicting write.
+   */
+  constructor(path: string, message?: string, ifMatch?: string) {
+    super(message ?? `Conflicting write detected for file at path: ${path}`);
+    this.name = 'RemoteFileConflictError';
+    this.path = path;
+    this.ifMatch = ifMatch;
+    Object.setPrototypeOf(this, RemoteFileConflictError.prototype);
+  }
+}
+
+/**
  * Cloud-agnostic interface for resolving the Discord interactions endpoint URL
  * from provider-managed configuration (e.g. an API Gateway invoke URL stored in
  * infrastructure state or a secrets store). Callers depend only on this contract;

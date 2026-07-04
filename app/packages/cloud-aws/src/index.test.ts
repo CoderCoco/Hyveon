@@ -25,6 +25,11 @@ import {
  * `AwsSecretsStore` is likewise a real Secrets-Manager-backed implementation
  * rather than a stub, so only its constructibility is asserted here — see
  * `AwsSecretsStore.test.ts` for behavioural coverage of `get`/`put`/`exists`.
+ * `AwsRemoteFileStore` is also a real S3-backed implementation rather than a
+ * stub; its "no bucket configured" guard is asserted here via `.rejects` (all
+ * three methods are `async` and reject rather than throw synchronously), and
+ * behavioural coverage of `get`/`put`/`listVersions` against a mocked S3
+ * client lives in `AwsRemoteFileStore.test.ts`.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
@@ -81,18 +86,20 @@ describe('cloud-aws barrel export', () => {
     expect(new AwsRemoteFileStore()).toBeInstanceOf(AwsRemoteFileStore);
   });
 
-  it('should throw a Not implemented error when get is called', () => {
-    expect(() => new AwsRemoteFileStore().get('path')).toThrow('Not implemented');
+  it('should reject with a "bucket not configured" error when get is called without config', async () => {
+    await expect(new AwsRemoteFileStore().get('path')).rejects.toThrow('bucket not configured');
   });
 
-  it('should throw a Not implemented error when put is called', () => {
-    expect(() => new AwsRemoteFileStore().put('path', new Uint8Array())).toThrow(
-      'Not implemented',
+  it('should reject with a "bucket not configured" error when put is called without config', async () => {
+    await expect(new AwsRemoteFileStore().put('path', new Uint8Array())).rejects.toThrow(
+      'bucket not configured',
     );
   });
 
-  it('should throw a Not implemented error when listVersions is called', () => {
-    expect(() => new AwsRemoteFileStore().listVersions('path')).toThrow('Not implemented');
+  it('should reject with a "bucket not configured" error when listVersions is called without config', async () => {
+    await expect(new AwsRemoteFileStore().listVersions('path')).rejects.toThrow(
+      'bucket not configured',
+    );
   });
 
   it('should export AwsSecretsStore as a constructible class', () => {
