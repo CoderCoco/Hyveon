@@ -169,8 +169,14 @@ export class DiscordConfigService {
     const [cfg, base, botToken, publicKey] = await Promise.all([
       this.load(),
       this.loadBase(),
-      this.secrets.get(this.botTokenSecretArn()).catch(() => undefined),
-      this.secrets.get(this.publicKeySecretArn()).catch(() => undefined),
+      this.secrets.get(this.botTokenSecretArn()).catch((err: unknown) => {
+        logger.error('Failed to read Discord bot token from Secrets Manager', { err });
+        return undefined;
+      }),
+      this.secrets.get(this.publicKeySecretArn()).catch((err: unknown) => {
+        logger.error('Failed to read Discord public key from Secrets Manager', { err });
+        return undefined;
+      }),
     ]);
     return {
       clientId: cfg.clientId,
