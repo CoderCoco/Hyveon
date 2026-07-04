@@ -35,6 +35,7 @@ export function buildProviderConfig(config: ConfigService): AwsCloudProviderConf
     subnetIds: outputs.subnet_ids,
     securityGroupId: outputs.security_group_id,
     domainName: outputs.domain_name,
+    gameNames: outputs.game_names,
   };
 }
 

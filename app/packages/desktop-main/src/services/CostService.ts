@@ -1,12 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import {
-  CostExplorerClient,
-  GetCostAndUsageCommand,
-} from '@aws-sdk/client-cost-explorer';
+import { AwsCloudProvider, FARGATE_VCPU_PER_HOUR, FARGATE_GB_PER_HOUR } from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
-
-const FARGATE_VCPU_PER_HOUR = 0.04048;
-const FARGATE_GB_PER_HOUR = 0.004445;
 
 /** Per-game Fargate cost projection derived from its CPU/memory spec. */
 export interface GameEstimate {
@@ -43,20 +37,7 @@ export interface ActualCosts {
  */
 @Injectable()
 export class CostService {
-  private client: CostExplorerClient | null = null;
-
-  /**
-   * Lazily construct the Cost Explorer client. The service is only available
-   * in `us-east-1`, so the region is hardcoded here regardless of where the
-   * rest of the infra lives.
-   */
-  private getClient(): CostExplorerClient {
-    if (!this.client) {
-      // Cost Explorer is only available in us-east-1
-      this.client = new CostExplorerClient({ region: 'us-east-1' });
-    }
-    return this.client;
-  }
+  constructor(private readonly provider: AwsCloudProvider = new AwsCloudProvider()) {}
 
   /**
    * Translate a Fargate task's raw `cpu` (1024 = 1 vCPU) and `memory` (MiB)
@@ -86,31 +67,11 @@ export class CostService {
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - days);
-    const fmt = (d: Date) => d.toISOString().split('T')[0]!;
 
     try {
-      const resp = await this.getClient().send(
-        new GetCostAndUsageCommand({
-          TimePeriod: { Start: fmt(start), End: fmt(end) },
-          Granularity: 'DAILY',
-          Filter: {
-            Dimensions: {
-              Key: 'SERVICE',
-              Values: ['Amazon Elastic Container Service', 'AWS Fargate'],
-            },
-          },
-          Metrics: ['UnblendedCost'],
-        }),
-      );
-
-      let total = 0;
-      const daily = (resp.ResultsByTime ?? []).map((r) => {
-        const cost = parseFloat(r.Total?.['UnblendedCost']?.Amount ?? '0');
-        total += cost;
-        return { date: r.TimePeriod?.Start ?? '', cost: Math.round(cost * 10000) / 10000 };
-      });
-
-      return { daily, total: Math.round(total * 100) / 100, currency: 'USD', days };
+      const { total, currency, breakdown } = await this.provider.getActualCosts({ start, end });
+      const daily = Object.entries(breakdown).map(([date, cost]) => ({ date, cost }));
+      return { daily, total, currency, days };
     } catch (err) {
       logger.error('Failed to fetch actual costs', { err });
       return { daily: [], total: 0, currency: 'USD', days, error: String(err) };

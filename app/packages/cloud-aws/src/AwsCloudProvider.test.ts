@@ -4,11 +4,14 @@ import {
   ECSClient,
   ListTasksCommand,
   DescribeTasksCommand,
+  DescribeTaskDefinitionCommand,
   RunTaskCommand,
   StopTaskCommand,
 } from '@aws-sdk/client-ecs';
 import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
 import { CloudWatchLogsClient, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
+import { CostExplorerClient, GetCostAndUsageCommand } from '@aws-sdk/client-cost-explorer';
+import type { DateRange } from '@hyveon/shared';
 import {
   AwsCloudProvider,
   WorkloadGuardError,
@@ -22,6 +25,8 @@ const ecsMock = mockClient(ECSClient);
 const ec2Mock = mockClient(EC2Client);
 /** Typed stand-in for the AWS CloudWatch Logs SDK client. */
 const logsMock = mockClient(CloudWatchLogsClient);
+/** Typed stand-in for the AWS Cost Explorer SDK client. */
+const costExplorerMock = mockClient(CostExplorerClient);
 
 /**
  * A canonical set of provider configuration used by most tests. Individual
@@ -49,6 +54,7 @@ describe('AwsCloudProvider', () => {
     ecsMock.reset();
     ec2Mock.reset();
     logsMock.reset();
+    costExplorerMock.reset();
   });
 
   describe('startWorkload', () => {
@@ -480,6 +486,214 @@ describe('AwsCloudProvider', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('getCostEstimate', () => {
+    it('should return a zeroed breakdown when no config is available', async () => {
+      const provider = makeProvider(null);
+      await expect(provider.getCostEstimate()).resolves.toEqual({
+        total: 0,
+        currency: 'USD',
+        breakdown: {},
+      });
+    });
+
+    it('should return a zeroed breakdown when config.gameNames is missing', async () => {
+      const provider = makeProvider({ ...DEFAULT_CONFIG, gameNames: undefined });
+      await expect(provider.getCostEstimate()).resolves.toEqual({
+        total: 0,
+        currency: 'USD',
+        breakdown: {},
+      });
+    });
+
+    it('should return a zeroed breakdown when config.gameNames is empty', async () => {
+      const provider = makeProvider({ ...DEFAULT_CONFIG, gameNames: [] });
+      await expect(provider.getCostEstimate()).resolves.toEqual({
+        total: 0,
+        currency: 'USD',
+        breakdown: {},
+      });
+    });
+
+    it('should key the breakdown by game name using each game\'s task definition CPU/memory', async () => {
+      ecsMock
+        .on(DescribeTaskDefinitionCommand, { taskDefinition: 'minecraft-server' })
+        .resolves({ taskDefinition: { cpu: '1024', memory: '2048' } });
+      ecsMock
+        .on(DescribeTaskDefinitionCommand, { taskDefinition: 'valheim-server' })
+        .resolves({ taskDefinition: { cpu: '2048', memory: '4096' } });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, gameNames: ['minecraft', 'valheim'] });
+      const result = await provider.getCostEstimate();
+
+      // minecraft: 1 vcpu * 0.04048 + 2 GiB * 0.004445 = 0.04937 -> rounds to 0.0494
+      expect(result.breakdown['minecraft']).toBeCloseTo(0.0494, 4);
+      // valheim: 2 vcpu * 0.04048 + 4 GiB * 0.004445 = 0.09874 -> rounds to 0.0987
+      expect(result.breakdown['valheim']).toBeCloseTo(0.0987, 4);
+      expect(result.currency).toBe('USD');
+      expect(result.total).toBeCloseTo(0.1481, 4);
+    });
+
+    it('should fall back to 2048 cpu / 8192 memory when DescribeTaskDefinition fails', async () => {
+      ecsMock.on(DescribeTaskDefinitionCommand).rejects(new Error('task definition not found'));
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, gameNames: ['minecraft'] });
+      const result = await provider.getCostEstimate();
+
+      // fallback 2 vcpu * 0.04048 + 8 GiB * 0.004445 = 0.11652 -> rounds to 0.1165
+      expect(result.breakdown['minecraft']).toBeCloseTo(0.1165, 4);
+      expect(result.total).toBeCloseTo(0.1165, 4);
+    });
+
+    it('should fall back to 2048 cpu / 8192 memory when DescribeTaskDefinition resolves with no cpu/memory', async () => {
+      ecsMock.on(DescribeTaskDefinitionCommand).resolves({ taskDefinition: {} });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, gameNames: ['minecraft'] });
+      const result = await provider.getCostEstimate();
+
+      // fallback 2 vcpu * 0.04048 + 8 GiB * 0.004445 = 0.11652 -> rounds to 0.1165
+      expect(result.breakdown['minecraft']).toBeCloseTo(0.1165, 4);
+      expect(result.total).toBeCloseTo(0.1165, 4);
+    });
+
+    it('should log the swallowed error via the injected logger when DescribeTaskDefinition fails', async () => {
+      const describeError = new Error('task definition not found');
+      ecsMock.on(DescribeTaskDefinitionCommand).rejects(describeError);
+      const logger = { error: vi.fn() };
+
+      const provider = new AwsCloudProvider(
+        () => ({ ...DEFAULT_CONFIG, gameNames: ['minecraft'] }),
+        logger,
+      );
+      await provider.getCostEstimate();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('minecraft'),
+        describeError,
+      );
+    });
+
+    it('should round the total to at most 4 decimal places', async () => {
+      ecsMock
+        .on(DescribeTaskDefinitionCommand)
+        .resolves({ taskDefinition: { cpu: '256', memory: '512' } });
+
+      const provider = makeProvider({
+        ...DEFAULT_CONFIG,
+        gameNames: ['minecraft', 'valheim', 'terraria'],
+      });
+      const result = await provider.getCostEstimate();
+
+      const decimals = result.total.toString().split('.')[1] ?? '';
+      expect(decimals.length).toBeLessThanOrEqual(4);
+    });
+  });
+
+  describe('getActualCosts', () => {
+    /** A representative two-day range used across most `getActualCosts` specs. */
+    const range: DateRange = {
+      start: new Date('2026-04-10T12:00:00Z'),
+      end: new Date('2026-04-12T00:00:00Z'),
+    };
+
+    it('should query Cost Explorer pinned to us-east-1 regardless of config.region', async () => {
+      let observedRegion: string | undefined;
+      costExplorerMock.on(GetCostAndUsageCommand).callsFake(async (_input, getClient) => {
+        observedRegion = await getClient().config.region();
+        return { ResultsByTime: [] };
+      });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, region: 'eu-west-1' });
+      await provider.getActualCosts(range);
+
+      expect(observedRegion).toBe('us-east-1');
+    });
+
+    it('should format the query TimePeriod as ISO dates and filter to ECS/Fargate', async () => {
+      costExplorerMock.on(GetCostAndUsageCommand).resolves({ ResultsByTime: [] });
+
+      const provider = makeProvider();
+      await provider.getActualCosts(range);
+
+      const input = costExplorerMock.commandCalls(GetCostAndUsageCommand)[0]!.args[0].input;
+      expect(input.TimePeriod).toEqual({ Start: '2026-04-10', End: '2026-04-12' });
+      expect(input.Granularity).toBe('DAILY');
+      expect(input.Filter?.Dimensions?.Key).toBe('SERVICE');
+      expect(input.Filter?.Dimensions?.Values).toEqual([
+        'Amazon Elastic Container Service',
+        'AWS Fargate',
+      ]);
+      expect(input.Metrics).toEqual(['UnblendedCost']);
+    });
+
+    it('should key the breakdown by each result\'s ISO start date', async () => {
+      costExplorerMock.on(GetCostAndUsageCommand).resolves({
+        ResultsByTime: [
+          {
+            TimePeriod: { Start: '2026-04-10', End: '2026-04-11' },
+            Total: { UnblendedCost: { Amount: '1.23456' } },
+          },
+          {
+            TimePeriod: { Start: '2026-04-11', End: '2026-04-12' },
+            Total: { UnblendedCost: { Amount: '2.5' } },
+          },
+        ],
+      });
+
+      const provider = makeProvider();
+      const result = await provider.getActualCosts(range);
+
+      expect(result.breakdown).toEqual({ '2026-04-10': 1.2346, '2026-04-11': 2.5 });
+      expect(result.currency).toBe('USD');
+    });
+
+    it('should round each day\'s cost to 4 decimals and the total to 2 decimals', async () => {
+      costExplorerMock.on(GetCostAndUsageCommand).resolves({
+        ResultsByTime: [
+          { TimePeriod: { Start: '2026-04-10' }, Total: { UnblendedCost: { Amount: '1.23456' } } },
+          { TimePeriod: { Start: '2026-04-11' }, Total: { UnblendedCost: { Amount: '2.50001' } } },
+        ],
+      });
+
+      const provider = makeProvider();
+      const result = await provider.getActualCosts(range);
+
+      expect(result.breakdown['2026-04-10']).toBe(1.2346);
+      expect(result.breakdown['2026-04-11']).toBe(2.5);
+      // 1.23456 + 2.50001 = 3.73457 -> rounds to 3.73
+      expect(result.total).toBe(3.73);
+    });
+
+    it('should default a missing UnblendedCost amount to zero', async () => {
+      costExplorerMock.on(GetCostAndUsageCommand).resolves({
+        ResultsByTime: [{ TimePeriod: { Start: '2026-04-10' }, Total: {} }],
+      });
+
+      const provider = makeProvider();
+      const result = await provider.getActualCosts(range);
+
+      expect(result.breakdown).toEqual({ '2026-04-10': 0 });
+      expect(result.total).toBe(0);
+    });
+
+    it('should propagate the original Error instance when Cost Explorer throws', async () => {
+      costExplorerMock.on(GetCostAndUsageCommand).rejects(new Error('AccessDeniedException'));
+
+      const provider = makeProvider();
+      await expect(provider.getActualCosts(range)).rejects.toThrow('AccessDeniedException');
+    });
+
+    it('should propagate a non-Error throw from Cost Explorer unchanged', async () => {
+      // See the matching comment in the `startWorkload` non-Error-throw test
+      // for why `Promise.reject(...)` is used instead of a synchronous `throw`.
+      costExplorerMock
+        .on(GetCostAndUsageCommand)
+        .callsFake(() => Promise.reject('raw-cost-failure'));
+
+      const provider = makeProvider();
+      await expect(provider.getActualCosts(range)).rejects.toBe('raw-cost-failure');
     });
   });
 });
