@@ -173,7 +173,7 @@ describe('DiscordConfigService.setCredentials', () => {
 
   it('should reject non-string inputs without writing anything', async () => {
     const svc = makeService();
-    const ok = await svc.setCredentials({ clientId: 42 as unknown as string });
+    const ok = await svc.setCredentials({ clientId: 42 });
     expect(ok).toBe(false);
     expect(putDiscordConfigMock).not.toHaveBeenCalled();
     expect(secretsPutMock).not.toHaveBeenCalled();
