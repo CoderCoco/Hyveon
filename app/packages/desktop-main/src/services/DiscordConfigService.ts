@@ -12,24 +12,21 @@
  * `@hyveon/shared`), so this service only exists to back the management UI's
  * configuration tab.
  */
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { AwsSecretsStore } from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import {
   asStringArray,
-  getBotToken,
   getBaseDiscordConfig,
   getDiscordConfig,
-  getPublicKey,
-  invalidateSecretsCache,
   isSafeGameKey,
-  putBotToken,
   putDiscordConfig,
-  putPublicKey,
   type BaseDiscordConfig,
   type DiscordAction,
   type DiscordConfig,
   type RedactedDiscordConfig,
+  type SecretsStore,
 } from '@hyveon/shared';
 
 /** Slash-command action that can be gated via permissions. */
@@ -64,7 +61,18 @@ export class DiscordConfigService {
   private baseCache: BaseDiscordConfig | null = null;
   private baseInflight: Promise<BaseDiscordConfig> | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * `secrets` is typed against the cloud-agnostic `SecretsStore` contract
+   * (not the concrete `AwsSecretsStore` class) so this service depends only
+   * on the interface; `@Inject(AwsSecretsStore)` tells Nest which concrete
+   * provider (registered in `AwsModule`) to resolve for that parameter,
+   * since interfaces don't survive to runtime for Nest's reflection-based
+   * DI to key off of.
+   */
+  constructor(
+    private readonly config: ConfigService,
+    @Inject(AwsSecretsStore) private readonly secrets: SecretsStore,
+  ) {}
 
   /** Resolve the DDB table name from Terraform outputs; throws if not deployed yet. */
   private tableName(): string {
@@ -152,7 +160,8 @@ export class DiscordConfigService {
 
   /** Bot token from Secrets Manager (used by the slash-command registrar). `null` if unset. */
   async getEffectiveToken(): Promise<string | null> {
-    return getBotToken(this.botTokenSecretArn());
+    const token = await this.secrets.get(this.botTokenSecretArn());
+    return token ?? null;
   }
 
   /** Redacted view safe to return to the web client. Includes `*Set` flags for both secrets and the Terraform base lists. */
@@ -160,8 +169,8 @@ export class DiscordConfigService {
     const [cfg, base, botToken, publicKey] = await Promise.all([
       this.load(),
       this.loadBase(),
-      getBotToken(this.botTokenSecretArn()).catch(() => null),
-      getPublicKey(this.publicKeySecretArn()).catch(() => null),
+      this.secrets.get(this.botTokenSecretArn()).catch(() => undefined),
+      this.secrets.get(this.publicKeySecretArn()).catch(() => undefined),
     ]);
     return {
       clientId: cfg.clientId,
@@ -196,14 +205,13 @@ export class DiscordConfigService {
     }
     const writes: Promise<void>[] = [];
     if (typeof params.botToken === 'string' && params.botToken.length > 0) {
-      writes.push(putBotToken(this.botTokenSecretArn(), params.botToken));
+      writes.push(this.secrets.put(this.botTokenSecretArn(), params.botToken));
     }
     if (typeof params.publicKey === 'string' && params.publicKey.length > 0) {
-      writes.push(putPublicKey(this.publicKeySecretArn(), params.publicKey));
+      writes.push(this.secrets.put(this.publicKeySecretArn(), params.publicKey));
     }
     if (writes.length) {
       await Promise.all(writes);
-      invalidateSecretsCache();
     }
     return true;
   }

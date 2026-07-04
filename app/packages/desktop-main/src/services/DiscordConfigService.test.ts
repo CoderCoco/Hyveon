@@ -1,25 +1,22 @@
 /**
  * Tests for the DynamoDB + Secrets Manager-backed DiscordConfigService.
  *
- * The service is a thin wrapper around `@hyveon/shared/ddb/configStore` and
- * `@hyveon/shared/secrets/secretsStore` — the stores themselves have their own
- * tests under the shared package. Here we validate the wiring: that the
- * right stores get called with the right args, that the redacted view
- * strips both secrets, and that the controller-facing contract (same method
- * names as the old file-backed service) still behaves.
+ * The service is a thin wrapper around `@hyveon/shared/ddb/configStore` and a
+ * constructor-injected `SecretsStore` (`AwsSecretsStore` in production, a
+ * stub here) — the stores themselves have their own tests under the shared /
+ * cloud-aws packages. Here we validate the wiring: that the right stores get
+ * called with the right args, that the redacted view strips both secrets,
+ * and that the controller-facing contract (same method names as the old
+ * file-backed service) still behaves.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SecretsStore } from '@hyveon/shared';
 import { DiscordConfigService } from './DiscordConfigService.js';
 import { ConfigService, type TfOutputs } from './ConfigService.js';
 
 const getDiscordConfigMock = vi.fn();
 const getBaseDiscordConfigMock = vi.fn();
 const putDiscordConfigMock = vi.fn();
-const getBotTokenMock = vi.fn();
-const getPublicKeyMock = vi.fn();
-const putBotTokenMock = vi.fn();
-const putPublicKeyMock = vi.fn();
-const invalidateSecretsCacheMock = vi.fn();
 
 vi.mock('@hyveon/shared', async () => {
   const actual = await vi.importActual<typeof import('@hyveon/shared')>('@hyveon/shared');
@@ -28,11 +25,6 @@ vi.mock('@hyveon/shared', async () => {
     getDiscordConfig: (...args: unknown[]) => getDiscordConfigMock(...args),
     getBaseDiscordConfig: (...args: unknown[]) => getBaseDiscordConfigMock(...args),
     putDiscordConfig: (...args: unknown[]) => putDiscordConfigMock(...args),
-    getBotToken: (...args: unknown[]) => getBotTokenMock(...args),
-    getPublicKey: (...args: unknown[]) => getPublicKeyMock(...args),
-    putBotToken: (...args: unknown[]) => putBotTokenMock(...args),
-    putPublicKey: (...args: unknown[]) => putPublicKeyMock(...args),
-    invalidateSecretsCache: () => invalidateSecretsCacheMock(),
   };
 });
 
@@ -56,20 +48,31 @@ const TF: TfOutputs = {
   interactions_invoke_url: 'https://url',
 };
 
-function makeService(outputs: TfOutputs | null = TF): DiscordConfigService {
+/** `get` mock for the injected `SecretsStore` stub — keyed by secret name/ARN so bot-token and public-key lookups can be stubbed independently. */
+const secretsGetMock = vi.fn<SecretsStore['get']>();
+const secretsPutMock = vi.fn<SecretsStore['put']>();
+const secretsExistsMock = vi.fn<SecretsStore['exists']>();
+
+/** Builds a `SecretsStore`-shaped stub backed by the shared mocks above. */
+function makeSecretsStore(): SecretsStore {
+  return { get: secretsGetMock, put: secretsPutMock, exists: secretsExistsMock };
+}
+
+function makeService(
+  outputs: TfOutputs | null = TF,
+  secrets: SecretsStore = makeSecretsStore(),
+): DiscordConfigService {
   const config = { getTfOutputs: () => outputs } as Partial<ConfigService> as ConfigService;
-  return new DiscordConfigService(config);
+  return new DiscordConfigService(config, secrets);
 }
 
 beforeEach(() => {
   getDiscordConfigMock.mockReset();
   getBaseDiscordConfigMock.mockReset();
   putDiscordConfigMock.mockReset();
-  getBotTokenMock.mockReset();
-  getPublicKeyMock.mockReset();
-  putBotTokenMock.mockReset();
-  putPublicKeyMock.mockReset();
-  invalidateSecretsCacheMock.mockReset();
+  secretsGetMock.mockReset();
+  secretsPutMock.mockReset();
+  secretsExistsMock.mockReset();
   getDiscordConfigMock.mockResolvedValue({
     clientId: '',
     allowedGuilds: [],
@@ -81,10 +84,8 @@ beforeEach(() => {
     admins: { userIds: [], roleIds: [] },
   });
   putDiscordConfigMock.mockResolvedValue(undefined);
-  getBotTokenMock.mockResolvedValue(null);
-  getPublicKeyMock.mockResolvedValue(null);
-  putBotTokenMock.mockResolvedValue(undefined);
-  putPublicKeyMock.mockResolvedValue(undefined);
+  secretsGetMock.mockResolvedValue(undefined);
+  secretsPutMock.mockResolvedValue(undefined);
 });
 
 describe('DiscordConfigService construction', () => {
@@ -112,8 +113,11 @@ describe('DiscordConfigService.getRedacted', () => {
       admins: { userIds: ['U1'], roleIds: [] },
       gamePermissions: {},
     });
-    getBotTokenMock.mockResolvedValue('real-token');
-    getPublicKeyMock.mockResolvedValue('hex-key');
+    secretsGetMock.mockImplementation(async (name: string) => {
+      if (name === 'arn:bot-token') return 'real-token';
+      if (name === 'arn:public-key') return 'hex-key';
+      return undefined;
+    });
 
     const redacted = await makeService().getRedacted();
 
@@ -125,11 +129,12 @@ describe('DiscordConfigService.getRedacted', () => {
     });
     expect(redacted).not.toHaveProperty('botToken');
     expect(redacted).not.toHaveProperty('publicKey');
+    expect(secretsGetMock).toHaveBeenCalledWith('arn:bot-token');
+    expect(secretsGetMock).toHaveBeenCalledWith('arn:public-key');
   });
 
   it('should flag both secrets as unset when they still hold the placeholder', async () => {
-    getBotTokenMock.mockResolvedValue(null);
-    getPublicKeyMock.mockResolvedValue(null);
+    secretsGetMock.mockResolvedValue(undefined);
     const redacted = await makeService().getRedacted();
     expect(redacted.botTokenSet).toBe(false);
     expect(redacted.publicKeySet).toBe(false);
@@ -162,9 +167,8 @@ describe('DiscordConfigService.setCredentials', () => {
       'test-discord',
       expect.objectContaining({ clientId: 'abc' }),
     );
-    expect(putBotTokenMock).toHaveBeenCalledWith('arn:bot-token', 'tok');
-    expect(putPublicKeyMock).toHaveBeenCalledWith('arn:public-key', 'hex');
-    expect(invalidateSecretsCacheMock).toHaveBeenCalled();
+    expect(secretsPutMock).toHaveBeenCalledWith('arn:bot-token', 'tok');
+    expect(secretsPutMock).toHaveBeenCalledWith('arn:public-key', 'hex');
   });
 
   it('should reject non-string inputs without writing anything', async () => {
@@ -172,21 +176,21 @@ describe('DiscordConfigService.setCredentials', () => {
     const ok = await svc.setCredentials({ clientId: 42 as unknown as string });
     expect(ok).toBe(false);
     expect(putDiscordConfigMock).not.toHaveBeenCalled();
-    expect(putBotTokenMock).not.toHaveBeenCalled();
+    expect(secretsPutMock).not.toHaveBeenCalled();
   });
 
   it('should leave a field unchanged when its key is omitted from the body', async () => {
     const svc = makeService();
     await svc.setCredentials({ publicKey: 'hex' });
-    expect(putPublicKeyMock).toHaveBeenCalledWith('arn:public-key', 'hex');
-    expect(putBotTokenMock).not.toHaveBeenCalled();
+    expect(secretsPutMock).toHaveBeenCalledWith('arn:public-key', 'hex');
+    expect(secretsPutMock).not.toHaveBeenCalledWith('arn:bot-token', expect.anything());
     expect(putDiscordConfigMock).not.toHaveBeenCalled();
   });
 
   it('should skip Secrets Manager writes when a token field is an empty string', async () => {
     const svc = makeService();
     await svc.setCredentials({ botToken: '' });
-    expect(putBotTokenMock).not.toHaveBeenCalled();
+    expect(secretsPutMock).not.toHaveBeenCalled();
   });
 });
 

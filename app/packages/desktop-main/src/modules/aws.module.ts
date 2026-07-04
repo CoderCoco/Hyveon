@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { AwsCloudProvider } from '@hyveon/cloud-aws';
+import { AwsCloudProvider, AwsSecretsStore } from '@hyveon/cloud-aws';
 import { ConfigService } from '../services/ConfigService.js';
 import { Ec2Service } from '../services/Ec2Service.js';
 import { EcsService, createAwsCloudProvider } from '../services/EcsService.js';
@@ -21,6 +21,12 @@ import { FileManagerService } from '../services/FileManagerService.js';
  * `logger` so ListTasks/DescribeTasks/DescribeNetworkInterfaces failures
  * swallowed inside `AwsCloudProvider` still land in the log files instead of
  * silently masquerading as "stopped" / "no IP".
+ *
+ * `AwsSecretsStore` (also from `@hyveon/cloud-aws`) is registered the same
+ * way so `DiscordConfigService` (in `DiscordModule`, which imports this
+ * module) gets a Secrets-Manager-backed `SecretsStore` via constructor
+ * injection instead of importing the module-level `@hyveon/shared` secrets
+ * helpers directly.
  */
 @Module({
   providers: [
@@ -31,11 +37,24 @@ import { FileManagerService } from '../services/FileManagerService.js';
       useFactory: createAwsCloudProvider,
       inject: [ConfigService],
     },
+    {
+      provide: AwsSecretsStore,
+      useFactory: (config: ConfigService) => new AwsSecretsStore(() => config.getRegion()),
+      inject: [ConfigService],
+    },
     EcsService,
     LogsService,
     CostService,
     FileManagerService,
   ],
-  exports: [ConfigService, Ec2Service, EcsService, LogsService, CostService, FileManagerService],
+  exports: [
+    ConfigService,
+    Ec2Service,
+    EcsService,
+    LogsService,
+    CostService,
+    FileManagerService,
+    AwsSecretsStore,
+  ],
 })
 export class AwsModule {}
