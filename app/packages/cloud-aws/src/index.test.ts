@@ -22,6 +22,9 @@ import {
  * `.rejects`/`.resolves` instead. `getActualCosts` performs a real Cost
  * Explorer call with no config-driven guard, so it isn't exercised by this
  * barrel-export smoke test — see `AwsCloudProvider.test.ts` for its coverage.
+ * `AwsSecretsStore` is likewise a real Secrets-Manager-backed implementation
+ * rather than a stub, so only its constructibility is asserted here — see
+ * `AwsSecretsStore.test.ts` for behavioural coverage of `get`/`put`/`exists`.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
@@ -94,17 +97,5 @@ describe('cloud-aws barrel export', () => {
 
   it('should export AwsSecretsStore as a constructible class', () => {
     expect(new AwsSecretsStore()).toBeInstanceOf(AwsSecretsStore);
-  });
-
-  it('should throw a Not implemented error when get is called', () => {
-    expect(() => new AwsSecretsStore().get('name')).toThrow('Not implemented');
-  });
-
-  it('should throw a Not implemented error when put is called', () => {
-    expect(() => new AwsSecretsStore().put('name', 'value')).toThrow('Not implemented');
-  });
-
-  it('should throw a Not implemented error when exists is called', () => {
-    expect(() => new AwsSecretsStore().exists('name')).toThrow('Not implemented');
   });
 });
