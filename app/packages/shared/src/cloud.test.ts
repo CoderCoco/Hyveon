@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { RemoteFileConflictError } from './cloud.js';
 import type {
   CloudProvider,
   CostBreakdown,
@@ -96,6 +97,39 @@ describe('RemoteFileStore', () => {
     } satisfies RemoteFileStore;
 
     expect(store).toBeDefined();
+  });
+});
+
+describe('RemoteFileConflictError', () => {
+  it('should be importable from cloud.ts and be an instance of Error', () => {
+    const error = new RemoteFileConflictError('games/minecraft/save.zip');
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(RemoteFileConflictError);
+  });
+
+  it('should set name to RemoteFileConflictError and expose the conflicting path', () => {
+    const error = new RemoteFileConflictError('games/minecraft/save.zip');
+
+    expect(error.name).toBe('RemoteFileConflictError');
+    expect(error.path).toBe('games/minecraft/save.zip');
+    expect(error.message).toContain('games/minecraft/save.zip');
+  });
+
+  it('should use a custom message when one is provided', () => {
+    const error = new RemoteFileConflictError('games/minecraft/save.zip', 'etag mismatch');
+
+    expect(error.message).toBe('etag mismatch');
+  });
+
+  it('should propagate the stale ifMatch etag onto the error instance', () => {
+    const error = new RemoteFileConflictError(
+      'games/minecraft/save.zip',
+      'etag mismatch',
+      'stale-etag-123',
+    );
+
+    expect(error.ifMatch).toBe('stale-etag-123');
   });
 });
 
