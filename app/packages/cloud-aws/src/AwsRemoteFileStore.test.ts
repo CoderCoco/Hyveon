@@ -16,11 +16,13 @@ const s3Mock = mockClient(S3Client);
 
 /**
  * Build an {@link AwsRemoteFileStore} whose `getConfig` callback resolves to
- * the given bucket/region. Pass `undefined` to simulate a store constructed
- * with no `getConfig` callback at all (the zero-arg-constructible case).
+ * the given bucket/region. Pass `null` to simulate a store constructed with no
+ * `getConfig` callback at all (the zero-arg-constructible case) — a dedicated
+ * `null` sentinel is used (rather than `undefined`) because an explicit
+ * `undefined` argument would just fall through to the default parameter.
  */
-function makeStore(config: { bucket: string; region?: string } | undefined = { bucket: 'my-bucket' }) {
-  return new AwsRemoteFileStore(config === undefined ? undefined : () => config);
+function makeStore(config: { bucket: string; region?: string } | null = { bucket: 'my-bucket' }) {
+  return new AwsRemoteFileStore(config === null ? undefined : () => config);
 }
 
 /** Builds a fake S3 `Body` stream whose `transformToByteArray()` resolves to the given bytes. */
@@ -247,7 +249,7 @@ describe('AwsRemoteFileStore', () => {
 
   describe('bucket configuration', () => {
     it('should throw a clear error when constructed without a getConfig callback', async () => {
-      const store = new AwsRemoteFileStore();
+      const store = makeStore(null);
       await expect(store.get('foo.txt')).rejects.toThrow(
         'AwsRemoteFileStore: bucket not configured. Supply a getConfig callback that resolves { bucket }.',
       );
@@ -259,7 +261,7 @@ describe('AwsRemoteFileStore', () => {
     });
 
     it('should throw a clear error from listVersions when no bucket is configured', async () => {
-      const store = new AwsRemoteFileStore();
+      const store = makeStore(null);
       await expect(store.listVersions('foo.txt')).rejects.toThrow('bucket not configured');
     });
   });

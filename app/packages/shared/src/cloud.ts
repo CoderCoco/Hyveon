@@ -137,7 +137,7 @@ export interface RemoteFileStore {
  * concurrency guard (`opts.ifMatch`) is provided but no longer matches the
  * etag currently stored at `path` — i.e. the remote file was modified by
  * another writer since the caller last read it. Cloud-agnostic: providers
- * (e.g. `@hyveon/cloud-aws`'s `AwsS3Store`) must translate their SDK-specific
+ * (e.g. `@hyveon/cloud-aws`'s `AwsRemoteFileStore`) must translate their SDK-specific
  * precondition-failure errors into this type before surfacing them to callers.
  */
 export class RemoteFileConflictError extends Error {
