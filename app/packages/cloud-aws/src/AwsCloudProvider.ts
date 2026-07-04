@@ -2,12 +2,14 @@ import {
   ECSClient,
   ListTasksCommand,
   DescribeTasksCommand,
+  DescribeTaskDefinitionCommand,
   RunTaskCommand,
   StopTaskCommand,
   type Task,
 } from '@aws-sdk/client-ecs';
 import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
 import { CloudWatchLogsClient, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
+import { CostExplorerClient, GetCostAndUsageCommand } from '@aws-sdk/client-cost-explorer';
 import type {
   CloudProvider,
   CostBreakdown,
@@ -17,6 +19,11 @@ import type {
   WorkloadHandle,
   WorkloadStatus,
 } from '@hyveon/shared';
+
+/** Fargate on-demand price per vCPU-hour (us-east-1), mirrors the pricing constant the previous `CostService.estimateForSpec` used. */
+const FARGATE_VCPU_PER_HOUR = 0.04048;
+/** Fargate on-demand price per GB-hour (us-east-1), see {@link FARGATE_VCPU_PER_HOUR}. */
+const FARGATE_GB_PER_HOUR = 0.004445;
 
 /**
  * Sleep for `ms` milliseconds, but reject immediately if `signal` is aborted.
@@ -99,6 +106,13 @@ export interface AwsCloudProviderConfig {
   securityGroupId: string;
   /** Root domain used to build a game's public hostname (`{game}.{domain}`). */
   domainName?: string;
+  /**
+   * Names of the games to include in {@link AwsCloudProvider.getCostEstimate}'s
+   * per-game breakdown (mirrors `terraform.tfstate`'s `game_names` output).
+   * Optional so the class remains constructible without it; `getCostEstimate`
+   * returns a zeroed {@link CostBreakdown} when it's missing or empty.
+   */
+  gameNames?: string[];
 }
 
 /**
@@ -136,8 +150,8 @@ export interface AwsCloudProviderLogger {
  *
  * `streamWorkloadLogs` reproduces `LogsService.streamLogs`'s CloudWatch Logs
  * polling behaviour (see the method for details). `getCostEstimate` and
- * `getActualCosts` remain stubs until their own follow-up tasks (#174, #176)
- * land.
+ * `getActualCosts` reproduce the previous `CostService`'s Fargate-pricing
+ * estimate and Cost Explorer billed-actuals lookup respectively.
  */
 export class AwsCloudProvider implements CloudProvider {
   private ecsClient: ECSClient | null = null;
@@ -146,6 +160,7 @@ export class AwsCloudProvider implements CloudProvider {
   private ec2ClientRegion: string | null = null;
   private logsClient: CloudWatchLogsClient | null = null;
   private logsClientRegion: string | null = null;
+  private costExplorerClient: CostExplorerClient | null = null;
 
   /**
    * Per-game tail of the in-flight critical-section chain, used by {@link
@@ -210,6 +225,57 @@ export class AwsCloudProvider implements CloudProvider {
       this.logsClientRegion = region;
     }
     return this.logsClient;
+  }
+
+  /**
+   * Lazily constructs the Cost Explorer client, always pinned to `us-east-1`
+   * regardless of `config.region` — Cost Explorer is only available in that
+   * region, matching the previous `CostService.getClient`'s hardcoded region.
+   */
+  private getCostExplorerClient(): CostExplorerClient {
+    if (!this.costExplorerClient) {
+      this.costExplorerClient = new CostExplorerClient({ region: 'us-east-1' });
+    }
+    return this.costExplorerClient;
+  }
+
+  /**
+   * Resolve a game's Fargate CPU/memory spec from its `{game}-server` task
+   * definition. Falls back to `2048` cpu / `8192` MiB (mirroring the previous
+   * `CostsController.estimate`'s fallback) when the task definition can't be
+   * resolved, so a single undeployed/misconfigured game doesn't blow up the
+   * whole cost estimate.
+   */
+  private async getTaskDefinitionSpec(
+    region: string,
+    game: string,
+  ): Promise<{ cpu: number; memory: number }> {
+    try {
+      const resp = await this.getEcsClient(region).send(
+        new DescribeTaskDefinitionCommand({ taskDefinition: `${game}-server` }),
+      );
+      const td = resp.taskDefinition;
+      return {
+        cpu: parseInt(td?.cpu ?? '2048', 10),
+        memory: parseInt(td?.memory ?? '8192', 10),
+      };
+    } catch (err) {
+      this.logger?.error(`Failed to describe task definition for game=${game}`, err);
+      return { cpu: 2048, memory: 8192 };
+    }
+  }
+
+  /**
+   * Convert a Fargate task's raw `cpu` (1024 = 1 vCPU) and `memory` (MiB) into
+   * a projected hourly dollar cost, using the same pricing constants and
+   * rounding the previous `CostService.estimateForSpec` used for its
+   * `costPerHour` field.
+   */
+  private estimateHourlyCost(cpuUnits: number, memoryMib: number): number {
+    const vcpu = cpuUnits / 1024;
+    const memGb = memoryMib / 1024;
+    const hourly = vcpu * FARGATE_VCPU_PER_HOUR + memGb * FARGATE_GB_PER_HOUR;
+    return Math.round(hourly * 10000) / 10000;
   }
 
   /**
@@ -473,19 +539,78 @@ export class AwsCloudProvider implements CloudProvider {
   /**
    * Retrieves a forward-looking cost estimate across all workloads.
    *
-   * @returns Never resolves — stub throws until implemented.
+   * Estimates each configured game's hourly Fargate cost from its
+   * `{game}-server` task definition's CPU/memory (via {@link
+   * getTaskDefinitionSpec} / {@link estimateHourlyCost}, reproducing the
+   * previous `CostsController.estimate` + `CostService.estimateForSpec`
+   * behaviour), keyed by game name in `breakdown`, with `total` set to the
+   * sum-if-everything-were-running-simultaneously. Returns a zeroed {@link
+   * CostBreakdown} when Terraform hasn't been applied (`getConfig` returns
+   * nothing) or `config.gameNames` is missing/empty.
    */
-  getCostEstimate(): Promise<CostBreakdown> {
-    throw new Error('Not implemented: getCostEstimate — see Epic #137');
+  async getCostEstimate(): Promise<CostBreakdown> {
+    const config = this.getConfig?.() ?? null;
+    const gameNames = config?.gameNames;
+    if (!config || !gameNames?.length) {
+      return { total: 0, currency: 'USD', breakdown: {} };
+    }
+
+    const breakdown: Record<string, number> = {};
+    for (const game of gameNames) {
+      const spec = await this.getTaskDefinitionSpec(config.region, game);
+      breakdown[game] = this.estimateHourlyCost(spec.cpu, spec.memory);
+    }
+
+    const total = Object.values(breakdown).reduce((sum, cost) => sum + cost, 0);
+    return { total: Math.round(total * 10000) / 10000, currency: 'USD', breakdown };
   }
 
   /**
    * Retrieves billed actual costs over a given date range.
    *
-   * @param _range - The date range to scope the billing query.
-   * @returns Never resolves — stub throws until implemented.
+   * Reproduces the previous `CostService.getActualCosts`'s Cost Explorer
+   * query (`GetCostAndUsageCommand` filtered to ECS + Fargate,
+   * `Granularity: 'DAILY'`), with `breakdown` keyed by ISO date
+   * (`r.TimePeriod?.Start`) and each entry set to that day's
+   * `UnblendedCost`, rounded to 4 decimal places — matching the previous
+   * `CostService.getActualCosts`'s per-day breakdown exactly. `total` is the
+   * sum across the whole range. Unlike the previous service, this method
+   * does **not** swallow failures — Cost Explorer/SDK errors propagate to the
+   * caller unchanged so provider-agnostic callers can decide how to surface
+   * them.
+   *
+   * @param range - The date range to scope the billing query.
    */
-  getActualCosts(_range: DateRange): Promise<CostBreakdown> {
-    throw new Error('Not implemented: getActualCosts — see Epic #137');
+  async getActualCosts(range: DateRange): Promise<CostBreakdown> {
+    const fmt = (d: Date) => d.toISOString().split('T')[0]!;
+
+    const resp = await this.getCostExplorerClient().send(
+      new GetCostAndUsageCommand({
+        TimePeriod: { Start: fmt(range.start), End: fmt(range.end) },
+        Granularity: 'DAILY',
+        Filter: {
+          Dimensions: {
+            Key: 'SERVICE',
+            Values: ['Amazon Elastic Container Service', 'AWS Fargate'],
+          },
+        },
+        Metrics: ['UnblendedCost'],
+      }),
+    );
+
+    const breakdown: Record<string, number> = {};
+    let total = 0;
+    for (const r of resp.ResultsByTime ?? []) {
+      const day = r.TimePeriod?.Start ?? '';
+      const cost = parseFloat(r.Total?.['UnblendedCost']?.Amount ?? '0');
+      breakdown[day] = Math.round(cost * 10000) / 10000;
+      total += cost;
+    }
+
+    return {
+      total: Math.round(total * 100) / 100,
+      currency: 'USD',
+      breakdown,
+    };
   }
 }
