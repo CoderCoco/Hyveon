@@ -37,6 +37,11 @@ const TF_OUTPUTS: TfOutputs = {
   game_names: ['minecraft'],
   alb_dns_name: null,
   acm_certificate_arn: null,
+  discord_table_name: 'discord-table',
+  discord_bot_token_secret_arn: 'arn:aws:secretsmanager:us-east-1:123:secret:bot-token',
+  discord_public_key_secret_arn: 'arn:aws:secretsmanager:us-east-1:123:secret:public-key',
+  interactions_invoke_url: null,
+  discord_interactions_url: null,
 };
 
 /**
