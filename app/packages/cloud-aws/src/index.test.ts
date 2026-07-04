@@ -16,9 +16,9 @@ import {
  * return types, but throw synchronously (they aren't `async` functions), so
  * those assertions use `expect(() => ...).toThrow(...)` rather than
  * `.rejects.toThrow(...)`. `AwsCloudProvider`'s workload methods
- * (`startWorkload`/`stopWorkload`/`getWorkloadStatus`) are real `async`
- * implementations, so their "no config supplied" branch is asserted via
- * `.rejects`/`.resolves` instead.
+ * (`startWorkload`/`stopWorkload`/`getWorkloadStatus`/`streamWorkloadLogs`)
+ * are real `async`/async-generator implementations, so their "no config
+ * supplied" branch is asserted via `.rejects`/`.resolves` instead.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
@@ -42,11 +42,15 @@ describe('cloud-aws barrel export', () => {
     });
   });
 
-  it('should throw a Not implemented error when streamWorkloadLogs is called', () => {
+  it('should reject with a "Terraform not applied" error when streamWorkloadLogs is iterated without config', async () => {
     const controller = new AbortController();
-    expect(() => new AwsCloudProvider().streamWorkloadLogs('x', controller.signal)).toThrow(
-      'Not implemented',
-    );
+    await expect(
+      (async () => {
+        for await (const _chunk of new AwsCloudProvider().streamWorkloadLogs('x', controller.signal)) {
+          // draining the generator triggers the guard check on first iteration
+        }
+      })(),
+    ).rejects.toThrow("Terraform not applied. Run 'terraform apply' first.");
   });
 
   it('should throw a Not implemented error when getCostEstimate is called', () => {

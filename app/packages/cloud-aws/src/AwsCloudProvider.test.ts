@@ -8,12 +8,20 @@ import {
   StopTaskCommand,
 } from '@aws-sdk/client-ecs';
 import { EC2Client, DescribeNetworkInterfacesCommand } from '@aws-sdk/client-ec2';
-import { AwsCloudProvider, WorkloadLaunchError, type AwsCloudProviderConfig } from './AwsCloudProvider.js';
+import { CloudWatchLogsClient, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
+import {
+  AwsCloudProvider,
+  WorkloadGuardError,
+  WorkloadLaunchError,
+  type AwsCloudProviderConfig,
+} from './AwsCloudProvider.js';
 
 /** Typed stand-in for the AWS ECS SDK client. */
 const ecsMock = mockClient(ECSClient);
 /** Typed stand-in for the AWS EC2 SDK client. */
 const ec2Mock = mockClient(EC2Client);
+/** Typed stand-in for the AWS CloudWatch Logs SDK client. */
+const logsMock = mockClient(CloudWatchLogsClient);
 
 /**
  * A canonical set of provider configuration used by most tests. Individual
@@ -40,6 +48,7 @@ describe('AwsCloudProvider', () => {
   beforeEach(() => {
     ecsMock.reset();
     ec2Mock.reset();
+    logsMock.reset();
   });
 
   describe('startWorkload', () => {
@@ -288,6 +297,189 @@ describe('AwsCloudProvider', () => {
       const status = await provider.getWorkloadStatus('minecraft');
 
       expect(status).toEqual({ state: 'error', message: 'Error: unexpected failure' });
+    });
+  });
+
+  describe('streamWorkloadLogs', () => {
+    it('should throw a WorkloadGuardError when no config is available', async () => {
+      const provider = makeProvider(null);
+      const ac = new AbortController();
+      await expect(
+        (async () => {
+          for await (const _chunk of provider.streamWorkloadLogs('minecraft', ac.signal, 0)) {
+            // no config means the generator should throw before yielding anything
+          }
+        })(),
+      ).rejects.toThrow(WorkloadGuardError);
+    });
+
+    it('should terminate immediately when signal is already aborted before the first poll', async () => {
+      const ac = new AbortController();
+      ac.abort();
+
+      const provider = makeProvider();
+      const chunks: unknown[] = [];
+      for await (const chunk of provider.streamWorkloadLogs('minecraft', ac.signal, 0)) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([]);
+      expect(logsMock.commandCalls(FilterLogEventsCommand)).toHaveLength(0);
+    });
+
+    it('should yield log chunks from the first poll and terminate on abort', async () => {
+      logsMock.on(FilterLogEventsCommand).resolves({
+        events: [
+          { eventId: 'e1', timestamp: 1000, message: 'line1' },
+          { eventId: 'e2', timestamp: 2000, message: 'line2' },
+        ],
+      });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('minecraft', ac.signal, 0);
+
+      const { value: c1 } = await gen.next();
+      const { value: c2 } = await gen.next();
+      ac.abort();
+      const { done } = await gen.next();
+
+      expect(c1).toEqual({ message: 'line1', timestamp: new Date(1000) });
+      expect(c2).toEqual({ message: 'line2', timestamp: new Date(2000) });
+      expect(done).toBe(true);
+    });
+
+    it('should yield new events from successive polls', async () => {
+      logsMock
+        .on(FilterLogEventsCommand)
+        .resolvesOnce({ events: [{ eventId: 'e1', timestamp: 1000, message: 'first' }] })
+        .resolves({ events: [{ eventId: 'e2', timestamp: 2000, message: 'second' }] });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('minecraft', ac.signal, 0);
+
+      const { value: c1 } = await gen.next();
+      const { value: c2 } = await gen.next();
+      ac.abort();
+      await gen.return(undefined);
+
+      expect(c1).toEqual({ message: 'first', timestamp: new Date(1000) });
+      expect(c2).toEqual({ message: 'second', timestamp: new Date(2000) });
+    });
+
+    it('should de-duplicate events with the same eventId across polls', async () => {
+      logsMock
+        .on(FilterLogEventsCommand)
+        .resolvesOnce({ events: [{ eventId: 'e1', timestamp: 1000, message: 'line1' }] })
+        .resolvesOnce({
+          events: [
+            { eventId: 'e1', timestamp: 1000, message: 'line1' }, // already seen
+            { eventId: 'e2', timestamp: 2000, message: 'line2' }, // new
+          ],
+        });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('minecraft', ac.signal, 0);
+
+      const { value: c1 } = await gen.next(); // first poll yields 'line1'
+      const { value: c2 } = await gen.next(); // second poll skips duplicate, yields 'line2'
+      ac.abort();
+      await gen.return(undefined);
+
+      expect(c1).toEqual({ message: 'line1', timestamp: new Date(1000) });
+      expect(c2).toEqual({ message: 'line2', timestamp: new Date(2000) });
+    });
+
+    it('should query the /ecs/{game}-server log group', async () => {
+      logsMock.on(FilterLogEventsCommand).resolves({
+        events: [{ eventId: 'e1', timestamp: 1000, message: 'hello' }],
+      });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('valheim', ac.signal, 0);
+
+      await gen.next(); // first poll runs and yields 'hello'
+      ac.abort();
+      await gen.return(undefined);
+
+      const calls = logsMock.commandCalls(FilterLogEventsCommand);
+      expect(calls[0]!.args[0].input.logGroupName).toBe('/ecs/valheim-server');
+    });
+
+    it('should yield a stream-error sentinel and continue when a poll throws', async () => {
+      logsMock
+        .on(FilterLogEventsCommand)
+        .rejectsOnce(new Error('throttled'))
+        .resolves({ events: [{ eventId: 'e1', timestamp: 1000, message: 'recovered' }] });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('minecraft', ac.signal, 0);
+
+      const { value: errChunk } = (await gen.next()) as { value: { message: string } };
+      const { value: okChunk } = await gen.next();
+      ac.abort();
+      await gen.return(undefined);
+
+      expect(errChunk.message).toMatch(/\[stream error\].*throttled/);
+      expect(okChunk).toEqual({ message: 'recovered', timestamp: new Date(1000) });
+    });
+
+    it('should map a missing event.message to an empty string', async () => {
+      logsMock.on(FilterLogEventsCommand).resolves({
+        events: [{ eventId: 'e1', timestamp: 1000 }], // no message field
+      });
+
+      const provider = makeProvider();
+      const ac = new AbortController();
+      const gen = provider.streamWorkloadLogs('minecraft', ac.signal, 0);
+
+      const { value: chunk } = await gen.next();
+      ac.abort();
+      await gen.return(undefined);
+
+      expect(chunk).toEqual({ message: '', timestamp: new Date(1000) });
+    });
+
+    it('should default the poll cadence to 2000ms when pollInterval is not specified', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        // Second poll must return a *new* eventId — a duplicate would be
+        // deduped without yielding, so the generator would keep polling
+        // (and sleeping) indefinitely instead of settling `nextPromise`
+        // right after the second poll's sleep completes.
+        logsMock
+          .on(FilterLogEventsCommand)
+          .resolvesOnce({ events: [{ eventId: 'e1', timestamp: 1000, message: 'line1' }] })
+          .resolves({ events: [{ eventId: 'e2', timestamp: 2000, message: 'line2' }] });
+
+        const provider = makeProvider();
+        const ac = new AbortController();
+        const gen = provider.streamWorkloadLogs('minecraft', ac.signal); // default pollInterval
+
+        await gen.next(); // consumes the first poll's single yielded chunk
+
+        let secondPollSettled = false;
+        const nextPromise = gen.next().then((result) => {
+          secondPollSettled = true;
+          return result;
+        });
+
+        await vi.advanceTimersByTimeAsync(1999);
+        expect(secondPollSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await nextPromise;
+        expect(secondPollSettled).toBe(true);
+
+        ac.abort();
+        await gen.return(undefined);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
