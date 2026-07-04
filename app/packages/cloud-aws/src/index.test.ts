@@ -15,10 +15,13 @@ import {
  * Most stub methods are declared with `Promise<...>` / `AsyncIterable<...>`
  * return types, but throw synchronously (they aren't `async` functions), so
  * those assertions use `expect(() => ...).toThrow(...)` rather than
- * `.rejects.toThrow(...)`. `AwsCloudProvider`'s workload methods
- * (`startWorkload`/`stopWorkload`/`getWorkloadStatus`/`streamWorkloadLogs`)
- * are real `async`/async-generator implementations, so their "no config
- * supplied" branch is asserted via `.rejects`/`.resolves` instead.
+ * `.rejects.toThrow(...)`. `AwsCloudProvider`'s workload and cost-estimate
+ * methods (`startWorkload`/`stopWorkload`/`getWorkloadStatus`/
+ * `streamWorkloadLogs`/`getCostEstimate`) are real `async`/async-generator
+ * implementations, so their "no config supplied" branch is asserted via
+ * `.rejects`/`.resolves` instead. `getActualCosts` performs a real Cost
+ * Explorer call with no config-driven guard, so it isn't exercised by this
+ * barrel-export smoke test — see `AwsCloudProvider.test.ts` for its coverage.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
@@ -53,13 +56,12 @@ describe('cloud-aws barrel export', () => {
     ).rejects.toThrow("Terraform not applied. Run 'terraform apply' first.");
   });
 
-  it('should throw a Not implemented error when getCostEstimate is called', () => {
-    expect(() => new AwsCloudProvider().getCostEstimate()).toThrow('Not implemented');
-  });
-
-  it('should throw a Not implemented error when getActualCosts is called', () => {
-    const range = { start: new Date(), end: new Date() };
-    expect(() => new AwsCloudProvider().getActualCosts(range)).toThrow('Not implemented');
+  it('should return a zeroed CostBreakdown when getCostEstimate is called without config', async () => {
+    await expect(new AwsCloudProvider().getCostEstimate()).resolves.toEqual({
+      total: 0,
+      currency: 'USD',
+      breakdown: {},
+    });
   });
 
   it('should export AwsDiscordEventReceiver as a constructible class', () => {
