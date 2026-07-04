@@ -1,9 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { AwsCloudProvider } from '@hyveon/cloud-aws';
+import { AwsCloudProvider, FARGATE_VCPU_PER_HOUR, FARGATE_GB_PER_HOUR } from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
-
-const FARGATE_VCPU_PER_HOUR = 0.04048;
-const FARGATE_GB_PER_HOUR = 0.004445;
 
 /** Per-game Fargate cost projection derived from its CPU/memory spec. */
 export interface GameEstimate {

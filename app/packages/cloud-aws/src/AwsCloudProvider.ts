@@ -20,10 +20,15 @@ import type {
   WorkloadStatus,
 } from '@hyveon/shared';
 
-/** Fargate on-demand price per vCPU-hour (us-east-1), mirrors the pricing constant the previous `CostService.estimateForSpec` used. */
-const FARGATE_VCPU_PER_HOUR = 0.04048;
+/**
+ * Fargate on-demand price per vCPU-hour (us-east-1). Exported so
+ * `CostService.estimateForSpec` (`app/packages/desktop-main/src/services/CostService.ts`)
+ * imports this single copy instead of hardcoding its own — keep both call
+ * sites in sync by only ever editing the value here.
+ */
+export const FARGATE_VCPU_PER_HOUR = 0.04048;
 /** Fargate on-demand price per GB-hour (us-east-1), see {@link FARGATE_VCPU_PER_HOUR}. */
-const FARGATE_GB_PER_HOUR = 0.004445;
+export const FARGATE_GB_PER_HOUR = 0.004445;
 
 /**
  * Sleep for `ms` milliseconds, but reject immediately if `signal` is aborted.
@@ -267,8 +272,8 @@ export class AwsCloudProvider implements CloudProvider {
 
   /**
    * Convert a Fargate task's raw `cpu` (1024 = 1 vCPU) and `memory` (MiB) into
-   * a projected hourly dollar cost, using the same pricing constants and
-   * rounding the previous `CostService.estimateForSpec` used for its
+   * a projected hourly dollar cost, using the same exported pricing constants
+   * and rounding that `CostService.estimateForSpec` uses for its
    * `costPerHour` field.
    */
   private estimateHourlyCost(cpuUnits: number, memoryMib: number): number {
