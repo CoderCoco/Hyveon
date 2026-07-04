@@ -458,7 +458,7 @@ export class AwsCloudProvider implements CloudProvider {
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') break;
-        this.logger?.error('Log stream poll error', err);
+        this.logger?.error(`Log stream poll error for game=${game} logGroup=${logGroup}`, err);
         yield { message: `[stream error] ${String(err)}`, timestamp: new Date() };
       }
 
