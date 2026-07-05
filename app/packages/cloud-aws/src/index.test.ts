@@ -29,7 +29,11 @@ import {
  * stub; its "no bucket configured" guard is asserted here via `.rejects` (all
  * three methods are `async` and reject rather than throw synchronously), and
  * behavioural coverage of `get`/`put`/`listVersions` against a mocked S3
- * client lives in `AwsRemoteFileStore.test.ts`.
+ * client lives in `AwsRemoteFileStore.test.ts`. `AwsDiscordEventReceiver` is
+ * also a real implementation rather than a stub; its "no `getConfig`
+ * supplied" branch is asserted here via `.resolves` since
+ * `getInteractionEndpointUrl` is a real `async` method that resolves to
+ * `null` rather than throwing.
  */
 describe('cloud-aws barrel export', () => {
   it('should export AwsCloudProvider as a constructible class', () => {
@@ -76,10 +80,8 @@ describe('cloud-aws barrel export', () => {
     expect(new AwsDiscordEventReceiver()).toBeInstanceOf(AwsDiscordEventReceiver);
   });
 
-  it('should throw a Not implemented error when getInteractionEndpointUrl is called', () => {
-    expect(() => new AwsDiscordEventReceiver().getInteractionEndpointUrl()).toThrow(
-      'Not implemented',
-    );
+  it('should resolve to null when getInteractionEndpointUrl is called without a getConfig callback', async () => {
+    await expect(new AwsDiscordEventReceiver().getInteractionEndpointUrl()).resolves.toBeNull();
   });
 
   it('should export AwsRemoteFileStore as a constructible class', () => {
