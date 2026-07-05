@@ -1,13 +1,29 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   CloudWatchLogsClient,
   DescribeLogStreamsCommand,
   GetLogEventsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
-import { AwsCloudProvider } from '@hyveon/cloud-aws';
+import type { CloudProvider, LogChunk } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
-import { createAwsCloudProvider } from './EcsService.js';
+import { CLOUD_PROVIDER } from '../modules/cloud-provider.tokens.js';
+
+/**
+ * Local widening of the cloud-agnostic `CloudProvider` contract's
+ * `streamWorkloadLogs` signature to accept the optional `pollInterval`
+ * parameter that concrete implementations (e.g. `@hyveon/cloud-aws`'s
+ * `AwsCloudProvider`) support, without changing the shared interface itself
+ * (which stays intentionally cloud-agnostic and free of polling-cadence
+ * concerns other providers may not expose).
+ */
+type CloudProviderWithPollInterval = CloudProvider & {
+  streamWorkloadLogs(
+    game: string,
+    signal: AbortSignal,
+    pollInterval?: number,
+  ): AsyncIterable<LogChunk>;
+};
 
 /**
  * Fetches recent CloudWatch Logs lines for a game's ECS task so the UI can
@@ -20,12 +36,14 @@ export class LogsService {
 
   constructor(
     private readonly config: ConfigService,
-    // Shares the same `AwsCloudProvider` instance `EcsService` uses (wired via
-    // `AwsModule`'s `useFactory` provider) so `streamLogs` delegates to
-    // `AwsCloudProvider.streamWorkloadLogs` instead of duplicating its
-    // CloudWatch Logs polling logic. Defaults to a freshly constructed
-    // provider for call sites (and tests) that don't go through Nest DI.
-    private readonly provider: AwsCloudProvider = createAwsCloudProvider(config),
+    // Shares the same `CloudProvider` instance bound by `CloudProviderModule`
+    // (via the `CLOUD_PROVIDER` token) so `streamLogs` delegates to
+    // `CloudProvider.streamWorkloadLogs` instead of duplicating its polling
+    // logic. Depending only on the cloud-agnostic `CloudProvider` interface
+    // (rather than the concrete `AwsCloudProvider` class) keeps this service
+    // swappable to another cloud without a call-site change.
+    @Inject(CLOUD_PROVIDER)
+    private readonly provider: CloudProviderWithPollInterval,
   ) {}
 
   private getClient(): CloudWatchLogsClient {
@@ -37,10 +55,12 @@ export class LogsService {
 
   /**
    * Async generator that yields new log lines as they arrive for `game`.
-   * Delegates to {@link AwsCloudProvider.streamWorkloadLogs}, which polls
+   * Delegates to the injected `CloudProvider`'s `streamWorkloadLogs` (bound
+   * by `CloudProviderModule` via the `CLOUD_PROVIDER` token), which polls
    * `FilterLogEvents` every `pollInterval` ms (de-duplicated by `eventId`,
-   * exiting cleanly when `signal` is aborted) — see that method's TSDoc for
-   * the full behaviour this preserves. Only the `message` of each yielded
+   * exiting cleanly when `signal` is aborted) — see
+   * `AwsCloudProvider.streamWorkloadLogs`'s TSDoc for the full behaviour this
+   * preserves for the AWS implementation. Only the `message` of each yielded
    * `LogChunk` is surfaced here, matching this method's pre-existing
    * `AsyncGenerator<string>` contract.
    */
