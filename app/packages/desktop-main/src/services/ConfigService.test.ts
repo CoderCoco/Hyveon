@@ -154,6 +154,12 @@ describe('ConfigService', () => {
     });
   });
 
+  describe('getActiveCloud', () => {
+    it('should return aws', () => {
+      expect(service.getActiveCloud()).toBe('aws');
+    });
+  });
+
   describe('getApiToken', () => {
     it('should return the token from API_TOKEN env when set', () => {
       vi.spyOn(service, 'readEnvApiToken').mockReturnValue('env-tok');

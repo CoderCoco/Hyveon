@@ -59,6 +59,13 @@ const DEFAULT_CONFIG: WatchdogConfig = {
 };
 
 /**
+ * Identifier for the cloud provider the app is currently driving. A union
+ * type (rather than a bare string) so additional providers can be added
+ * without widening every consumer's type to `string`.
+ */
+export type ActiveCloud = 'aws';
+
+/**
  * Owns every runtime configuration source the management app reads:
  *  - `terraform.tfstate` — parsed lazily and cached until
  *    {@link ConfigService.invalidateCache} is called. Path resolved by
@@ -309,6 +316,16 @@ export class ConfigService {
       this.readEnvRegion() ??
       'us-east-1'
     );
+  }
+
+  /**
+   * Resolve the cloud provider the app is currently driving. Hardcoded to
+   * `'aws'` for now — a config-driven value read from the future
+   * electron-store-backed cloud profile will replace this constant once
+   * multi-cloud support lands.
+   */
+  getActiveCloud(): ActiveCloud {
+    return 'aws';
   }
 
   /**
