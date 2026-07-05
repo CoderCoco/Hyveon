@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AwsCloudProvider, AwsSecretsStore } from '@hyveon/cloud-aws';
+import { ConfigModule } from './config.module.js';
+import { CloudProviderModule } from './cloud-provider.module.js';
 import { ConfigService } from '../services/ConfigService.js';
 import { Ec2Service } from '../services/Ec2Service.js';
 import { EcsService, createAwsCloudProvider } from '../services/EcsService.js';
@@ -9,9 +11,19 @@ import { FileManagerService } from '../services/FileManagerService.js';
 
 /**
  * Feature module grouping every AWS-facing service (ECS, EC2, CloudWatch
- * Logs, Cost Explorer, the FileBrowser task helper) plus the `ConfigService`
- * they all depend on. Imported by `AppModule` so controllers get these via
- * Nest's DI without wiring each provider individually.
+ * Logs, Cost Explorer, the FileBrowser task helper). Imported by `AppModule`
+ * so controllers get these via Nest's DI without wiring each provider
+ * individually.
+ *
+ * `ConfigService` is sourced from `ConfigModule` (imported and re-exported
+ * here) rather than provided directly, so there is exactly one `ConfigModule`
+ * instance backing every feature module — this module no longer owns
+ * `ConfigService`'s lifecycle, it just re-exports it for existing consumers
+ * (e.g. `DiscordModule`) that import `AwsModule` expecting `ConfigService` to
+ * be available. `CloudProviderModule` is imported alongside it (additive —
+ * this module's own AWS-concrete providers below are unchanged) so the
+ * cloud-agnostic tokens it exports are reachable through the same import
+ * chain as the app migrates callers off the concrete Aws classes.
  *
  * `AwsCloudProvider` (from `@hyveon/cloud-aws`) is registered here via a
  * `useFactory` provider so `EcsService` gets it through constructor
@@ -29,8 +41,8 @@ import { FileManagerService } from '../services/FileManagerService.js';
  * helpers directly.
  */
 @Module({
+  imports: [ConfigModule, CloudProviderModule],
   providers: [
-    ConfigService,
     Ec2Service,
     {
       provide: AwsCloudProvider,
@@ -48,7 +60,8 @@ import { FileManagerService } from '../services/FileManagerService.js';
     FileManagerService,
   ],
   exports: [
-    ConfigService,
+    ConfigModule,
+    CloudProviderModule,
     Ec2Service,
     EcsService,
     LogsService,
