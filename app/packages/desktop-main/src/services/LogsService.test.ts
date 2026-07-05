@@ -13,6 +13,7 @@ vi.mock('../logger.js', () => ({
 }));
 
 import { LogsService } from './LogsService.js';
+import { createAwsCloudProvider } from './EcsService.js';
 import type { ConfigService, TfOutputs } from './ConfigService.js';
 
 /** Typed stand-in for the AWS CloudWatch Logs SDK client. */
@@ -46,8 +47,8 @@ const TF_OUTPUTS: TfOutputs = {
 
 /**
  * Build a minimal ConfigService stub exposing only the members LogsService
- * (and, transitively, the default `AwsCloudProvider` it delegates
- * `streamLogs` to) actually read at runtime.
+ * (and, transitively, the `AwsCloudProvider` it delegates `streamLogs` to)
+ * actually read at runtime.
  */
 function makeConfig(): ConfigService {
   const stub: Partial<ConfigService> = {
@@ -57,13 +58,26 @@ function makeConfig(): ConfigService {
   return stub as ConfigService;
 }
 
+/**
+ * Constructs a `LogsService` for tests, standing in for the constructor
+ * default that used to build an `AwsCloudProvider` internally — the service
+ * now requires its `CloudProvider` to be passed explicitly (as Nest's DI
+ * does via the `CLOUD_PROVIDER` token in production), so tests wire a real
+ * `AwsCloudProvider` built from the same `config` stub. Its internal AWS SDK
+ * calls (`FilterLogEventsCommand` for `streamLogs`) are still covered by the
+ * globally-patched `cwMock` client, so behaviour is unchanged.
+ */
+function makeService(config: ConfigService): LogsService {
+  return new LogsService(config, createAwsCloudProvider(config));
+}
+
 describe('LogsService', () => {
   /** Service under test, freshly constructed per test. */
   let service: LogsService;
 
   beforeEach(() => {
     cwMock.reset();
-    service = new LogsService(makeConfig());
+    service = makeService(makeConfig());
   });
 
   it('should return a "no streams" message when the log group has no streams', async () => {
@@ -142,7 +156,7 @@ describe('LogsService.streamLogs', () => {
 
   beforeEach(() => {
     cwMock.reset();
-    service = new LogsService(makeConfig());
+    service = makeService(makeConfig());
   });
 
   it('should terminate immediately when signal is already aborted before the first poll', async () => {
