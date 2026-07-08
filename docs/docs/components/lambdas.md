@@ -23,7 +23,7 @@ Terraform sets the variable with that name in every function definition.
 |---|---|
 | **Package** | `@hyveon/lambda-interactions` |
 | **Trigger** | Lambda Function URL (public HTTPS, `auth_type = NONE`, CORS for `https://discord.com`) — Discord POSTs every interaction here. |
-| **Terraform** | `terraform/interactions.tf`. Output: `interactions_invoke_url`. |
+| **Terraform** | `terraform/aws/interactions.tf`. Output: `interactions_invoke_url`. |
 | **IAM** | `dynamodb:GetItem` on the Discord table, `secretsmanager:GetSecretValue` on the public-key secret, `lambda:InvokeFunction` on the followup Lambda. |
 | **Env vars** | `AWS_REGION_`, `TABLE_NAME`, `DISCORD_PUBLIC_KEY_SECRET_ARN`, `FOLLOWUP_LAMBDA_NAME`, `GAME_NAMES`, `HOSTED_ZONE_NAME`. |
 
@@ -58,7 +58,7 @@ we can't forge).
 |---|---|
 | **Package** | `@hyveon/lambda-followup` |
 | **Trigger** | Async invoke from the interactions Lambda (`InvocationType: 'Event'`). Not exposed externally. |
-| **Terraform** | `terraform/followup.tf`. |
+| **Terraform** | `terraform/aws/followup.tf`. |
 | **IAM** | `ecs:RunTask` / `StopTask` / `ListTasks` / `DescribeTasks` / `TagResource`, `iam:PassRole` (task execution role — required for RunTask with Fargate), `ec2:DescribeNetworkInterfaces`, `dynamodb:GetItem` / `PutItem`, `secretsmanager:GetSecretValue` on the public key (only read for downstream calls in some paths). |
 | **Env vars** | `AWS_REGION_`, `TABLE_NAME`, `ECS_CLUSTER`, `SUBNET_IDS` (comma-separated), `SECURITY_GROUP_ID`, `DOMAIN_NAME`, `GAME_NAMES`. |
 
@@ -115,7 +115,7 @@ Failure modes:
 |---|---|
 | **Package** | `@hyveon/lambda-update-dns` |
 | **Trigger** | EventBridge rule on `source: aws.ecs`, `detail-type: 'ECS Task State Change'`, `lastStatus` in `['RUNNING', 'STOPPED']`. |
-| **Terraform** | `terraform/route53.tf`. |
+| **Terraform** | `terraform/aws/route53.tf`. |
 | **IAM** | `route53:ChangeResourceRecordSets`, `route53:ListResourceRecordSets`, `ecs:DescribeTasks`, `ec2:DescribeNetworkInterfaces`, `elasticloadbalancing:RegisterTargets` / `DeregisterTargets`, `dynamodb:GetItem` / `DeleteItem`. |
 | **Env vars** | `HOSTED_ZONE_ID`, `DOMAIN_NAME`, `GAME_NAMES`, `DNS_TTL`, `AWS_REGION_`, `HTTPS_GAMES`, `ALB_TARGET_GROUPS` (JSON map game → target group ARN), `TABLE_NAME`. |
 
@@ -168,7 +168,7 @@ Failure modes:
 |---|---|
 | **Package** | `@hyveon/lambda-watchdog` |
 | **Trigger** | EventBridge schedule at `rate(${watchdog_interval_minutes} minute(s))`. No event payload. |
-| **Terraform** | `terraform/watchdog.tf`. |
+| **Terraform** | `terraform/aws/watchdog.tf`. |
 | **IAM** | `ecs:ListTasks` / `DescribeTasks` / `StopTask` / `TagResource` / `ListTagsForResource`, `cloudwatch:GetMetricStatistics`, `route53:ChangeResourceRecordSets` / `ListResourceRecordSets`, `elasticloadbalancing:DeregisterTargets`, `ec2:DescribeNetworkInterfaces`. |
 | **Env vars** | `ECS_CLUSTER`, `HOSTED_ZONE_ID`, `DOMAIN_NAME`, `GAME_NAMES`, `IDLE_CHECKS`, `MIN_PACKETS`, `CHECK_WINDOW_MINUTES`, `AWS_REGION_`, `HTTPS_GAMES`, `ALB_TARGET_GROUPS`. |
 

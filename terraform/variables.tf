@@ -23,18 +23,18 @@ variable "vpc_cidr" {
 variable "game_servers" {
   description = "Map of game name → container config"
   type = map(object({
-    image       = string
-    cpu         = number  # Fargate CPU units (1024 = 1 vCPU)
-    memory      = number  # MiB
-    ports       = list(object({ container = number, protocol = string }))
-    environment = optional(list(object({ name = string, value = string })), [])
-    volumes     = list(object({ name = string, container_path = string }))
-    https           = optional(bool, false)   # If true, traffic is routed through ALB with TLS termination
-    connect_message = optional(string)        # Discord connect hint; supports {host}, {ip}, {port}, {game} placeholders
-    file_seeds  = optional(list(object({
-      path           = string           # In-container path, e.g. "/palworld/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"
-      content        = optional(string) # UTF-8 text content
-      content_base64 = optional(string) # Base64-encoded binary content (for non-UTF-8 files such as mods)
+    image           = string
+    cpu             = number # Fargate CPU units (1024 = 1 vCPU)
+    memory          = number # MiB
+    ports           = list(object({ container = number, protocol = string }))
+    environment     = optional(list(object({ name = string, value = string })), [])
+    volumes         = list(object({ name = string, container_path = string }))
+    https           = optional(bool, false) # If true, traffic is routed through ALB with TLS termination
+    connect_message = optional(string)      # Discord connect hint; supports {host}, {ip}, {port}, {game} placeholders
+    file_seeds = optional(list(object({
+      path           = string                   # In-container path, e.g. "/palworld/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"
+      content        = optional(string)         # UTF-8 text content
+      content_base64 = optional(string)         # Base64-encoded binary content (for non-UTF-8 files such as mods)
       mode           = optional(string, "0644") # chmod octal string
     })), [])
   }))

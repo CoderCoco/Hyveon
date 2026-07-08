@@ -27,8 +27,8 @@ locals {
 data "archive_file" "efs_seeder" {
   for_each    = local.games_with_seeds
   type        = "zip"
-  source_file = "${path.module}/../app/packages/lambda/efs-seeder/dist/handler.cjs"
-  output_path = "${path.module}/../app/packages/lambda/efs-seeder/dist/${each.key}-bundle.zip"
+  source_file = "${path.module}/../../app/packages/lambda/efs-seeder/dist/handler.cjs"
+  output_path = "${path.module}/../../app/packages/lambda/efs-seeder/dist/${each.key}-bundle.zip"
 }
 
 # ── Shared security group (one, shared across all seeder Lambdas) ─────────────

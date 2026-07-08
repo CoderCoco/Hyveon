@@ -14,8 +14,8 @@
 
 data "archive_file" "interactions" {
   type        = "zip"
-  source_file = "${path.module}/../app/packages/lambda/interactions/dist/handler.cjs"
-  output_path = "${path.module}/../app/packages/lambda/interactions/dist/bundle.zip"
+  source_file = "${path.module}/../../app/packages/lambda/interactions/dist/handler.cjs"
+  output_path = "${path.module}/../../app/packages/lambda/interactions/dist/bundle.zip"
 }
 
 resource "aws_iam_role" "interactions_lambda" {
@@ -123,9 +123,4 @@ resource "aws_lambda_permission" "interactions_url_invoke" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.interactions.function_name
   principal     = "*"
-}
-
-output "interactions_invoke_url" {
-  description = "Paste this into the 'Interactions Endpoint URL' field in the Discord Developer Portal"
-  value       = "https://discord.${var.hosted_zone_name}/"
 }
