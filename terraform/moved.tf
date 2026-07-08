@@ -2,6 +2,14 @@
 # HCL was split out (issue #185). Keeps existing deployed state mapped to its new
 # address instead of terraform proposing destroy/recreate of the whole stack.
 
+# module "cloud" gained a count meta-argument keyed on var.active_cloud
+# (issue #187). This chains with the per-resource moves below so an existing
+# deployment plans without destroy/recreate.
+moved {
+  from = module.cloud
+  to   = module.cloud[0]
+}
+
 # ── alb.tf ──
 moved {
   from = aws_acm_certificate.game_servers

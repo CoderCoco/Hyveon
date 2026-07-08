@@ -1,6 +1,10 @@
 # Copy this file to terraform.tfvars and customize.
 # terraform.tfvars is gitignored — safe to put passwords here.
 
+# Cloud provider backing this deployment. Only "aws" is currently supported
+# (default shown below) — the validation on the variable rejects anything else.
+# active_cloud = "aws"
+
 aws_region   = "us-east-1"
 project_name = "game-servers"
 

@@ -42,8 +42,13 @@ provider "aws" {
 # All AWS infrastructure lives in the "./aws" module — this root composes the
 # backend/provider config with the module and re-exports its outputs
 # (outputs.tf) so ConfigService.getTfOutputs() keeps reading root-level state.
+#
+# Composition is keyed on var.active_cloud: v1 only supports "aws" (enforced
+# by the variable's validation, so count is always 1 today). A future gcp/azure
+# module gets its own conditionally-counted module block alongside this one.
 module "cloud" {
   source = "./aws"
+  count  = var.active_cloud == "aws" ? 1 : 0
 
   providers = {
     aws           = aws
