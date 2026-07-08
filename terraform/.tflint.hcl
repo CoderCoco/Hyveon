@@ -3,6 +3,10 @@ plugin "terraform" {
   preset  = "recommended"
 }
 
+config {
+  call_module_type = "all"
+}
+
 plugin "aws" {
   enabled = true
   version = "0.32.0"
