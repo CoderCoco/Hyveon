@@ -1,3 +1,14 @@
+variable "active_cloud" {
+  description = "Cloud provider backing this deployment. Only \"aws\" is currently supported."
+  type        = string
+  default     = "aws"
+
+  validation {
+    condition     = var.active_cloud == "aws"
+    error_message = "active_cloud must be \"aws\" — no other cloud providers are supported yet."
+  }
+}
+
 variable "aws_region" {
   description = "AWS region to deploy into"
   type        = string
