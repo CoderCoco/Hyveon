@@ -14,14 +14,21 @@ blocks, a `module "cloud"` (source `./aws`) that carries every AWS resource,
 and passthrough `outputs.tf`/`variables.tf`. All AWS-specific HCL lives in the
 `terraform/aws/` module — that's where you'll find the actual resources.
 
+Composition is keyed on `var.active_cloud`: the `module "cloud"` block carries
+`count = var.active_cloud == "aws" ? 1 : 0`, so root outputs read from
+`module.cloud[0]`. Only `"aws"` is supported in v1 — the variable's
+`validation` block rejects anything else — but the count makes room for a
+future `gcp`/`azure` module to sit alongside `./aws` without restructuring
+the composer.
+
 ## Files
 
 | File | What it provisions |
 |---|---|
-| `main.tf` | Root composer: `terraform`/`backend "s3"` block, both `provider "aws"` blocks (default + `us_east_1` alias for CloudFront ACM certs), and the `module "cloud"` block wiring all 16 inputs through to `./aws`. |
-| `variables.tf` | Every configurable input (passed straight through to the module). See the table below. |
-| `outputs.tf` | Re-exports every `module.cloud.*` output by the same name — `ConfigService.getTfOutputs()` reads these from root-level `terraform.tfstate`, where module outputs don't appear. |
-| `moved.tf` | One `moved` block per resource living in `terraform/aws/`, mapping its pre-split root address to `module.cloud.<type>.<name>` so existing deployments `plan` cleanly instead of proposing a destroy/recreate. |
+| `main.tf` | Root composer: `terraform`/`backend "s3"` block, both `provider "aws"` blocks (default + `us_east_1` alias for CloudFront ACM certs), and the `module "cloud"` block — conditionally counted on `var.active_cloud` — wiring all 16 inputs through to `./aws`. |
+| `variables.tf` | Every configurable input (passed straight through to the module), plus `active_cloud` which selects the composed cloud module and isn't forwarded to `./aws`. See the table below. |
+| `outputs.tf` | Re-exports every `module.cloud[0].*` output by the same name — `ConfigService.getTfOutputs()` reads these from root-level `terraform.tfstate`, where module outputs don't appear. |
+| `moved.tf` | A module-level `moved` block mapping `module.cloud` → `module.cloud[0]` (added when the module gained `count`), plus one `moved` block per resource living in `terraform/aws/`, mapping its pre-split root address to `module.cloud.<type>.<name>` so existing deployments `plan` cleanly instead of proposing a destroy/recreate. |
 | `terraform.tfvars.example` | Starting point for your `terraform.tfvars`. |
 | `aws/main.tf` | VPC, Internet Gateway, two public subnets across AZs, route table, IAM execution role, EFS filesystem + mount targets + **per-game access points**, ECS cluster, **one Fargate task definition per game**, CloudWatch log groups, game-server + file-manager + EFS security groups. |
 | `aws/versions.tf` | Module-local `required_providers` (aws, archive), including the `aws.us_east_1` `configuration_aliases` entry the root passes in. |
@@ -39,6 +46,7 @@ and passthrough `outputs.tf`/`variables.tf`. All AWS-specific HCL lives in the
 
 | Name | Type | Default | Purpose |
 |---|---|---|---|
+| `active_cloud` | `string` | `aws` | Selects which cloud module the root composes. Only `"aws"` is supported in v1 — the variable's `validation` block rejects anything else. |
 | `aws_region` | `string` | `us-east-1` | AWS region for all resources. |
 | `project_name` | `string` | `game-servers` | Prefix for named resources and the Secrets Manager paths. |
 | `vpc_cidr` | `string` | `10.0.0.0/16` | Parent CIDR; subnets are /24s within it. |
