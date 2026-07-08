@@ -125,7 +125,7 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-restricted-imports': ['error', {
         patterns: [{
-          group: ['@aws-sdk/*'],
+          group: ['@aws-sdk/*', '@aws-sdk/**'],
           message: 'Import AWS SDK clients only within packages/cloud-aws or packages/lambda; depend on the cloud-agnostic interfaces from @hyveon/shared/cloud.js elsewhere.',
         }],
       }],
