@@ -92,3 +92,23 @@ output "discord_public_key_secret_arn" {
   description = "Secrets Manager ARN for the Discord application Ed25519 public key"
   value       = aws_secretsmanager_secret.discord_public_key.arn
 }
+
+output "interactions_invoke_url" {
+  description = "Paste this into the 'Interactions Endpoint URL' field in the Discord Developer Portal"
+  value       = "https://discord.${var.hosted_zone_name}/"
+}
+
+output "discord_interactions_url" {
+  description = "Custom domain URL for the Discord interactions endpoint"
+  value       = "https://${local.discord_domain}/"
+}
+
+output "dns_records" {
+  description = "DNS hostnames for each game server (active when server is running)"
+  value       = { for game, _ in var.game_servers : game => "${game}.${var.hosted_zone_name}" }
+}
+
+output "watchdog_function_name" {
+  description = "Watchdog Lambda function name"
+  value       = aws_lambda_function.watchdog.function_name
+}

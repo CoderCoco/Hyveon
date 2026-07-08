@@ -61,8 +61,8 @@ resource "aws_iam_role_policy" "followup_lambda" {
         Resource = "*"
       },
       {
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
         Resource = aws_dynamodb_table.discord.arn
       },
     ]
