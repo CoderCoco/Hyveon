@@ -9,21 +9,31 @@ All AWS infrastructure lives under `terraform/`. State is stored in an S3
 bucket with DynamoDB locking, bootstrapped automatically by `setup.sh` — see
 step 3 of the [setup guide](/setup) for details.
 
+The root `terraform/` directory is a thin composer: the `terraform`/`provider`
+blocks, a `module "cloud"` (source `./aws`) that carries every AWS resource,
+and passthrough `outputs.tf`/`variables.tf`. All AWS-specific HCL lives in the
+`terraform/aws/` module — that's where you'll find the actual resources.
+
 ## Files
 
 | File | What it provisions |
 |---|---|
-| `main.tf` | VPC, Internet Gateway, two public subnets across AZs, route table, IAM execution role, EFS filesystem + mount targets + **per-game access points**, ECS cluster, **one Fargate task definition per game**, CloudWatch log groups, game-server + file-manager + EFS security groups. |
-| `alb.tf` | Conditional on any game having `https = true`: ACM certificate (DNS-validated), ALB + target groups per HTTPS game, HTTPS listener + HTTP→HTTPS redirect, Route 53 ALIAS records. |
-| `route53.tf` | Route 53 zone **data source** (zone must exist); the `update-dns` Lambda with its IAM, EventBridge rule on `ECS Task State Change`. |
-| `watchdog.tf` | `watchdog` Lambda with its IAM, EventBridge schedule at `rate(${watchdog_interval_minutes} minute(s))`. |
-| `efs-seeder.tf` | Conditional on any game having `file_seeds`: shared seeder SG, per-game IAM role + policy, CloudWatch log group, Lambda (VPC + EFS mount), and `aws_lambda_invocation` that re-triggers only when seed content changes. |
-| `interactions.tf` | `interactions` Lambda with IAM + Function URL (`auth_type = NONE`, CORS for `https://discord.com`). Exposes `interactions_invoke_url`. |
-| `followup.tf` | `followup` Lambda with IAM (`ecs:RunTask`, `StopTask`, `DescribeTasks`, `iam:PassRole`, `dynamodb:GetItem`/`PutItem`, `ec2:DescribeNetworkInterfaces`). Async-invoked by interactions. |
-| `discord_store.tf` | DynamoDB table (pk+sk, TTL on `expiresAt`), two Secrets Manager secrets (`${project_name}/discord/bot-token`, `/discord/public-key`) with `recovery_window_in_days = 0` and `lifecycle.ignore_changes` on seeded secret values. Optional `CONFIG#discord` DynamoDB item seeded from tfvars. Optional `BASE#discord` item holding the Terraform-managed base allowlist/admins (see `base_allowed_guilds` / `base_admin_*` variables). When `discord_bot_token`, `discord_application_id`, and at least one `base_allowed_guilds` entry are set, a `null_resource` runs `curl` to register slash commands in each base guild during apply; re-runs on token rotation or command-descriptor changes. |
-| `variables.tf` | Every configurable input. See the table below. |
-| `outputs.tf` | Every value the management app (and humans) consume. |
+| `main.tf` | Root composer: `terraform`/`backend "s3"` block, both `provider "aws"` blocks (default + `us_east_1` alias for CloudFront ACM certs), and the `module "cloud"` block wiring all 16 inputs through to `./aws`. |
+| `variables.tf` | Every configurable input (passed straight through to the module). See the table below. |
+| `outputs.tf` | Re-exports every `module.cloud.*` output by the same name — `ConfigService.getTfOutputs()` reads these from root-level `terraform.tfstate`, where module outputs don't appear. |
+| `moved.tf` | One `moved` block per resource living in `terraform/aws/`, mapping its pre-split root address to `module.cloud.<type>.<name>` so existing deployments `plan` cleanly instead of proposing a destroy/recreate. |
 | `terraform.tfvars.example` | Starting point for your `terraform.tfvars`. |
+| `aws/main.tf` | VPC, Internet Gateway, two public subnets across AZs, route table, IAM execution role, EFS filesystem + mount targets + **per-game access points**, ECS cluster, **one Fargate task definition per game**, CloudWatch log groups, game-server + file-manager + EFS security groups. |
+| `aws/versions.tf` | Module-local `required_providers` (aws, archive), including the `aws.us_east_1` `configuration_aliases` entry the root passes in. |
+| `aws/variables.tf` | Module input declarations — every root variable except `tags` (which only the root's `default_tags` needs). |
+| `aws/outputs.tf` | Every value the management app (and humans) consume, including the four outputs that used to be stray blocks in `interactions.tf`, `discord-domain.tf`, `route53.tf`, and `watchdog.tf`. |
+| `aws/alb.tf` | Conditional on any game having `https = true`: ACM certificate (DNS-validated), ALB + target groups per HTTPS game, HTTPS listener + HTTP→HTTPS redirect, Route 53 ALIAS records. |
+| `aws/route53.tf` | Route 53 zone **data source** (zone must exist); the `update-dns` Lambda with its IAM, EventBridge rule on `ECS Task State Change`. |
+| `aws/watchdog.tf` | `watchdog` Lambda with its IAM, EventBridge schedule at `rate(${watchdog_interval_minutes} minute(s))`. |
+| `aws/efs-seeder.tf` | Conditional on any game having `file_seeds`: shared seeder SG, per-game IAM role + policy, CloudWatch log group, Lambda (VPC + EFS mount), and `aws_lambda_invocation` that re-triggers only when seed content changes. |
+| `aws/interactions.tf` | `interactions` Lambda with IAM + Function URL (`auth_type = NONE`, CORS for `https://discord.com`). Exposes `interactions_invoke_url`. |
+| `aws/followup.tf` | `followup` Lambda with IAM (`ecs:RunTask`, `StopTask`, `DescribeTasks`, `iam:PassRole`, `dynamodb:GetItem`/`PutItem`, `ec2:DescribeNetworkInterfaces`). Async-invoked by interactions. |
+| `aws/discord_store.tf` | DynamoDB table (pk+sk, TTL on `expiresAt`), two Secrets Manager secrets (`${project_name}/discord/bot-token`, `/discord/public-key`) with `recovery_window_in_days = 0` and `lifecycle.ignore_changes` on seeded secret values. Optional `CONFIG#discord` DynamoDB item seeded from tfvars. Optional `BASE#discord` item holding the Terraform-managed base allowlist/admins (see `base_allowed_guilds` / `base_admin_*` variables). When `discord_bot_token`, `discord_application_id`, and at least one `base_allowed_guilds` entry are set, a `null_resource` runs `curl` to register slash commands in each base guild during apply; re-runs on token rotation or command-descriptor changes. |
 
 ## Variables
 
