@@ -8,6 +8,11 @@
 aws_region   = "us-east-1"
 project_name = "game-servers"
 
+# Name of the versioned S3 bucket created by the bootstrap module (terraform/bootstrap)
+# to hold terraform.tfvars outside your parent repo. Optional override — defaults to
+# "{project_name}-tfvars" when unset.
+# tfvars_bucket_name = "game-servers-tfvars"
+
 # Domain for server DNS records (must have a hosted zone in Route 53)
 # Creates: {game}.example.com for each entry in game_servers below.
 hosted_zone_name = "example.com"
