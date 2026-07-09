@@ -50,3 +50,6 @@ out/
 
 # electron-builder packaged artifacts
 release/
+
+# GSD bootstrap metadata (tfvars-bucket marker etc.)
+.gsd/
