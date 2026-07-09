@@ -82,6 +82,27 @@ On the AWS side you need:
         "arn:aws:iam::*:role/game-servers-*",
         "arn:aws:iam::*:policy/game-servers-*"
       ]
+    },
+    {
+      "Sid": "GameServerTfvarsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:GetObjectVersion",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetBucketLocation",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${project_name}-tfvars",
+        "arn:aws:s3:::${project_name}-tfvars/*"
+      ]
     }
   ]
 }
@@ -97,6 +118,22 @@ On the AWS side you need:
 > granting `iam:PassRole` on every role in the account. The `game-servers-*`
 > prefix matches the default `project_name`. If you change `project_name` in
 > `terraform.tfvars`, update the two ARN patterns in `GameServerIAM` to match.
+
+> **`GameServerTfvarsBucket` scopes access to the tfvars-bucket storage**
+> created by the [bootstrap module](#3-clone-and-bootstrap) (see the
+> "Bootstrap the tfvars bucket" step below) — the dedicated, versioned S3
+> bucket (default name `${project_name}-tfvars`) that holds `terraform.tfvars`
+> outside source control. It grants object read/write/list/versioning access
+> plus the bucket-config actions (`PutLifecycleConfiguration`,
+> `PutEncryptionConfiguration`, `PutBucketPublicAccessBlock`,
+> `PutBucketVersioning`/`GetBucketVersioning`, `GetBucketLocation`) the
+> bootstrap module needs to configure the bucket's lifecycle rule,
+> encryption, public-access block, and versioning. Although `s3:*` in
+> `GameServerDeploy` already covers these actions on every bucket, this
+> statement documents the specific permissions the tfvars-bucket workflow
+> depends on and scopes them to just the two tfvars ARNs. If you change
+> `project_name` or `tfvars_bucket_name`, update the two ARN patterns in
+> `GameServerTfvarsBucket` to match.
 
 Two permission areas used by Terraform are **not** covered by any AWS managed policy and are explicitly included above to avoid `AccessDenied` during `terraform apply`:
 
