@@ -41,9 +41,10 @@ provider "aws" {
 
 # The versioned tfvars bucket is created out-of-band by the bootstrap module
 # (see terraform/bootstrap/) before this root config is ever applied. Reading
-# it here as a data source lets consumers (e.g. the desktop app) resolve the
-# bucket name without duplicating the "${project_name}-tfvars" naming
-# convention in multiple places.
+# it here as a data source both fails fast if the bootstrap bucket is missing
+# and lets consumers (e.g. the desktop app) resolve the bucket name — via the
+# `tfvars_bucket_name` output below — without duplicating the
+# "${project_name}-tfvars" naming convention in multiple places.
 data "aws_s3_bucket" "tfvars" {
   bucket = coalesce(var.tfvars_bucket_name, "${var.project_name}-tfvars")
 }
