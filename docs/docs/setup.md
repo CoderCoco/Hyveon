@@ -164,6 +164,52 @@ Both scripts are idempotent — safe to re-run at any time. They:
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
 
+### Bootstrap the tfvars bucket (required before the first `terraform apply`)
+
+`terraform/bootstrap/` is a separate, standalone Terraform module — not part
+of the `setup.sh` flow above — that provisions a **second, distinct S3
+bucket** whose only job is to hold your `terraform.tfvars` (and other
+per-deployment secrets) outside of source control. This is unrelated to the
+`{project_name}-tf-state` bucket `setup.sh` creates for the Terraform
+backend. The root module's `data "aws_s3_bucket" "tfvars"` (in
+`terraform/main.tf`) reads this bucket, so it **must already exist before
+you run `terraform apply` in the root `terraform/` directory** — skipping
+this step makes the root `terraform plan`/`terraform apply` fail at plan
+time with a "bucket not found" error. Run it once, before the main
+`terraform init`/`terraform apply` steps below, to get a durable, versioned
+place to keep `tfvars` outside your parent repo — if you'd rather pre-create
+the bucket some other way (e.g. manually or via a different tool), that
+works too, as long as the name matches `tfvars_bucket_name` (see below).
+
+```bash
+cd terraform/bootstrap
+terraform init
+terraform apply
+```
+
+The bucket it creates (default name `{project_name}-tfvars`) has:
+
+- **Versioning enabled** — every write to `terraform.tfvars` is recoverable.
+- **AES-256 server-side encryption** and a **public-access block** (all four
+  block-public settings on).
+- A **lifecycle rule** that expires noncurrent object versions after 90 days,
+  so old revisions don't accumulate forever.
+
+> **This module's own state stays local and is never committed.** It can't
+> use the S3 backend it's bootstrapping (chicken-and-egg), so `terraform
+> apply` writes a local `terraform.tfstate` under `terraform/bootstrap/` —
+> already covered by `.gitignore` (`terraform/**/*.tfstate`). Keep a personal
+> backup of that file; without it, a future `terraform apply` in this
+> directory won't recognize the bucket it already created.
+
+If you accept the default bucket name, no further action is needed — the
+root config's `tfvars_bucket_name` variable defaults to the same
+`{project_name}-tfvars` convention. If you pass a custom
+`-var="tfvars_bucket_name=..."` (or `project_name`) when applying this
+module, set the **same** value for `tfvars_bucket_name` in
+`terraform/terraform.tfvars` (see step 4 below) so the root module's
+`data "aws_s3_bucket" "tfvars"` resolves to the bucket you actually created.
+
 ## 4. Configure your servers
 
 Open `terraform/terraform.tfvars` in your editor and fill in:

@@ -42,6 +42,34 @@ the composer.
 | `aws/followup.tf` | `followup` Lambda with IAM (`ecs:RunTask`, `StopTask`, `DescribeTasks`, `iam:PassRole`, `dynamodb:GetItem`/`PutItem`, `ec2:DescribeNetworkInterfaces`). Async-invoked by interactions. |
 | `aws/discord_store.tf` | DynamoDB table (pk+sk, TTL on `expiresAt`), two Secrets Manager secrets (`${project_name}/discord/bot-token`, `/discord/public-key`) with `recovery_window_in_days = 0` and `lifecycle.ignore_changes` on seeded secret values. Optional `CONFIG#discord` DynamoDB item seeded from tfvars. Optional `BASE#discord` item holding the Terraform-managed base allowlist/admins (see `base_allowed_guilds` / `base_admin_*` variables). When `discord_bot_token`, `discord_application_id`, and at least one `base_allowed_guilds` entry are set, a `null_resource` runs `curl` to register slash commands in each base guild during apply; re-runs on token rotation or command-descriptor changes. |
 
+## Bootstrap module (`terraform/bootstrap/`)
+
+Root `main.tf` reads the tfvars bucket via `data "aws_s3_bucket" "tfvars"`
+(keyed on `var.tfvars_bucket_name`), so that bucket must already exist before
+the root module is ever applied. `terraform/bootstrap/` is a small,
+standalone module — with no dependency on `terraform/aws/` or the root
+composer — whose only job is to create it. It provisions:
+
+- `aws_s3_bucket.tfvars` — named `coalesce(var.tfvars_bucket_name, "${var.project_name}-tfvars")`.
+- `aws_s3_bucket_versioning.tfvars` — versioning `Enabled`, which doubles as
+  the history/locking mechanism for `terraform.tfvars` (no separate DynamoDB
+  lock table for this bucket).
+- `aws_s3_bucket_server_side_encryption_configuration.tfvars` — AES256 SSE by default.
+- `aws_s3_bucket_public_access_block.tfvars` — blocks all public ACLs/policies.
+- `aws_s3_bucket_lifecycle_configuration.tfvars` — expires noncurrent versions
+  after 90 days.
+
+Outputs (`terraform/bootstrap/outputs.tf`): `tfvars_bucket_name` and
+`tfvars_bucket_arn`.
+
+**Apply-before-main ordering:** run `terraform init` and `terraform apply`
+inside `terraform/bootstrap/` first — before the first `terraform apply` in
+the root `terraform/` module. If the bucket doesn't exist yet, the root's
+`data "aws_s3_bucket" "tfvars"` source fails at plan time. The bootstrap
+module has no remote backend of its own (it creates the bucket other things
+eventually read from, so storing its own state there would be
+chicken-and-egg); its state stays local and is gitignored.
+
 ## Variables
 
 | Name | Type | Default | Purpose |
@@ -63,6 +91,7 @@ the composer.
 | `base_allowed_guilds` | `list(string)` | `[]` | Guild IDs written to the `BASE#discord` row on every apply. The management UI shows these as locked; they cannot be removed via the UI. Update in tfvars + re-apply to change. |
 | `base_admin_user_ids` | `list(string)` | `[]` | Discord user IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
 | `base_admin_role_ids` | `list(string)` | `[]` | Discord role IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
+| `tfvars_bucket_name` | `string` | `null` → `{project_name}-tfvars` | Name of the versioned S3 bucket created by the [bootstrap module](#bootstrap-module-terraformbootstrap) to hold `terraform.tfvars` outside the operator's parent repo. Read via a `data "aws_s3_bucket" "tfvars"` source in root `main.tf`; must resolve to a bucket that already exists (see apply-before-main ordering below). |
 | `tags` | `map(string)` | defaults | Merged into `default_tags` for cost allocation (`Project`). |
 
 ### `game_servers[].file_seeds` (optional)

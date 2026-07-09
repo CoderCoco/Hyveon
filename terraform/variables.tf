@@ -163,6 +163,14 @@ variable "discord_public_key" {
   sensitive   = true
 }
 
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+variable "tfvars_bucket_name" {
+  description = "Name of the versioned S3 bucket created by the bootstrap module to hold terraform.tfvars. Defaults to \"$${project_name}-tfvars\" when null."
+  type        = string
+  default     = null
+}
+
 # ── Tags ─────────────────────────────────────────────────────────────────────
 
 variable "tags" {

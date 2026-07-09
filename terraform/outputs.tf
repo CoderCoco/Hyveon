@@ -109,3 +109,10 @@ output "watchdog_function_name" {
   description = "Watchdog Lambda function name"
   value       = module.cloud[0].watchdog_function_name
 }
+
+# ── Bootstrap-created resources ──────────────────────────────────────────────
+
+output "tfvars_bucket_name" {
+  description = "Name of the versioned tfvars bucket created by the bootstrap module (terraform/bootstrap/)"
+  value       = data.aws_s3_bucket.tfvars.id
+}
