@@ -75,6 +75,15 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--s3-tfvars'])).toEqual({ command: 'bootstrap', force: false, s3Tfvars: true, yes: false });
   });
 
+  it('should accept an explicit "bootstrap" subcommand token identically to omitting it', () => {
+    expect(parseCliArgs(['bootstrap', '--s3-tfvars'])).toEqual({
+      command: 'bootstrap',
+      force: false,
+      s3Tfvars: true,
+      yes: false,
+    });
+  });
+
   it('should set direction "to-s3" for "migrate --to-s3"', () => {
     expect(parseCliArgs(['migrate', '--to-s3'])).toEqual({
       command: 'migrate',
