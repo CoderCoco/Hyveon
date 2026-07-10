@@ -474,6 +474,12 @@ export async function checkTfvars(opts: TfvarsSyncOptions): Promise<CheckResult>
       reason: `remote object s3://${status.bucket}/${status.key} does not exist`,
     };
   }
+  if (status.remote.versionId === null) {
+    return {
+      inSync: false,
+      reason: `bucket "${status.bucket}" does not appear to have S3 versioning enabled (HeadObject returned no VersionId for s3://${status.bucket}/${status.key}) — drift cannot be detected without a versioned bucket`,
+    };
+  }
   if (status.lock.versionId !== status.remote.versionId) {
     return {
       inSync: false,

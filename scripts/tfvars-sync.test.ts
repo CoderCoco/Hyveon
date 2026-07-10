@@ -409,5 +409,23 @@ describe('tfvars-sync', () => {
       expect(result.inSync).toBe(false);
       expect(result.reason).toContain('does not exist');
     });
+
+    it('should report inSync: false when the remote object exists but the bucket returns no VersionId (unversioned bucket)', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: null,
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('versioning');
+    });
   });
 });
