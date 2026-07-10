@@ -126,6 +126,10 @@ describe('tfvars-sync', () => {
       const result = await pushTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
 
       expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
+      // The first-write guard is the actual TOCTOU protection here: assert
+      // PutObject was sent with `IfNoneMatch: '*'` so a concurrent create by
+      // another writer is rejected, not just that some PutObject happened.
+      expect(s3Mock.commandCalls(PutObjectCommand)[0]!.args[0].input.IfNoneMatch).toBe('*');
       expect(result.lock.versionId).toBe('v1');
     });
 
