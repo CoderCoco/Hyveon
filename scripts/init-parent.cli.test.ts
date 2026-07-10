@@ -318,6 +318,10 @@ describe('runMigrate --to-local (terraform.tfvars missing locally)', () => {
     // missing/empty local file and aborted instead.
     expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe(remoteContent);
     expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(false);
+    // pullTfvars() also writes terraform.tfvars.lock as a side effect of the
+    // pull-if-missing step — the migration must still delete it, not just the
+    // lock that existed (or didn't) before the pull ran.
+    expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(false);
   });
 });
 

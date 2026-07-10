@@ -323,7 +323,7 @@ setup: | $(STAMP_DIR)
 # \\) rather than two separate recipe lines: each recipe line runs in its own
 # fresh shell, so an \`export\` on one line would never be visible to the
 # \`bash setup.sh\` on the next.
-\tif [ -f $(PARENT_TFVARS_MARKER) ]; then export GSD_TFVARS_BACKEND=s3; fi; \\
+\tif [ -z "$\${GSD_TFVARS_BACKEND:-}" ] && [ -f $(PARENT_TFVARS_MARKER) ]; then export GSD_TFVARS_BACKEND=s3; fi; \\
 \tbash $(SUBMODULE)/setup.sh
 \t@sha256sum $(SUBMODULE)/setup.sh | cut -d' ' -f1 > $(SETUP_STAMP)
 # Runtime (not parse-time) check, evaluated entirely inside this shell
@@ -811,8 +811,12 @@ function readExistingParent(scriptDir: string): ExistingParentInfo {
 /**
  * Migrates an already-scaffolded parent repo's tfvars backend.
  *
- * `--to-s3`: writes the `.gsd/tfvars-bucket` marker (same `${projectName}-tfvars`
- * naming `runBootstrap`'s `--s3-tfvars` path uses), rewrites the Makefile with
+ * `--to-s3`: (re)writes the `.gsd/tfvars-bucket` marker unconditionally (same
+ * `${projectName}-tfvars` naming `runBootstrap`'s `--s3-tfvars` path uses —
+ * unlike `runBootstrap`, this always overwrites any pre-existing marker
+ * rather than skipping, since `migrate` doesn't accept `--force` and the
+ * whole point of the command is to make the marker match the freshly
+ * computed bucket name), rewrites the Makefile with
  * the s3-aware targets (identical output to a fresh `runBootstrap` render —
  * the Makefile is always s3-aware, only the marker's presence flips
  * `TFVARS_BACKEND`), then runs `make setup` with `GSD_TFVARS_BACKEND=s3` so
@@ -873,11 +877,18 @@ export async function runMigrate(direction: MigrateDirection, options: MigrateOp
   }
 
   output.write('  Writing files…\n');
-  status(markerPath, writeIfSafe(markerPath, `${bucketName}\n`), info.parentDir);
+  // Migrate always (re)writes the marker and the Makefile it's migrating —
+  // that's the whole point of the command — regardless of the global
+  // --force flag, which only governs runBootstrap's skip-if-exists
+  // behaviour and isn't even accepted by the migrate subcommand (see
+  // parseCliArgs). Using writeIfSafe here would silently keep a
+  // pre-existing marker (possibly recording a different bucket) and print
+  // an unactionable "use --force" hint, so write unconditionally instead.
+  const markerExisted = existsSync(markerPath);
+  mkdirSync(dirname(markerPath), { recursive: true });
+  writeFileSync(markerPath, `${bucketName}\n`);
+  status(markerPath, markerExisted ? 'overwrote' : 'wrote', info.parentDir);
 
-  // Migrate always rewrites the Makefile it's migrating — that's the whole
-  // point of the command — regardless of the global --force flag, which only
-  // governs runBootstrap's skip-if-exists behaviour.
   const makefilePath = join(info.parentDir, 'Makefile');
   mkdirSync(dirname(makefilePath), { recursive: true });
   writeFileSync(makefilePath, renderMakefile({ submoduleDir: info.submoduleDir, projectName: info.projectName }));
@@ -950,7 +961,6 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
 
   const parentMarkerExists = existsSync(parentMarkerPath);
   const submoduleMarkerExists = existsSync(submoduleMarkerPath);
-  const lockExists = existsSync(lockPath);
 
   output.write('\n');
   output.write('  Hyveon — migrate tfvars backend to local\n');
@@ -1002,6 +1012,12 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
     }
   }
 
+  // Tracks whether step 1 actually wrote terraform.tfvars, so the abort
+  // messages below (steps 2 and 3) can accurately describe what's on disk —
+  // once the pull has run, "Nothing was changed." would be false: markers
+  // and the lock sidecar are still untouched, but terraform.tfvars is not.
+  let pulled = false;
+
   if (!existsSync(tfvarsPath)) {
     output.write(`  terraform.tfvars not found locally — pulling from s3://${bucketName}/terraform.tfvars…\n`);
     try {
@@ -1014,8 +1030,13 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
       exit(1);
       return;
     }
+    pulled = true;
     status(tfvarsPath, 'wrote', info.parentDir);
   }
+
+  const recoveryMessage = pulled
+    ? '  terraform.tfvars was pulled from S3; markers and the lock sidecar are unchanged.\n\n'
+    : '  Nothing was changed.\n\n';
 
   output.write('  Checking for drift against the remote tfvars object…\n');
   let diff: DiffResult;
@@ -1025,7 +1046,7 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
     process.stderr.write(
       `\n  ✗ failed to compare against s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.stderr.write('  Nothing was changed.\n\n');
+    process.stderr.write(recoveryMessage);
     exit(1);
     return;
   }
@@ -1033,7 +1054,7 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
   if (!diff.matches) {
     process.stderr.write(`\n  ✗ local terraform.tfvars has drifted from s3://${bucketName}/terraform.tfvars — aborting.\n`);
     process.stderr.write('  Run `make tfvars-pull` or `make tfvars-push` to reconcile them first, then re-run this migration.\n');
-    process.stderr.write('  Nothing was changed.\n\n');
+    process.stderr.write(recoveryMessage);
     exit(1);
     return;
   }
@@ -1048,7 +1069,11 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
     unlinkSync(submoduleMarkerPath);
     status(submoduleMarkerPath, 'deleted', info.parentDir);
   }
-  if (lockExists) {
+  // Re-check at deletion time rather than trusting an up-front snapshot —
+  // pullTfvars() above writes this sidecar as a side effect when
+  // terraform.tfvars was missing locally, so a value captured before that
+  // pull would miss the freshly created lock and strand it behind.
+  if (existsSync(lockPath)) {
     unlinkSync(lockPath);
     status(lockPath, 'deleted', info.parentDir);
   }
