@@ -198,9 +198,13 @@ async function askRequired(rl: Interface, label: string, def?: string): Promise<
  * gated on TFVARS_BACKEND, which resolves to "s3" or "local" in this order:
  *   1. GSD_TFVARS_BACKEND=s3    — force s3, even without a marker file yet
  *   2. GSD_TFVARS_BACKEND=local — force local, even if a marker file exists
- *   3. otherwise: "s3" when the `.gsd/tfvars-bucket` marker file setup.sh
- *      writes inside the submodule directory exists, else "local"
- * When TFVARS_BACKEND is "local", plan/apply/setup behave exactly as
+ *   3. otherwise: "s3" when the `.gsd/tfvars-bucket` marker file at the
+ *      *parent repo root* exists (written up-front by `init-parent bootstrap
+ *      --s3-tfvars` / `migrate --to-s3`, before setup.sh has ever run)
+ *   4. otherwise: "s3" when the same-named marker file setup.sh writes
+ *      *inside the submodule directory* exists, else "local"
+ * The parent-root marker always wins over the submodule marker when both are
+ * present. When TFVARS_BACKEND is "local", plan/apply/setup behave exactly as
  * before — no S3 calls are made. setup's post-bootstrap pull applies the
  * same override semantics but re-implements them directly in its shell
  * recipe rather than referencing TFVARS_BACKEND — see the comment on that
@@ -228,9 +232,16 @@ endif
 # ── S3 tfvars backend detection ──────────────────────────────────────────────
 # TFVARS_MARKER is the bucket-name marker file setup.sh writes when it
 # bootstraps the versioned S3 tfvars backend (see setup.sh's
-# bootstrap_tfvars_backend()). TFVARS_LOCK is the sidecar lock file
+# bootstrap_tfvars_backend()). PARENT_TFVARS_MARKER is the sibling marker
+# \`init-parent bootstrap --s3-tfvars\` (and \`migrate --to-s3\`) write directly
+# at the parent repo root — before setup.sh has ever run — recording an
+# operator's up-front choice to run in S3 mode. It always takes priority over
+# TFVARS_MARKER: an explicit parent-root marker reflects a deliberate choice,
+# so it should win even before setup.sh gets a chance to write its own
+# submodule-local marker. TFVARS_LOCK is the sidecar lock file
 # tfvars-sync.ts writes after every successful pull/push, recording the S3
 # version id/etag last synced.
+PARENT_TFVARS_MARKER := $(REPO_ROOT)/.gsd/tfvars-bucket
 TFVARS_MARKER := $(SUBMODULE)/.gsd/tfvars-bucket
 TFVARS_LOCK   := $(TFVARS).lock
 
@@ -238,7 +249,9 @@ TFVARS_LOCK   := $(TFVARS).lock
 # can always force one or the other regardless of what's on disk:
 #   - GSD_TFVARS_BACKEND=s3    → force s3, even if the marker file is missing
 #   - GSD_TFVARS_BACKEND=local → force local, even if a marker file is present
-#   - unset                    → s3 when the marker file exists, else local
+#   - unset                    → s3 when the parent-root marker exists, else
+#                                 s3 when the submodule marker exists, else
+#                                 local
 # Recursive ('=', not ':='), so \$(wildcard ...) is re-evaluated whenever this
 # variable is referenced from a *separate* \`make\` invocation (plan, apply,
 # tfvars-pull, etc. all see current marker-file state that way). It must NOT
@@ -248,18 +261,19 @@ TFVARS_LOCK   := $(TFVARS).lock
 # still see the pre-setup.sh filesystem state even though it appears later in
 # the recipe text. \`setup\` re-implements the same override logic directly in
 # its shell recipe instead — see below.
-TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(TFVARS_MARKER)),s3,local)))
+TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(PARENT_TFVARS_MARKER)),s3,$(if $(wildcard $(TFVARS_MARKER)),s3,local))))
 
 # TFVARS_BUCKET is display-only (used in log messages below); GSD_TFVARS_BUCKET
-# wins if already set, otherwise the marker file's contents.
-TFVARS_BUCKET = $(if $(GSD_TFVARS_BUCKET),$(GSD_TFVARS_BUCKET),$(shell cat $(TFVARS_MARKER) 2>/dev/null))
+# wins if already set, otherwise the parent-root marker's contents, otherwise
+# the submodule marker's contents.
+TFVARS_BUCKET = $(if $(GSD_TFVARS_BUCKET),$(GSD_TFVARS_BUCKET),$(shell cat $(PARENT_TFVARS_MARKER) 2>/dev/null || cat $(TFVARS_MARKER) 2>/dev/null))
 # TFVARS_SYNC is deliberately just the interpreter invocation with no
 # subcommand or flags: tfvars-sync.ts's parseArgs() requires the subcommand
 # (pull/push/check/diff) to be argv[0], so every call site must render
 # "$(TFVARS_SYNC) <subcommand> $(TFVARS_SYNC_ARGS)" — never put flags before
 # the subcommand.
 TFVARS_SYNC      = npx --prefix $(SUBMODULE)/scripts tsx $(SUBMODULE)/scripts/tfvars-sync.ts
-TFVARS_SYNC_ARGS = --path $(TFVARS) --bucket "$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"
+TFVARS_SYNC_ARGS = --path $(TFVARS) --bucket "$\${GSD_TFVARS_BUCKET:-$$(cat $(PARENT_TFVARS_MARKER) 2>/dev/null || cat $(TFVARS_MARKER) 2>/dev/null)}"
 
 .PHONY: help setup plan apply update dev copy-tfvars pull-tfvars-if-needed check-tfvars-if-needed tfvars-pull tfvars-push tfvars-diff
 
@@ -280,7 +294,7 @@ help:
 \t@echo "  make tfvars-diff   Show a unified diff between local and remote terraform.tfvars"
 \t@echo ""
 \t@echo "  S3 tfvars backend detection: GSD_TFVARS_BACKEND=s3|local overrides;"
-\t@echo "  otherwise inferred from the $(TFVARS_MARKER) marker file."
+\t@echo "  otherwise inferred from $(PARENT_TFVARS_MARKER), falling back to $(TFVARS_MARKER)."
 
 # ── Stamp dir ────────────────────────────────────────────────────────────────
 $(STAMP_DIR):
@@ -289,6 +303,16 @@ $(STAMP_DIR):
 # ── One-time setup ───────────────────────────────────────────────────────────
 setup: | $(STAMP_DIR)
 \tgit submodule update --init --recursive
+# PARENT_TFVARS_MARKER is written by \`init-parent bootstrap --s3-tfvars\`
+# before setup.sh has ever run, so it reflects an operator's up-front choice
+# to run in S3 mode. Export GSD_TFVARS_BACKEND=s3 into setup.sh's own
+# environment when it's present — setup.sh's bootstrap_tfvars_backend()
+# already understands this variable — so it bootstraps the S3 backend
+# instead of defaulting to local mode. This must be a single shell line (via
+# \\) rather than two separate recipe lines: each recipe line runs in its own
+# fresh shell, so an \`export\` on one line would never be visible to the
+# \`bash setup.sh\` on the next.
+\tif [ -f $(PARENT_TFVARS_MARKER) ]; then export GSD_TFVARS_BACKEND=s3; fi; \\
 \tbash $(SUBMODULE)/setup.sh
 \t@sha256sum $(SUBMODULE)/setup.sh | cut -d' ' -f1 > $(SETUP_STAMP)
 # Runtime (not parse-time) check, evaluated entirely inside this shell
@@ -298,10 +322,11 @@ setup: | $(STAMP_DIR)
 # make-variable-based check here would still see the filesystem from before
 # setup.sh (above) ran, even though it's written later in the recipe text.
 # Mirror TFVARS_BACKEND's own GSD_TFVARS_BACKEND override semantics by hand,
-# and defer both the marker-file test and its \`cat\` to the shell so they
-# see whatever setup.sh just wrote.
-\t@if [ "$\${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$\${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }; then \\
-\t  bucket="$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"; \\
+# and defer both marker-file tests and their \`cat\` to the shell so they see
+# whatever setup.sh just wrote. The parent-root marker (if any) is checked
+# first, same precedence as TFVARS_BACKEND/TFVARS_BUCKET above.
+\t@if [ "$\${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$\${GSD_TFVARS_BACKEND:-}" != local ] && { [ -f $(PARENT_TFVARS_MARKER) ] || [ -f $(TFVARS_MARKER) ]; }; }; then \\
+\t  bucket="$\${GSD_TFVARS_BUCKET:-$$(cat $(PARENT_TFVARS_MARKER) 2>/dev/null || cat $(TFVARS_MARKER) 2>/dev/null)}"; \\
 \t  if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — skipping S3 pull to avoid clobbering them (commit or stash them, then run 'make tfvars-pull')." >&2; \\
 \t  else \\
 \t    echo "S3 tfvars backend detected (s3://$$bucket) — pulling terraform.tfvars..."; \\
