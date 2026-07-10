@@ -43,7 +43,83 @@ interface Answers {
   discordPublicKey?: string;
 }
 
-const FORCE = argv.includes('--force');
+// ─────────────────────────────────────────────────────────────────────────────
+// CLI dispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Subcommands `init-parent.ts` dispatches on. `bootstrap` is the default when none is given. */
+export type CliCommand = 'bootstrap' | 'migrate';
+
+/** Direction for `migrate` — which way to move the parent repo's tfvars backend. */
+export type MigrateDirection = 'to-s3' | 'to-local';
+
+export interface CliArgs {
+  command: CliCommand;
+  force: boolean;
+  /** Pre-seeds an S3 tfvars backend during bootstrap. Only meaningful when `command === 'bootstrap'`. */
+  s3Tfvars: boolean;
+  /** Skips interactive confirmation prompts. Valid for both subcommands. */
+  yes: boolean;
+  /** Only meaningful when `command === 'migrate'`; always set once parsing succeeds (migrate requires exactly one direction). */
+  direction?: MigrateDirection;
+}
+
+/** Thrown by {@link parseCliArgs} for an unrecognized subcommand, an unrecognized flag, or an invalid flag combination. Callers should print `err.message` plus {@link USAGE} to stderr and exit 1. */
+export class CliUsageError extends Error {}
+
+export const USAGE = `Usage:
+  init-parent.ts [--force] [--s3-tfvars] [--yes]            Interactive bootstrap (default)
+  init-parent.ts migrate --to-s3 | --to-local [--yes]        Migrate an existing parent repo's tfvars backend
+`;
+
+/**
+ * Parses `init-parent.ts`'s CLI args (i.e. `argv.slice(2)`) into a subcommand
+ * plus its flags. `bootstrap` is implied when the first token isn't a known
+ * subcommand, so existing invocations like `tsx init-parent.ts --force` keep
+ * working unchanged. Throws {@link CliUsageError} for an unrecognized
+ * subcommand, an unrecognized flag for the resolved subcommand, or (for
+ * `migrate`) anything other than exactly one of `--to-s3` / `--to-local`.
+ * Pure and side-effect free, so it's directly unit-testable.
+ */
+export function parseCliArgs(args: string[]): CliArgs {
+  const rest = [...args];
+  let command: CliCommand = 'bootstrap';
+
+  if (rest[0] === 'migrate') {
+    command = 'migrate';
+    rest.shift();
+  } else if (rest[0] !== undefined && rest[0].startsWith('--') === false) {
+    throw new CliUsageError(`Unknown subcommand "${rest[0]}".`);
+  }
+
+  const knownFlags: readonly string[] =
+    command === 'bootstrap' ? ['--force', '--s3-tfvars', '--yes'] : ['--to-s3', '--to-local', '--yes'];
+
+  for (const token of rest) {
+    if (!knownFlags.includes(token)) {
+      throw new CliUsageError(`Unknown flag "${token}" for ${command === 'bootstrap' ? 'the default bootstrap command' : "'migrate'"}.`);
+    }
+  }
+
+  const force = rest.includes('--force');
+  const s3Tfvars = rest.includes('--s3-tfvars');
+  const yes = rest.includes('--yes');
+
+  if (command === 'bootstrap') {
+    return { command, force, s3Tfvars, yes };
+  }
+
+  const hasS3 = rest.includes('--to-s3');
+  const hasLocal = rest.includes('--to-local');
+  if (hasS3 === hasLocal) {
+    throw new CliUsageError('migrate requires exactly one of --to-s3 | --to-local.');
+  }
+
+  return { command, force, s3Tfvars, yes, direction: hasS3 ? 'to-s3' : 'to-local' };
+}
+
+/** Mutable so it can be set once `parseCliArgs` has run at entrypoint time; `writeIfSafe` reads it below. */
+let FORCE = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Path detection
@@ -468,10 +544,11 @@ function isValidDomain(s: string): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main
+// Bootstrap (the pre-existing interactive flow, unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+/** The interactive bootstrap flow: prompts for parent-repo details and writes Makefile/terraform.tfvars/.env/.gitignore. Exported so the entrypoint guard below can invoke it after CLI parsing. */
+export async function runBootstrap(): Promise<void> {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const guessedParent = findParentRepoRoot(cwd()) ?? findParentRepoRoot(scriptDir) ?? cwd();
 
@@ -577,6 +654,16 @@ async function main(): Promise<void> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Migrate (dispatch only — the migration itself lands in a follow-up task)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Runs the `migrate` subcommand for an already-validated `direction`. Migration itself lands in a follow-up task, so this only wires up dispatch: it prints a "not implemented yet" message and exits non-zero. */
+export function runMigrate(direction: MigrateDirection): void {
+  process.stderr.write(`\n  ✗ migrate --${direction} is not implemented yet.\n`);
+  exit(1);
+}
+
 // Only run when this file is the entry point — keeps the renderers importable
 // from tests without auto-launching the prompt loop. Compare normalized
 // absolute paths so relative invocations (e.g. `tsx init-parent.ts`) still
@@ -585,8 +672,24 @@ const isEntrypoint =
   argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(argv[1]);
 
 if (isEntrypoint) {
-  main().catch((err) => {
-    process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
+  let CLI: CliArgs;
+  try {
+    CLI = parseCliArgs(argv.slice(2));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`\n  ✗ ${message}\n\n${USAGE}`);
     exit(1);
-  });
+  }
+
+  if (CLI.command === 'migrate') {
+    // parseCliArgs guarantees exactly one of --to-s3 | --to-local by the time
+    // command === 'migrate' is returned, so direction is always defined here.
+    runMigrate(CLI.direction as MigrateDirection);
+  } else {
+    FORCE = CLI.force;
+    runBootstrap().catch((err) => {
+      process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      exit(1);
+    });
+  }
 }
