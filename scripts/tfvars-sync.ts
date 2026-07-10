@@ -12,6 +12,7 @@
  *   tsx tfvars-sync.ts push   [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
  *   tsx tfvars-sync.ts diff   [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
  *   tsx tfvars-sync.ts status [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
+ *   tsx tfvars-sync.ts check  [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
  *
  * `--path` defaults to `terraform/terraform.tfvars` and is the local file to
  * sync. `--key` defaults to `terraform.tfvars` and is the S3 object key —
@@ -135,6 +136,14 @@ export interface StatusReport {
   remote: RemoteHead;
   /** True when the local lock's version id matches the remote object's current version id. */
   inSync: boolean;
+}
+
+/** Result of `checkTfvars()` — a drift gate suitable for `make apply`. */
+export interface CheckResult {
+  /** True when the local lock's version id matches the remote object's current version id. */
+  inSync: boolean;
+  /** Human-readable explanation of `inSync`'s value — always present, even when `inSync` is true. */
+  reason: string;
 }
 
 /** Thrown by `pushTfvars()` when the local lock doesn't match (or is missing for) the current remote version. */
@@ -445,11 +454,47 @@ export async function lockStatus(opts: TfvarsSyncOptions): Promise<StatusReport>
   };
 }
 
+/**
+ * Drift gate for `make apply`: reports whether the local lock's version id
+ * matches the remote object's current version id, without touching the
+ * filesystem beyond reading the existing lock file. Unlike `lockStatus()`,
+ * this returns a single human-readable `reason` so callers (notably the CLI)
+ * can surface *why* the check failed without re-deriving it from the raw
+ * `LockFile`/`RemoteHead` shapes.
+ */
+export async function checkTfvars(opts: TfvarsSyncOptions): Promise<CheckResult> {
+  const status = await lockStatus(opts);
+
+  if (!status.lock) {
+    return { inSync: false, reason: `no local lock file found at ${lockPathFor(opts.path)} — run "pull" first` };
+  }
+  if (!status.remote.exists) {
+    return {
+      inSync: false,
+      reason: `remote object s3://${status.bucket}/${status.key} does not exist`,
+    };
+  }
+  if (status.remote.versionId === null) {
+    return {
+      inSync: false,
+      reason: `bucket "${status.bucket}" does not appear to have S3 versioning enabled (HeadObject returned no VersionId for s3://${status.bucket}/${status.key}) — drift cannot be detected without a versioned bucket`,
+    };
+  }
+  if (status.lock.versionId !== status.remote.versionId) {
+    return {
+      inSync: false,
+      reason: `local lock version "${status.lock.versionId}" does not match remote version "${status.remote.versionId}" — run "pull" to refresh`,
+    };
+  }
+
+  return { inSync: true, reason: `local lock version "${status.lock.versionId}" matches remote` };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COMMANDS = ['pull', 'push', 'diff', 'status'] as const;
+const COMMANDS = ['pull', 'push', 'diff', 'status', 'check'] as const;
 type Command = (typeof COMMANDS)[number];
 
 interface ParsedArgs {
@@ -577,6 +622,16 @@ async function main(): Promise<void> {
         output.write('  (object does not exist)\n');
       }
       output.write(`\nin sync: ${result.inSync ? 'yes' : 'no'}\n`);
+      return;
+    }
+    case 'check': {
+      const result = await checkTfvars(options);
+      if (result.inSync) {
+        output.write(`✓ in sync: ${result.reason}\n`);
+      } else {
+        output.write(`✗ drift detected: ${result.reason}\n`);
+        process.exitCode = 1;
+      }
       return;
     }
   }

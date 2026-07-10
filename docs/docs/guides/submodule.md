@@ -108,20 +108,51 @@ make apply
 ## What the wrapper Makefile does
 
 The generated wrapper is a thin layer over the submodule's own Makefile.
-Five targets, no surprises:
+Eight targets, no surprises:
 
 | Target | What it does |
 |---|---|
-| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `Hyveon/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. |
-| `make plan` | Copies `terraform.tfvars` into `Hyveon/terraform/terraform.tfvars`, then runs `make -C Hyveon tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. |
-| `make apply` | Same as `plan`, but delegates to `tf-apply`. The submodule's `tf-apply` recipe prints a post-deploy checklist with the Discord interactions URL when it finishes. |
+| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `Hyveon/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. If `setup.sh` bootstrapped a versioned S3 tfvars backend, `setup` also pulls `terraform.tfvars` down afterwards; on a first bootstrap against an empty bucket the pull can't find anything yet, so it prints a warning suggesting `make tfvars-push` to seed the bucket instead of failing `make setup`. |
+| `make plan` | Copies `terraform.tfvars` into `Hyveon/terraform/terraform.tfvars`, then runs `make -C Hyveon tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. When an S3 tfvars backend is detected, it auto-pulls the latest tfvars first so a stale local copy can't silently drive the plan; set `NO_PULL=1` to skip the pull for one invocation. |
+| `make apply` | Same as `plan`, but delegates to `tf-apply`. The submodule's `tf-apply` recipe prints a post-deploy checklist with the Discord interactions URL when it finishes. When an S3 tfvars backend is detected, it first asserts the local tfvars are still in sync with S3 (via the `tfvars-sync` CLI's `check` subcommand), refusing to apply against drifted vars; set `FORCE_APPLY=1` to skip the check for one invocation. |
 | `make update` | Bumps the submodule to the tip of `main` (`git submodule update --remote --merge`). If the new `setup.sh` differs from the recorded sha, clears `.terraform/` and re-runs `setup.sh` automatically; otherwise leaves it alone. Reminds you to commit the new submodule pointer. |
 | `make dev` | Pulls live tfstate into `.make/tfstate.json` (so ConfigService can read it via `TF_STATE_PATH`), wipes stale TS build info under the submodule's `app/packages/*/`, then runs `make -C Hyveon dev`, exporting `API_TOKEN` and `TF_STATE_PATH` to the child make. |
+| `make tfvars-pull` | Pulls `terraform.tfvars` from the configured S3 backend (requires one to be detected — see below). Refuses to run if the local file has uncommitted git changes, so a pull can never silently discard edits you haven't committed. |
+| `make tfvars-push` | Pushes the local `terraform.tfvars` to the configured S3 backend (requires one to be detected). |
+| `make tfvars-diff` | Prints a unified diff between the local and remote `terraform.tfvars` (requires a backend to be detected). |
 
 The `tfvars` copy is **always fresh** on plan/apply — the recipe `cp`s
 unconditionally, not just when the file is older than the destination. This
 prevents stale variables from sneaking into a deploy when you've edited the
 parent's `terraform.tfvars` between runs.
+
+## S3 tfvars backend detection
+
+The three `tfvars-*` targets, and the automatic gating baked into
+`setup`/`plan`/`apply` above, all key off the same `TFVARS_BACKEND`
+resolution in the generated Makefile:
+
+- `GSD_TFVARS_BACKEND=s3` forces S3 mode, even if the marker file below is
+  missing.
+- `GSD_TFVARS_BACKEND=local` forces local-file mode, even if a marker file
+  is present.
+- Otherwise: S3 if `Hyveon/.gsd/tfvars-bucket` exists — the marker
+  file `setup.sh`'s `bootstrap_tfvars_backend()` writes recording the
+  bucket name it just created — local otherwise.
+
+`GSD_TFVARS_BUCKET`, if set, wins over the marker file's contents when the
+wrapper needs to display or pass along the bucket name; otherwise it reads
+the marker file.
+
+`make tfvars-pull`, `make tfvars-push`, and `make tfvars-diff` fail fast
+with a pointer to `GSD_TFVARS_BACKEND`/`setup.sh` when no backend is
+detected — they're operator-driven, so they never silently no-op.
+
+The gates inside `setup`/`plan`/`apply` behave differently: in **local
+mode** (no marker file and `GSD_TFVARS_BACKEND` isn't `s3`) they're silent
+no-ops, so `make setup`, `make plan`, and `make apply` behave exactly as
+they did before S3 tfvars sync existed. Nothing changes for a single-file,
+no-remote-backend deployment.
 
 ## Submodule update with idempotent setup.sh re-run
 

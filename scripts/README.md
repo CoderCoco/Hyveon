@@ -11,7 +11,8 @@ Interactive scaffolder for the [private parent + submodule deployment
 pattern](https://codercoco.github.io/Hyveon/guides/submodule/). It
 generates a `Makefile`, `terraform.tfvars`, `.env`, and `.gitignore` in your
 parent repo, all wired to the wrapper Make targets (`setup`, `plan`, `apply`,
-`update`, `dev`) so you can drive the whole stack from the parent repo root.
+`update`, `dev`, `tfvars-pull`, `tfvars-push`, `tfvars-diff`) so you can drive
+the whole stack from the parent repo root.
 
 ### Usage
 
@@ -57,6 +58,7 @@ tsx scripts/tfvars-sync.ts pull   [--bucket <name>] [--path <file>] [--key <key>
 tsx scripts/tfvars-sync.ts push   [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
 tsx scripts/tfvars-sync.ts diff   [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
 tsx scripts/tfvars-sync.ts status [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
+tsx scripts/tfvars-sync.ts check  [--bucket <name>] [--path <file>] [--key <key>] [--region <region>]
 ```
 
 ### Subcommands
@@ -77,6 +79,12 @@ tsx scripts/tfvars-sync.ts status [--bucket <name>] [--path <file>] [--key <key>
   never pulled"), the remote object's current version/etag/last-modified (or
   "object does not exist"), and whether the local lock is in sync with the
   remote version.
+- **`check`** — drift gate intended for `make apply` (or any CI/pre-flight
+  step): compares the local lock's recorded version id against the remote
+  object's current version id. Prints `✓ in sync: ...` and **exits `0`** when
+  they match; prints `✗ drift detected: <reason>` and **exits `1`** otherwise
+  (no lock file, remote object missing, the bucket lacking S3 versioning, or
+  a version mismatch), with a clear, specific reason in each case.
 
 ### Flags
 
@@ -138,6 +146,21 @@ against it.
 - **`0`** — local and remote are byte-for-byte identical (`matches: true`).
 - **`1`** — local and remote differ (`matches: false`); the unified diff is
   printed to stdout before the exit code is set.
+
+### Check exit codes
+
+`check` sets `process.exitCode`:
+
+- **`0`** — the local lock's version id matches the remote object's current
+  version id (`inSync: true`).
+- **`1`** — the versions don't match, printing the specific reason: no local
+  lock file was found, the remote object doesn't exist, the bucket doesn't
+  appear to have S3 versioning enabled (`HeadObject` returned no
+  `VersionId`, so drift can't be detected), or the lock's recorded version
+  id differs from the remote's current version id. Wire this into
+  `make apply` (or CI) as a pre-flight drift gate so an apply never runs
+  against a `terraform.tfvars` that has silently drifted from the version
+  stored in S3.
 
 ### Requirements
 

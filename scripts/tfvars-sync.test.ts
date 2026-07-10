@@ -16,6 +16,8 @@ import {
   pushTfvars,
   diffTfvars,
   lockStatus,
+  checkTfvars,
+  parseArgs,
   VersionMismatchError,
   BucketNotVersionedError,
   type LockFile,
@@ -341,6 +343,129 @@ describe('tfvars-sync', () => {
 
       expect(result.remote.exists).toBe(false);
       expect(result.inSync).toBe(false);
+    });
+  });
+
+  describe('checkTfvars', () => {
+    it('should report inSync: true with a clear reason when the local lock version matches the remote head version', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'v1',
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(true);
+      expect(result.reason).toContain('v1');
+    });
+
+    it('should report inSync: false with a clear reason when the local lock version differs from the remote head version', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'stale-version',
+        etag: 'stale-etag',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v2', ETag: '"etag-2"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('stale-version');
+      expect(result.reason).toContain('v2');
+    });
+
+    it('should report inSync: false with a clear reason when no local lock file was found', async () => {
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('no local lock file found');
+    });
+
+    it('should report inSync: false with a clear reason when the remote object does not exist', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'v1',
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).rejects({ name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('does not exist');
+    });
+
+    it('should report inSync: false when the remote object exists but the bucket returns no VersionId (unversioned bucket)', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: null,
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('versioning');
+    });
+  });
+
+  describe('parseArgs', () => {
+    /**
+     * The generated parent Makefile (see `renderMakefile()` in
+     * `init-parent.ts`) renders every call site as
+     * `$(TFVARS_SYNC) <subcommand> $(TFVARS_SYNC_ARGS)`, which Make expands
+     * to `... tfvars-sync.ts <subcommand> --path <file> --bucket <bucket>`
+     * — i.e. the subcommand always precedes the flags. This is the exact
+     * argv shape `parseArgs()` must accept.
+     */
+    it('should parse the subcommand-then-flags argv shape the generated Makefile emits', () => {
+      const { command, options } = parseArgs(['pull', '--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket']);
+
+      expect(command).toBe('pull');
+      expect(options.path).toBe('/tmp/parent/terraform.tfvars');
+      expect(options.bucket).toBe('my-bucket');
+    });
+
+    it('should parse the subcommand-then-flags argv shape for every Makefile-driven subcommand (push/diff/check)', () => {
+      for (const command of ['push', 'diff', 'check'] as const) {
+        const parsed = parseArgs([command, '--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket']);
+        expect(parsed.command).toBe(command);
+        expect(parsed.options.bucket).toBe('my-bucket');
+      }
+    });
+
+    it('should throw a usage error when flags precede the subcommand', () => {
+      // Regression pin: an earlier Makefile template baked --path/--bucket
+      // into the TFVARS_SYNC variable itself, so every call site rendered
+      // "--path <file> --bucket <bucket> <subcommand>" — flags before the
+      // subcommand. parseArgs() takes argv[0] as the command unconditionally,
+      // so that shape threw this exact usage error on every tfvars-pull/
+      // push/diff/check/setup invocation, yet no test exercised parseArgs()
+      // with the Makefile's actual emitted argv shape to catch it.
+      expect(() =>
+        parseArgs(['--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket', 'pull']),
+      ).toThrow(/Usage: tfvars-sync\.ts <pull\|push\|diff\|status\|check>/);
     });
   });
 });
