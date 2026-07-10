@@ -27,7 +27,11 @@
  * observed on the last successful `pull` or `push`. `push` refuses to
  * overwrite the remote object if the lock is missing (never pulled) or
  * stale (someone else pushed since the last pull) — run `pull` again to
- * resolve.
+ * resolve. That version check and the upload itself are also raced against
+ * each other with an S3 conditional write (`IfMatch: <locked etag>` on the
+ * `PutObject` call): if another push slips in between our `HeadObject`
+ * check and the write, S3 rejects it with 412 and we surface the same
+ * `VersionMismatchError` rather than silently overwriting.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -76,11 +80,18 @@ export interface TfvarsSyncOptions {
   client?: S3Client;
 }
 
-/** Sidecar metadata written to `${path}.lock` after a successful pull or push. */
+/**
+ * Sidecar metadata written to `${path}.lock` after a successful pull or push.
+ *
+ * `versionId` is `null` (never `''`) when S3 reports no `VersionId` — i.e.
+ * the bucket is unversioned or versioning is suspended — so it compares
+ * equal to `RemoteHead.versionId`'s own `null` in that same situation
+ * instead of tripping a spurious `VersionMismatchError`.
+ */
 export interface LockFile {
   bucket: string;
   key: string;
-  versionId: string;
+  versionId: string | null;
   etag: string;
   size: number;
   lastModified: string | null;
@@ -138,6 +149,21 @@ export class VersionMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown by `pushTfvars()` when the remote object exists but S3 reports no
+ * `VersionId` for it — the bucket is unversioned or has versioning
+ * suspended, so the version-based conflict check that guards concurrent
+ * edits cannot function. This is distinct from `VersionMismatchError`
+ * because there is no stale/missing lock to fix by re-pulling; the bucket
+ * itself needs versioning enabled.
+ */
+export class BucketNotVersionedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BucketNotVersionedError';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +208,17 @@ function isNotFound(err: unknown): boolean {
     if (name === 'NotFound' || name === 'NoSuchKey') return true;
     const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
     if (status === 404) return true;
+  }
+  return false;
+}
+
+/** True for the shapes the AWS SDK v3 uses to signal a failed `IfMatch` conditional write (HTTP 412). */
+function isPreconditionFailed(err: unknown): boolean {
+  if (err && typeof err === 'object') {
+    const name = (err as { name?: string }).name;
+    if (name === 'PreconditionFailed') return true;
+    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+    if (status === 412) return true;
   }
   return false;
 }
@@ -265,7 +302,7 @@ export async function pullTfvars(opts: TfvarsSyncOptions): Promise<PullResult> {
   const lock: LockFile = {
     bucket: opts.bucket,
     key,
-    versionId: response.VersionId ?? '',
+    versionId: response.VersionId ?? null,
     etag: stripQuotes(response.ETag),
     size: response.ContentLength ?? Buffer.byteLength(content),
     lastModified: response.LastModified ? response.LastModified.toISOString() : null,
@@ -293,6 +330,11 @@ export async function pushTfvars(opts: TfvarsSyncOptions): Promise<PushResult> {
   const remote = await headRemote(s3, opts.bucket, key);
 
   if (remote.exists) {
+    if (remote.versionId === null) {
+      throw new BucketNotVersionedError(
+        `Bucket "${opts.bucket}" does not appear to have S3 versioning enabled (HeadObject returned no VersionId for s3://${opts.bucket}/${key}). The version-based conflict check that "push" relies on requires a versioned bucket — enable versioning on "${opts.bucket}" before pushing.`,
+      );
+    }
     if (!lock) {
       throw new VersionMismatchError(
         `Remote object s3://${opts.bucket}/${key} already exists but no local lock file was found at ${lockPathFor(opts.path)}. Run "pull" first.`,
@@ -310,12 +352,38 @@ export async function pushTfvars(opts: TfvarsSyncOptions): Promise<PushResult> {
   }
 
   const body = readFileSync(opts.path);
-  const put = await s3.send(new PutObjectCommand({ Bucket: opts.bucket, Key: key, Body: body }));
+
+  // Guard the window between the HeadObject check above and this write: pass
+  // `IfMatch` (S3 conditional write) whenever a lock is on file for an
+  // existing remote object, so a concurrent push that slips in between the
+  // head check and this PutObject fails with 412 instead of silently
+  // overwriting. The head check above still runs first purely to produce a
+  // friendlier, more specific error message for the common (non-racy) case.
+  let put;
+  try {
+    put = await s3.send(
+      new PutObjectCommand({
+        Bucket: opts.bucket,
+        Key: key,
+        Body: body,
+        ...(remote.exists && lock ? { IfMatch: `"${lock.etag}"` } : {}),
+      }),
+    );
+  } catch (err) {
+    if (isPreconditionFailed(err)) {
+      throw new VersionMismatchError(
+        `Remote object s3://${opts.bucket}/${key} changed after the version check (concurrent push detected). Run "pull" to refresh before pushing.`,
+        lock?.versionId ?? null,
+        null,
+      );
+    }
+    throw err;
+  }
 
   const newLock: LockFile = {
     bucket: opts.bucket,
     key,
-    versionId: put.VersionId ?? '',
+    versionId: put.VersionId ?? null,
     etag: stripQuotes(put.ETag),
     size: body.byteLength,
     lastModified: new Date().toISOString(),
@@ -409,12 +477,33 @@ export function parseArgs(rawArgv: string[]): ParsedArgs {
   let key: string | undefined;
   let region: string | undefined;
 
+  const KNOWN_FLAGS = ['--bucket', '--path', '--key', '--region'] as const;
+
+  /**
+   * Consumes the value following a recognized flag, throwing if it is
+   * missing or looks like another flag — guards against typos such as a
+   * trailing `--bucket` with no value silently falling through to the
+   * bucket-resolution fallback chain.
+   */
+  function readValue(flag: string, index: number): string {
+    const value = rest[index];
+    if (value === undefined || value.startsWith('--')) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return value;
+  }
+
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    if (arg === '--bucket') bucket = rest[++i];
-    else if (arg === '--path') path = rest[++i];
-    else if (arg === '--key') key = rest[++i];
-    else if (arg === '--region') region = rest[++i];
+    if (arg === '--bucket') bucket = readValue(arg, ++i);
+    else if (arg === '--path') path = readValue(arg, ++i);
+    else if (arg === '--key') key = readValue(arg, ++i);
+    else if (arg === '--region') region = readValue(arg, ++i);
+    else {
+      throw new Error(
+        `Unrecognized argument '${arg}'. Known flags: ${KNOWN_FLAGS.join(', ')}`,
+      );
+    }
   }
 
   const resolvedBucket = resolveBucket(bucket);
