@@ -33,11 +33,14 @@ npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts
 
 ### Subcommands
 
-`bootstrap` is the default and is implied whenever the first token isn't a
-recognized subcommand — existing invocations like `tsx init-parent.ts
---force` keep working unchanged.
+`bootstrap` has no subcommand token of its own — it is the implicit default,
+selected whenever the first argument is omitted or starts with `--` (e.g.
+`tsx init-parent.ts --force` keeps working unchanged). Passing the literal
+word `bootstrap` as an argument is **not** supported and exits `1` with
+`Unknown subcommand "bootstrap"` — the only recognized subcommand token is
+`migrate`.
 
-- **`bootstrap`** (default) — the interactive scaffolder described above:
+- **`bootstrap`** (default, invoked with no subcommand token) — the interactive scaffolder described above:
   prompts for parent-repo details and writes `Makefile`, `terraform.tfvars`,
   `.env`, and `.gitignore`, plus (only when requested) the
   `.gsd/tfvars-bucket` S3 backend marker.
@@ -57,11 +60,12 @@ recognized subcommand — existing invocations like `tsx init-parent.ts
   submodule-local marker), pulls `terraform.tfvars` down from S3 first if
   it's missing locally, aborts with no changes if the local file has
   drifted from the remote object (checked the same way `tfvars-sync.ts
-  diff` does), then deletes both `.gsd/tfvars-bucket` markers and the
-  `terraform.tfvars.lock` sidecar. `terraform.tfvars` itself is left in
-  place. The S3 bucket is **not** deleted — destroy it manually with
-  `terraform -chdir=<submodule>/terraform/bootstrap destroy` if you no
-  longer need it.
+  diff` does — skipped entirely if the remote object was never seeded, in
+  which case migration proceeds straight to deleting the markers), then
+  deletes both `.gsd/tfvars-bucket` markers and the `terraform.tfvars.lock`
+  sidecar. `terraform.tfvars` itself is left in place. The S3 bucket is
+  **not** deleted — destroy it manually with `terraform
+  -chdir=<submodule>/terraform/bootstrap destroy` if you no longer need it.
 
 ### Flags
 
@@ -73,11 +77,12 @@ recognized subcommand — existing invocations like `tsx init-parent.ts
 - `--to-s3` / `--to-local` — (`migrate` only) selects the migration
   direction. Exactly one is required; passing both or neither is a usage
   error.
-- `--yes` — (both subcommands) skips interactive confirmation prompts.
-  For `bootstrap`, this also skips the "bootstrap an S3-backed tfvars
-  store?" prompt and defaults it to no unless `--s3-tfvars` was also
-  passed. For `migrate`, this skips the "Proceed?" confirmation and runs
-  immediately.
+- `--yes` — for `migrate`, skips the "Proceed?" confirmation and runs
+  immediately. For `bootstrap`, it only pre-answers the "bootstrap an
+  S3-backed tfvars store?" prompt (defaulting to no unless `--s3-tfvars`
+  was also passed); all other bootstrap prompts (parent repo path,
+  submodule path, project name, AWS region, hosted zone, API token,
+  Discord credentials) still run interactively.
 
 An unrecognized subcommand, an unrecognized flag for the resolved
 subcommand, or (for `migrate`) anything other than exactly one of
@@ -93,8 +98,11 @@ npm run scripts:init-parent -- migrate --to-local
 npm run scripts:init-parent -- --force --s3-tfvars
 ```
 
-The script never reads or modifies anything inside the submodule. `bootstrap`
-is safe to re-run; without `--force` it leaves existing files alone.
+`bootstrap` never reads or modifies anything inside the submodule, and is
+safe to re-run; without `--force` it leaves existing files alone. `migrate`
+is the exception: `--to-local` may delete the submodule-local
+`.gsd/tfvars-bucket` marker (see above), and `--to-s3` runs `make setup`,
+which executes `setup.sh` inside the submodule.
 
 ### Requirements
 
