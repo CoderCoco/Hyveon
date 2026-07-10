@@ -25,12 +25,13 @@
  */
 
 import { createInterface, type Interface } from 'node:readline/promises';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stdin as input, stdout as output, argv, cwd, exit } from 'node:process';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { diffTfvars, pullTfvars, type DiffResult } from './tfvars-sync.ts';
 
 interface Answers {
   parentDir: string;
@@ -549,14 +550,16 @@ function writeIfSafe(path: string, contents: string): 'wrote' | 'skipped' | 'ove
   return existed ? 'overwrote' : 'wrote';
 }
 
-function status(path: string, action: 'wrote' | 'skipped' | 'overwrote', parentDir: string): void {
+function status(path: string, action: 'wrote' | 'skipped' | 'overwrote' | 'deleted', parentDir: string): void {
   const rel = relative(parentDir, path) || path;
   const tag =
     action === 'wrote'
       ? '  +'
       : action === 'overwrote'
         ? '  ~'
-        : '  ·';
+        : action === 'deleted'
+          ? '  -'
+          : '  ·';
   const note = action === 'skipped' ? '  (exists — use --force to overwrite)' : '';
   output.write(`${tag} ${rel}${note}\n`);
 }
@@ -743,29 +746,58 @@ export interface MigrateOptions {
 type ExistingParentInfo = Pick<Answers, 'parentDir' | 'submoduleDir' | 'projectName'>;
 
 /**
- * Locates an already-scaffolded parent repo (a directory containing both
- * `Makefile` and `terraform.tfvars`, as written by `runBootstrap`) starting
- * from `cwd()` — walking up to the nearest `.gitmodules` first, same as
- * `runBootstrap`'s guess, and falling back to `cwd()` itself. Pulls
- * `submoduleDir` out of the existing Makefile's `SUBMODULE` line and
- * `projectName` out of the existing `terraform.tfvars`'s `project_name`.
- * Throws a plain `Error` (message intended for stderr) if either file is
- * missing or `project_name` can't be found.
+ * The subset of {@link ExistingParentInfo} recoverable from the Makefile
+ * alone, without requiring `terraform.tfvars` to already exist locally.
+ * `migrate --to-local` uses this looser lookup because its whole point is
+ * that the parent repo may currently be sourcing `terraform.tfvars` from S3
+ * with no local copy on disk yet — see {@link runMigrateToLocal}, which
+ * pulls one down first when needed.
  */
-function readExistingParent(scriptDir: string): ExistingParentInfo {
+type ParentLocation = Pick<Answers, 'parentDir' | 'submoduleDir'>;
+
+/**
+ * Locates an already-scaffolded parent repo (a directory containing a
+ * `Makefile`, as written by `runBootstrap`) starting from `cwd()` — walking
+ * up to the nearest `.gitmodules` first, same as `runBootstrap`'s guess, and
+ * falling back to `cwd()` itself. Pulls `submoduleDir` out of the existing
+ * Makefile's `SUBMODULE` line. Throws a plain `Error` (message intended for
+ * stderr) if the Makefile is missing.
+ */
+function locateExistingParent(scriptDir: string): ParentLocation {
   const parentDir = findParentRepoRoot(cwd()) ?? cwd();
   const makefilePath = join(parentDir, 'Makefile');
-  const tfvarsPath = join(parentDir, 'terraform.tfvars');
 
-  if (!existsSync(makefilePath) || !existsSync(tfvarsPath)) {
+  if (!existsSync(makefilePath)) {
     throw new Error(
-      `${parentDir} doesn't look like a scaffolded parent repo (missing Makefile and/or terraform.tfvars) — run \`init-parent.ts\` (bootstrap) first.`,
+      `${parentDir} doesn't look like a scaffolded parent repo (missing Makefile) — run \`init-parent.ts\` (bootstrap) first.`,
     );
   }
 
   const makefile = readFileSync(makefilePath, 'utf8');
   const submoduleMatch = makefile.match(/^SUBMODULE\s*:=\s*\$\(REPO_ROOT\)\/(.+)$/m);
   const submoduleDir = submoduleMatch ? submoduleMatch[1] : detectSubmodulePath(parentDir, scriptDir);
+
+  return { parentDir, submoduleDir };
+}
+
+/**
+ * Locates an already-scaffolded parent repo the same way
+ * {@link locateExistingParent} does, additionally requiring
+ * `terraform.tfvars` to exist locally and pulling `projectName` out of its
+ * `project_name` key. Used by `migrate --to-s3`, which needs a local
+ * `terraform.tfvars` as the source of truth to push up to the new bucket.
+ * `migrate --to-local` deliberately does *not* use this — see
+ * {@link ParentLocation}.
+ */
+function readExistingParent(scriptDir: string): ExistingParentInfo {
+  const { parentDir, submoduleDir } = locateExistingParent(scriptDir);
+  const tfvarsPath = join(parentDir, 'terraform.tfvars');
+
+  if (!existsSync(tfvarsPath)) {
+    throw new Error(
+      `${parentDir} doesn't look like a scaffolded parent repo (missing terraform.tfvars) — run \`init-parent.ts\` (bootstrap) first.`,
+    );
+  }
 
   const tfvars = readFileSync(tfvarsPath, 'utf8');
   const projectMatch = tfvars.match(/^project_name\s*=\s*"([^"]+)"/m);
@@ -790,16 +822,22 @@ function readExistingParent(scriptDir: string): ExistingParentInfo {
  * printed `make tfvars-pull` note (and to `make setup`'s own post-bootstrap
  * pull, which no-ops the first time since the bucket starts empty).
  *
- * `--to-local` is not implemented yet — lands in a follow-up task.
+ * `--to-local`: delegates to {@link runMigrateToLocal} — see its doc comment
+ * for the drift check and deletion behaviour.
  */
 export async function runMigrate(direction: MigrateDirection, options: MigrateOptions = { yes: false }): Promise<void> {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+
   if (direction === 'to-local') {
-    process.stderr.write(`\n  ✗ migrate --${direction} is not implemented yet.\n`);
-    exit(1);
+    // Deliberately uses the looser locateExistingParent (Makefile only, no
+    // terraform.tfvars requirement) — runMigrateToLocal pulls tfvars down
+    // from S3 itself when it's missing locally, so requiring it up front
+    // here would make that codepath unreachable.
+    const location = locateExistingParent(scriptDir);
+    await runMigrateToLocal(location, options);
     return;
   }
 
-  const scriptDir = dirname(fileURLToPath(import.meta.url));
   const info = readExistingParent(scriptDir);
   const markerPath = join(info.parentDir, '.gsd', 'tfvars-bucket');
   const bucketName = `${info.projectName}-tfvars`;
@@ -871,6 +909,155 @@ export async function runMigrate(direction: MigrateDirection, options: MigrateOp
   output.write(`  Your tfvars are now in S3 (s3://${bucketName}) — this is a one-time note:\n`);
   output.write(`  run \`make tfvars-pull\` any time you need to refresh your local terraform.tfvars\n`);
   output.write(`  from the bucket (e.g. after editing it from another machine).\n\n`);
+}
+
+/**
+ * Implements `migrate --to-local`: drops an already-scaffolded parent repo's
+ * S3 tfvars backend markers, reverting `make plan`/`make apply` to reading
+ * `terraform.tfvars` straight off disk (the same behaviour as a parent repo
+ * that never opted into S3 at all).
+ *
+ * Steps:
+ *   1. Resolve the target bucket — `GSD_TFVARS_BUCKET` wins if set (matching
+ *      the Makefile's own `TFVARS_BUCKET` precedence and `resolveBucket()`'s
+ *      env-first behaviour in `tfvars-sync.ts`), otherwise the parent-root
+ *      `.gsd/tfvars-bucket` marker, otherwise the submodule-local one. If
+ *      none resolve, exit 1 — there's nothing to migrate.
+ *   2. If `terraform.tfvars` doesn't exist locally yet (the parent repo may
+ *      currently be sourcing it purely from S3), pull it down via
+ *      `pullTfvars()` first so there's something to compare/leave behind.
+ *   3. Compare the (now-guaranteed-present) local `terraform.tfvars` against
+ *      the remote S3 object byte-for-byte via `diffTfvars()` (the same
+ *      comparison the `tfvars diff` subcommand uses) and abort — leaving
+ *      every file untouched — if they've drifted, since deleting the markers
+ *      would otherwise silently strand whichever side lost the race.
+ *   4. On success, delete, if present: the `.gsd/tfvars-bucket` marker at the
+ *      parent repo root, the sibling marker `setup.sh` writes inside the
+ *      submodule directory, and the `terraform.tfvars.lock` sidecar
+ *      `tfvars-sync.ts` maintains. `terraform.tfvars` itself is never
+ *      written beyond the step-2 pull (if that ran) — it's already the
+ *      source of truth for local mode once the markers are gone.
+ *   5. Note that the S3 bucket itself is left standing (this command never
+ *      deletes it) and point at `terraform -chdir=<submodule>/terraform/bootstrap
+ *      destroy` for operators who want to tear it down.
+ */
+async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions): Promise<void> {
+  const parentMarkerPath = join(info.parentDir, '.gsd', 'tfvars-bucket');
+  const submoduleMarkerPath = join(info.parentDir, info.submoduleDir, '.gsd', 'tfvars-bucket');
+  const tfvarsPath = join(info.parentDir, 'terraform.tfvars');
+  const lockPath = `${tfvarsPath}.lock`;
+  const bootstrapDir = join(info.submoduleDir, 'terraform', 'bootstrap');
+
+  const parentMarkerExists = existsSync(parentMarkerPath);
+  const submoduleMarkerExists = existsSync(submoduleMarkerPath);
+  const lockExists = existsSync(lockPath);
+
+  output.write('\n');
+  output.write('  Hyveon — migrate tfvars backend to local\n');
+  output.write('  ────────────────────────────────────────────────────\n');
+  output.write('\n');
+  output.write(`  Parent repo:  ${info.parentDir}\n`);
+  output.write(`  Submodule:    ${info.submoduleDir}\n`);
+  output.write('\n');
+
+  // GSD_TFVARS_BUCKET wins over both marker files, then the parent-root
+  // marker wins over the submodule marker — same precedence resolveBucket()
+  // uses in tfvars-sync.ts and TFVARS_BUCKET uses in the generated Makefile
+  // (see renderMakefile's comment on PARENT_TFVARS_MARKER).
+  const bucketName =
+    (process.env.GSD_TFVARS_BUCKET || undefined) ??
+    (parentMarkerExists ? readFileSync(parentMarkerPath, 'utf8').trim() : undefined) ??
+    (submoduleMarkerExists ? readFileSync(submoduleMarkerPath, 'utf8').trim() : undefined);
+
+  if (!bucketName) {
+    process.stderr.write(
+      '  No GSD_TFVARS_BUCKET env var and no .gsd/tfvars-bucket marker found — already in local mode, nothing to migrate.\n\n',
+    );
+    exit(1);
+    return;
+  }
+
+  output.write(`  Bucket:       ${bucketName}\n`);
+  output.write('\n');
+  output.write('  This will:\n');
+  output.write(`    1. Pull terraform.tfvars from s3://${bucketName}/terraform.tfvars first if it's missing locally.\n`);
+  output.write(`    2. Compare local terraform.tfvars against s3://${bucketName}/terraform.tfvars — abort on drift.\n`);
+  output.write(`    3. Delete the .gsd/tfvars-bucket marker(s).\n`);
+  output.write(`    4. Delete the terraform.tfvars.lock sidecar, if present.\n`);
+  output.write('\n');
+  output.write('  terraform.tfvars itself is left in place (aside from the pull-if-missing step above).\n');
+  output.write('\n');
+
+  if (!options.yes) {
+    const rl = createInterface({ input, output });
+    let proceed: boolean;
+    try {
+      proceed = await askBool(rl, 'Proceed?', false);
+    } finally {
+      rl.close();
+    }
+    if (!proceed) {
+      output.write('\n  Aborted — no files were changed.\n\n');
+      return;
+    }
+  }
+
+  if (!existsSync(tfvarsPath)) {
+    output.write(`  terraform.tfvars not found locally — pulling from s3://${bucketName}/terraform.tfvars…\n`);
+    try {
+      await pullTfvars({ bucket: bucketName, path: tfvarsPath });
+    } catch (err) {
+      process.stderr.write(
+        `\n  ✗ failed to pull s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.stderr.write('  Nothing was changed.\n\n');
+      exit(1);
+      return;
+    }
+    status(tfvarsPath, 'wrote', info.parentDir);
+  }
+
+  output.write('  Checking for drift against the remote tfvars object…\n');
+  let diff: DiffResult;
+  try {
+    diff = await diffTfvars({ bucket: bucketName, path: tfvarsPath });
+  } catch (err) {
+    process.stderr.write(
+      `\n  ✗ failed to compare against s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.stderr.write('  Nothing was changed.\n\n');
+    exit(1);
+    return;
+  }
+
+  if (!diff.matches) {
+    process.stderr.write(`\n  ✗ local terraform.tfvars has drifted from s3://${bucketName}/terraform.tfvars — aborting.\n`);
+    process.stderr.write('  Run `make tfvars-pull` or `make tfvars-push` to reconcile them first, then re-run this migration.\n');
+    process.stderr.write('  Nothing was changed.\n\n');
+    exit(1);
+    return;
+  }
+
+  output.write('  ✓ local and remote match — safe to migrate.\n\n');
+  output.write('  Deleting files…\n');
+  if (parentMarkerExists) {
+    unlinkSync(parentMarkerPath);
+    status(parentMarkerPath, 'deleted', info.parentDir);
+  }
+  if (submoduleMarkerExists) {
+    unlinkSync(submoduleMarkerPath);
+    status(submoduleMarkerPath, 'deleted', info.parentDir);
+  }
+  if (lockExists) {
+    unlinkSync(lockPath);
+    status(lockPath, 'deleted', info.parentDir);
+  }
+
+  output.write('\n  ✓ Migrated to the local tfvars backend.\n\n');
+  output.write('  terraform.tfvars is unchanged — `make plan`/`make apply` will use it directly, with no S3 involved.\n\n');
+  output.write(`  Note: the S3 bucket (s3://${bucketName}) itself is retained — this command never deletes it.\n`);
+  output.write(`  If you no longer need it, destroy it with:\n`);
+  output.write(`    terraform -chdir=${bootstrapDir} destroy\n\n`);
 }
 
 // Only run when this file is the entry point — keeps the renderers importable
