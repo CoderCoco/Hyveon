@@ -107,9 +107,13 @@ these resolve.
 
 A sidecar lock file (`${path}.lock`, e.g. `terraform/terraform.tfvars.lock`)
 records the S3 version id, etag, size, last-modified timestamp, and
-pulled-at timestamp observed on the last successful `pull` or `push`. It is
-JSON and safe to inspect or commit-ignore alongside the tfvars file it
-tracks.
+pulled-at timestamp from the last successful `pull` or `push`. On `pull`,
+`lastModified` and `pulledAt` reflect the object's `LastModified` value as
+observed from S3. On `push`, both fields are instead the client-side write
+timestamp (`new Date().toISOString()` in `tfvars-sync.ts`, line ~393),
+recorded right after the upload completes rather than read back from S3.
+It is JSON and safe to inspect or commit-ignore alongside the tfvars file
+it tracks.
 
 `push` uses the lock as an optimistic-concurrency check before uploading:
 
@@ -123,8 +127,10 @@ tracks.
 - If the remote object doesn't exist yet, `push` proceeds without a lock
   check (first push).
 
-On success, both `pull` and `push` (re)write the lock file with the
-newly-observed version, so the next `push` is validated against it.
+On success, both `pull` and `push` (re)write the lock file with the new
+version — `pull` from the version it observed on S3, `push` from the
+response returned by its own upload — so the next `push` is validated
+against it.
 
 ### Diff exit codes
 
@@ -137,5 +143,7 @@ newly-observed version, so the next `push` is validated against it.
 ### Requirements
 
 - Node.js 20+.
-- AWS credentials resolvable by the AWS SDK v3's default provider chain
-  (env vars, shared config/credentials file, or `--region`/SDK defaults).
+- AWS credentials resolvable by the AWS SDK v3's default credential
+  provider chain (env vars, shared credentials file, IAM role, etc.).
+- A region, resolved via `--region` or the SDK's own region config —
+  this only selects the region and is unrelated to credential resolution.
