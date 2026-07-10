@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { stdin as input, stdout as output, argv, cwd, exit } from 'node:process';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { diffTfvars, pullTfvars, type DiffResult } from './tfvars-sync.ts';
+import { diffTfvars, pullTfvars, lockStatus, type DiffResult, type StatusReport } from './tfvars-sync.ts';
 
 interface Answers {
   parentDir: string;
@@ -314,6 +314,16 @@ $(STAMP_DIR):
 # ── One-time setup ───────────────────────────────────────────────────────────
 setup: | $(STAMP_DIR)
 \tgit submodule update --init --recursive
+# Copy the parent's terraform.tfvars into the submodule *before* setup.sh
+# runs (mirroring the copy-tfvars target below), so setup.sh's
+# bootstrap_tfvars_backend() derives the bootstrap bucket name from the same
+# project_name this Makefile (and PARENT_TFVARS_MARKER, if written by
+# \`init-parent bootstrap --s3-tfvars\`/\`migrate --to-s3\`) was generated from.
+# Without this, setup.sh would see whatever project_name is already checked
+# into $(TF_DIR)/terraform.tfvars (e.g. the "game-servers" default seeded
+# from terraform.tfvars.example on a first run) and bootstrap a
+# differently-named bucket than the one PARENT_TFVARS_MARKER points at.
+\tcp $(TFVARS) $(TF_DIR)/terraform.tfvars
 # PARENT_TFVARS_MARKER is written by \`init-parent bootstrap --s3-tfvars\`
 # before setup.sh has ever run, so it reflects an operator's up-front choice
 # to run in S3 mode. Export GSD_TFVARS_BACKEND=s3 into setup.sh's own
@@ -937,11 +947,17 @@ export async function runMigrate(direction: MigrateDirection, options: MigrateOp
  *   2. If `terraform.tfvars` doesn't exist locally yet (the parent repo may
  *      currently be sourcing it purely from S3), pull it down via
  *      `pullTfvars()` first so there's something to compare/leave behind.
- *   3. Compare the (now-guaranteed-present) local `terraform.tfvars` against
- *      the remote S3 object byte-for-byte via `diffTfvars()` (the same
- *      comparison the `tfvars diff` subcommand uses) and abort — leaving
- *      every file untouched — if they've drifted, since deleting the markers
- *      would otherwise silently strand whichever side lost the race.
+ *   3. Check whether the remote S3 object exists at all via `lockStatus()`
+ *      first. If it was never seeded (a real state after `bootstrap
+ *      --s3-tfvars` + `make setup` when the initial push/pull was skipped),
+ *      there is nothing remote to strand — skip straight to deleting the
+ *      markers with a note instead of comparing against empty content.
+ *      Otherwise compare the (now-guaranteed-present) local
+ *      `terraform.tfvars` against the remote object byte-for-byte via
+ *      `diffTfvars()` (the same comparison the `tfvars diff` subcommand
+ *      uses) and abort — leaving every file untouched — if they've drifted,
+ *      since deleting the markers would otherwise silently strand whichever
+ *      side lost the race.
  *   4. On success, delete, if present: the `.gsd/tfvars-bucket` marker at the
  *      parent repo root, the sibling marker `setup.sh` writes inside the
  *      submodule directory, and the `terraform.tfvars.lock` sidecar
@@ -1039,27 +1055,51 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
     : '  Nothing was changed.\n\n';
 
   output.write('  Checking for drift against the remote tfvars object…\n');
-  let diff: DiffResult;
+  let remoteStatus: StatusReport;
   try {
-    diff = await diffTfvars({ bucket: bucketName, path: tfvarsPath });
+    remoteStatus = await lockStatus({ bucket: bucketName, path: tfvarsPath });
   } catch (err) {
     process.stderr.write(
-      `\n  ✗ failed to compare against s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
+      `\n  ✗ failed to check s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
     );
     process.stderr.write(recoveryMessage);
     exit(1);
     return;
   }
 
-  if (!diff.matches) {
-    process.stderr.write(`\n  ✗ local terraform.tfvars has drifted from s3://${bucketName}/terraform.tfvars — aborting.\n`);
-    process.stderr.write('  Run `make tfvars-pull` or `make tfvars-push` to reconcile them first, then re-run this migration.\n');
-    process.stderr.write(recoveryMessage);
-    exit(1);
-    return;
-  }
+  if (!remoteStatus.remote.exists) {
+    // The bucket was created but never seeded (e.g. `bootstrap --s3-tfvars`
+    // followed by `make setup` with the initial pull skipped). There is
+    // nothing remote to strand or reconcile — `make tfvars-pull` would just
+    // fail with NoSuchKey, and `make tfvars-push` would seed a bucket the
+    // operator is about to abandon. Proceed straight to deleting the
+    // markers.
+    output.write(
+      `  ✓ s3://${bucketName}/terraform.tfvars was never seeded — nothing remote to compare, safe to migrate.\n\n`,
+    );
+  } else {
+    let diff: DiffResult;
+    try {
+      diff = await diffTfvars({ bucket: bucketName, path: tfvarsPath });
+    } catch (err) {
+      process.stderr.write(
+        `\n  ✗ failed to compare against s3://${bucketName}/terraform.tfvars: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.stderr.write(recoveryMessage);
+      exit(1);
+      return;
+    }
 
-  output.write('  ✓ local and remote match — safe to migrate.\n\n');
+    if (!diff.matches) {
+      process.stderr.write(`\n  ✗ local terraform.tfvars has drifted from s3://${bucketName}/terraform.tfvars — aborting.\n`);
+      process.stderr.write('  Run `make tfvars-pull` or `make tfvars-push` to reconcile them first, then re-run this migration.\n');
+      process.stderr.write(recoveryMessage);
+      exit(1);
+      return;
+    }
+
+    output.write('  ✓ local and remote match — safe to migrate.\n\n');
+  }
   output.write('  Deleting files…\n');
   if (parentMarkerExists) {
     unlinkSync(parentMarkerPath);

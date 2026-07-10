@@ -110,6 +110,17 @@ expect('Makefile apply depends on check-tfvars-if-needed', mk.includes('apply: c
 const setupRecipeMatch = /^setup:.*\n(?:(?:\t|#).*\n?)*/m.exec(mk);
 const setupRecipe = setupRecipeMatch ? setupRecipeMatch[0] : '';
 expect('Makefile has a setup: recipe to inspect', setupRecipe !== '');
+// Regression coverage: setup.sh's bootstrap_tfvars_backend() derives
+// TF_PROJECT from $(TF_DIR)/terraform.tfvars, not from the parent-root
+// $(TFVARS)/PARENT_TFVARS_MARKER. Without copying the parent's tfvars into
+// the submodule first, a first-ever `make setup` would see the
+// "game-servers" default from terraform.tfvars.example and bootstrap a
+// differently-named bucket than the one PARENT_TFVARS_MARKER records.
+expect(
+  'Makefile setup copies the parent tfvars into the submodule before running setup.sh, so TF_PROJECT (and the bucket setup.sh bootstraps) matches the project name PARENT_TFVARS_MARKER was derived from',
+  setupRecipe.includes('cp $(TFVARS) $(TF_DIR)/terraform.tfvars') &&
+    setupRecipe.indexOf('cp $(TFVARS) $(TF_DIR)/terraform.tfvars') < setupRecipe.indexOf('bash $(SUBMODULE)/setup.sh'),
+);
 expect(
   'Makefile setup runtime-pulls tfvars post-bootstrap via a shell-native (not make-variable) S3 backend check that also honors the parent-root marker',
   setupRecipe.includes(

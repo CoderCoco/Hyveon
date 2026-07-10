@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,8 +261,10 @@ describe('runMigrate --to-local', () => {
     writeFileSync(join(parentDir, '.gsd', 'tfvars-bucket'), 'test-parent-tfvars\n');
     writeFileSync(join(parentDir, 'terraform.tfvars.lock'), '{}\n');
 
-    // Remote content matches local, so diffTfvars() reports no drift and the
+    // Remote object exists (lockStatus()'s HeadObjectCommand check) and its
+    // content matches local, so diffTfvars() reports no drift and the
     // migration is allowed to delete the markers.
+    s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
     s3Mock.on(GetObjectCommand).resolves({ Body: fakeBody(tfvarsContent) as never });
   });
 
@@ -301,6 +303,7 @@ describe('runMigrate --to-local (terraform.tfvars missing locally)', () => {
     // sourcing it purely from S3, so runMigrateToLocal must pull one down
     // first (before the drift check can even run).
 
+    s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
     s3Mock.on(GetObjectCommand).resolves({ Body: fakeBody(remoteContent) as never });
   });
 
@@ -343,8 +346,10 @@ describe('runMigrate --to-local (drift abort)', () => {
     writeFileSync(join(parentDir, '.gsd', 'tfvars-bucket'), 'test-parent-tfvars\n');
     writeFileSync(join(parentDir, 'terraform.tfvars.lock'), '{}\n');
 
-    // Remote content differs from local, so diffTfvars() reports drift and
-    // the migration must abort without touching any files.
+    // Remote object exists but its content differs from local, so
+    // diffTfvars() reports drift and the migration must abort without
+    // touching any files.
+    s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
     s3Mock.on(GetObjectCommand).resolves({ Body: fakeBody(remoteContent) as never });
   });
 
@@ -360,5 +365,44 @@ describe('runMigrate --to-local (drift abort)', () => {
     expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(true);
     expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(true);
     expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe(localContent);
+  });
+});
+
+describe('runMigrate --to-local (bucket never seeded)', () => {
+  let parentDir: string;
+  let originalCwd: string;
+  const tfvarsContent = 'project_name = "test-parent"\n';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), 'init-parent-cli-test-')));
+    parentDir = process.cwd();
+    s3Mock.reset();
+
+    writeFileSync(join(parentDir, 'Makefile'), 'SUBMODULE   := $(REPO_ROOT)/Hyveon\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars'), tfvarsContent);
+    mkdirSync(join(parentDir, '.gsd'), { recursive: true });
+    writeFileSync(join(parentDir, '.gsd', 'tfvars-bucket'), 'test-parent-tfvars\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars.lock'), '{}\n');
+
+    // The bucket marker exists (e.g. `bootstrap --s3-tfvars` ran) but the
+    // remote object was never seeded (the initial `make tfvars-push`/pull
+    // step was skipped) — lockStatus()'s HeadObjectCommand check reports the
+    // object missing, so there is nothing remote to diff against or strand.
+    s3Mock.on(HeadObjectCommand).rejects({ name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(parentDir, { recursive: true, force: true });
+  });
+
+  it('should proceed with the migration instead of reporting drift when the remote object was never seeded', async () => {
+    await runMigrate('to-local', { yes: true });
+
+    expect(vi.mocked(exit)).not.toHaveBeenCalled();
+    expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(false);
+    expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(false);
+    expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe(tfvarsContent);
   });
 });
