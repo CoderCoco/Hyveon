@@ -108,6 +108,11 @@ describe('tfvars-sync', () => {
       const result = await pushTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
 
       expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
+      // The conditional write is the actual race guard: assert PutObject was
+      // sent with `IfMatch` pinned to the locked etag, not just that some
+      // PutObject happened. A regression that drops the conditional write
+      // would otherwise still pass this test.
+      expect(s3Mock.commandCalls(PutObjectCommand)[0]!.args[0].input.IfMatch).toBe('"etag-1"');
       expect(result.lock.versionId).toBe('v2');
       expect(result.lock.etag).toBe('etag-2');
       expect(JSON.parse(readFileSync(result.lockPath, 'utf8'))).toMatchObject({ versionId: 'v2', etag: 'etag-2' });
@@ -204,6 +209,38 @@ describe('tfvars-sync', () => {
       expect(err).toBeInstanceOf(BucketNotVersionedError);
       expect(err).toHaveProperty('message', expect.stringContaining('does not appear to have S3 versioning enabled'));
       expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(0);
+    });
+
+    it('should reject with VersionMismatchError when PutObject fails with a 412 precondition-failed response', async () => {
+      // The HeadObject check passes (lock matches remote at the time of the
+      // check), but a concurrent push slips in between the check and the
+      // PutObject call, so S3 rejects the conditional write with 412. This is
+      // the actual race guard the HeadObject check can't cover on its own.
+      writeFileSync(localPath, 'project_name = "demo"\n');
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'v1',
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+      s3Mock.on(PutObjectCommand).rejects({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
+
+      const err: unknown = await pushTfvars({
+        bucket: 'my-bucket',
+        path: localPath,
+        key: 'terraform.tfvars',
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(VersionMismatchError);
+      expect((err as VersionMismatchError).localVersion).toBe('v1');
+      expect((err as VersionMismatchError).remoteVersion).toBeNull();
+      expect(err).toHaveProperty('message', expect.stringContaining('concurrent push detected'));
+      // The stale lock file must not have been overwritten with a failed push.
+      expect(JSON.parse(readFileSync(`${localPath}.lock`, 'utf8'))).toMatchObject({ versionId: 'v1' });
     });
   });
 
