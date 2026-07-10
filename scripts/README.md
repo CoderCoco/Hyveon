@@ -11,7 +11,8 @@ Interactive scaffolder for the [private parent + submodule deployment
 pattern](https://codercoco.github.io/Hyveon/guides/submodule/). It
 generates a `Makefile`, `terraform.tfvars`, `.env`, and `.gitignore` in your
 parent repo, all wired to the wrapper Make targets (`setup`, `plan`, `apply`,
-`update`, `dev`) so you can drive the whole stack from the parent repo root.
+`update`, `dev`, `tfvars-pull`, `tfvars-push`, `tfvars-diff`) so you can drive
+the whole stack from the parent repo root.
 
 ### Usage
 
