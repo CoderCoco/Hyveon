@@ -6,15 +6,22 @@
   "type": "module",
   "scripts": {
     "init-parent": "tsx init-parent.ts",
+    "tfvars-sync": "tsx tfvars-sync.ts",
     "test": "tsx init-parent.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "diff": "^7.0.0"
+  },
   "devDependencies": {
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "@types/node": "^20.16.10"
+    "@types/node": "^20.16.10",
+    "@types/diff": "^7.0.1",
+    "aws-sdk-client-mock": "^4.0.1"
   }
 }
