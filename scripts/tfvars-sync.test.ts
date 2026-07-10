@@ -17,6 +17,7 @@ import {
   diffTfvars,
   lockStatus,
   VersionMismatchError,
+  BucketNotVersionedError,
   type LockFile,
 } from './tfvars-sync.ts';
 
@@ -176,6 +177,33 @@ describe('tfvars-sync', () => {
       expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(0);
       // Nor should the (now-stale) lock file have been overwritten.
       expect(JSON.parse(readFileSync(`${localPath}.lock`, 'utf8'))).toMatchObject({ versionId: 'stale-version' });
+    });
+
+    it('should reject with BucketNotVersionedError and never call PutObject when the remote object exists but HeadObject reports no VersionId', async () => {
+      // Simulates an unversioned (or versioning-suspended) bucket: HeadObject
+      // omits VersionId even though the object exists.
+      writeFileSync(localPath, 'project_name = "demo"\n');
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: null,
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ ETag: '"etag-1"' });
+      s3Mock.on(PutObjectCommand).resolves({ ETag: '"etag-2"' });
+
+      const err: unknown = await pushTfvars({
+        bucket: 'my-bucket',
+        path: localPath,
+        key: 'terraform.tfvars',
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BucketNotVersionedError);
+      expect(err).toHaveProperty('message', expect.stringContaining('does not appear to have S3 versioning enabled'));
+      expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(0);
     });
   });
 
