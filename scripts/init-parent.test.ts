@@ -120,11 +120,18 @@ expect(
 );
 
 // ── setup exports GSD_TFVARS_BACKEND=s3 when the parent-root marker exists ──
+// (but only when GSD_TFVARS_BACKEND is not already set — an explicit
+// GSD_TFVARS_BACKEND=local override must survive into setup.sh's environment
+// too, per TFVARS_BACKEND's own override precedence)
 expect(
-  'Makefile setup exports GSD_TFVARS_BACKEND=s3 into setup.sh\'s environment when the parent-root marker exists',
-  /if \[ -f \$\(PARENT_TFVARS_MARKER\) \]; then export GSD_TFVARS_BACKEND=s3; fi; \\\n\tbash \$\(SUBMODULE\)\/setup\.sh/.test(
+  'Makefile setup exports GSD_TFVARS_BACKEND=s3 into setup.sh\'s environment when the parent-root marker exists and GSD_TFVARS_BACKEND is unset',
+  /if \[ -z "\$\$\{GSD_TFVARS_BACKEND:-\}" \] && \[ -f \$\(PARENT_TFVARS_MARKER\) \]; then export GSD_TFVARS_BACKEND=s3; fi; \\\n\tbash \$\(SUBMODULE\)\/setup\.sh/.test(
     setupRecipe,
   ),
+);
+expect(
+  'Makefile setup\'s parent-marker export does not clobber an explicit GSD_TFVARS_BACKEND=local override',
+  setupRecipe.includes('if [ -z "$${GSD_TFVARS_BACKEND:-}" ] && [ -f $(PARENT_TFVARS_MARKER) ]; then export GSD_TFVARS_BACKEND=s3; fi;'),
 );
 expect(
   'Makefile setup\'s parent-marker export line precedes the bash setup.sh invocation within the same recipe',
