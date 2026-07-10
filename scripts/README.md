@@ -36,10 +36,9 @@ re-run; without `--force` it leaves existing files alone.
 
 - Node.js 20+ (the same minimum the rest of the project enforces).
 - `git` on `$PATH` (used to detect `.gitmodules`).
-
-Windows users should run this under WSL or Git Bash — the generated
-`Makefile` uses `bash`, `sha256sum`, and `cp`, which mirrors the upstream
-Makefile's shell expectations.
+- Windows users should run this under WSL or Git Bash — the generated
+  `Makefile` uses `bash`, `sha256sum`, and `cp`, which mirrors the upstream
+  Makefile's shell expectations.
 
 ## `tfvars-sync.ts`
 
