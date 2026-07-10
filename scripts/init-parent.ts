@@ -21,7 +21,11 @@
  *   - .gsd/tfvars-bucket S3 backend marker (only when --s3-tfvars is passed,
  *                        or you answer yes to the interactive prompt)
  *
- * It NEVER reads or modifies anything inside the submodule.
+ * `bootstrap` (this default command) NEVER reads or modifies anything
+ * inside the submodule. `migrate --to-local` is the exception — it deletes
+ * the gitignored submodule-local .gsd/tfvars-bucket marker alongside the
+ * parent-root one, and `migrate --to-s3` runs `make setup`, which executes
+ * setup.sh inside the submodule.
  */
 
 import { createInterface, type Interface } from 'node:readline/promises';
@@ -81,11 +85,13 @@ export const USAGE = `Usage:
 /**
  * Parses `init-parent.ts`'s CLI args (i.e. `argv.slice(2)`) into a subcommand
  * plus its flags. `bootstrap` is implied when the first token isn't a known
- * subcommand, so existing invocations like `tsx init-parent.ts --force` keep
- * working unchanged. Throws {@link CliUsageError} for an unrecognized
- * subcommand, an unrecognized flag for the resolved subcommand, or (for
- * `migrate`) anything other than exactly one of `--to-s3` / `--to-local`.
- * Pure and side-effect free, so it's directly unit-testable.
+ * subcommand (so existing invocations like `tsx init-parent.ts --force` keep
+ * working unchanged), but it can also be given explicitly as the first token
+ * (`tsx init-parent.ts bootstrap --s3-tfvars`), matching the docs/Makefile
+ * comments that spell out the subcommand. Throws {@link CliUsageError} for an
+ * unrecognized subcommand, an unrecognized flag for the resolved subcommand,
+ * or (for `migrate`) anything other than exactly one of `--to-s3` /
+ * `--to-local`. Pure and side-effect free, so it's directly unit-testable.
  */
 export function parseCliArgs(args: string[]): CliArgs {
   const rest = [...args];
@@ -93,6 +99,9 @@ export function parseCliArgs(args: string[]): CliArgs {
 
   if (rest[0] === 'migrate') {
     command = 'migrate';
+    rest.shift();
+  } else if (rest[0] === 'bootstrap') {
+    command = 'bootstrap';
     rest.shift();
   } else if (rest[0] !== undefined && rest[0].startsWith('--') === false) {
     throw new CliUsageError(`Unknown subcommand "${rest[0]}".`);
@@ -323,7 +332,12 @@ setup: | $(STAMP_DIR)
 # into $(TF_DIR)/terraform.tfvars (e.g. the "game-servers" default seeded
 # from terraform.tfvars.example on a first run) and bootstrap a
 # differently-named bucket than the one PARENT_TFVARS_MARKER points at.
-\tcp $(TFVARS) $(TF_DIR)/terraform.tfvars
+# Guarded: a parent repo that migrated to S3 a while ago may have no local
+# $(TFVARS) at all (see docs/docs/guides/submodule.md) — a fresh clone of
+# such a parent must still be able to run \`make setup\` under -eu, falling
+# through to setup.sh (and its post-bootstrap S3 pull) to seed the file,
+# mirroring main's behavior when the file is missing.
+\tif [ -f $(TFVARS) ]; then cp $(TFVARS) $(TF_DIR)/terraform.tfvars; fi
 # PARENT_TFVARS_MARKER is written by \`init-parent bootstrap --s3-tfvars\`
 # before setup.sh has ever run, so it reflects an operator's up-front choice
 # to run in S3 mode. Export GSD_TFVARS_BACKEND=s3 into setup.sh's own
@@ -913,6 +927,10 @@ export async function runMigrate(direction: MigrateDirection, options: MigrateOp
 
   if (result.error) {
     process.stderr.write(`\n  ✗ failed to run \`make setup\`: ${result.error.message}\n`);
+    process.stderr.write(
+      `  .gsd/tfvars-bucket and the rewritten Makefile are already in place — no need to redo the\n` +
+        `  confirmation, marker, or Makefile steps. Fix the underlying issue and just re-run \`make setup\`.\n`,
+    );
     exit(1);
     return;
   }
@@ -1030,8 +1048,9 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
 
   // Tracks whether step 1 actually wrote terraform.tfvars, so the abort
   // messages below (steps 2 and 3) can accurately describe what's on disk —
-  // once the pull has run, "Nothing was changed." would be false: markers
-  // and the lock sidecar are still untouched, but terraform.tfvars is not.
+  // once the pull has run, "Nothing was changed." would be false:
+  // terraform.tfvars and its .lock sidecar were written by pullTfvars(),
+  // while the markers are still untouched.
   let pulled = false;
 
   if (!existsSync(tfvarsPath)) {
@@ -1051,7 +1070,7 @@ async function runMigrateToLocal(info: ParentLocation, options: MigrateOptions):
   }
 
   const recoveryMessage = pulled
-    ? '  terraform.tfvars was pulled from S3; markers and the lock sidecar are unchanged.\n\n'
+    ? '  terraform.tfvars and its .lock sidecar were written by the pull from S3; markers are unchanged.\n\n'
     : '  Nothing was changed.\n\n';
 
   output.write('  Checking for drift against the remote tfvars object…\n');
