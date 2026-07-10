@@ -189,34 +189,63 @@ Both scripts are idempotent — safe to re-run at any time. They:
 2. Runs `npm ci` from `app/` so all workspaces are installed.
 3. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
    if the latter doesn't exist yet.
-4. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
+4. **`setup.sh` only** (not yet ported to `setup.ps1`): offers to bootstrap the
+   tfvars S3 bucket (`terraform/bootstrap/`), controlled by the
+   `GSD_TFVARS_BACKEND` environment variable:
+   - `GSD_TFVARS_BACKEND=s3` — bootstraps the bucket non-interactively.
+   - `GSD_TFVARS_BACKEND=local` — skips it entirely, no AWS/Terraform calls.
+   - Unset, interactive shell (a TTY) — prompts
+     `Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]`;
+     anything other than `y`/`Y`/`yes`/`YES` falls back to `local`.
+   - Unset, non-interactive shell (CI, scripted runs) — silently defaults to
+     `local`.
+
+   When `s3` is selected, the script `cd`s into `terraform/bootstrap/`, runs
+   `terraform init` and `terraform apply -auto-approve` there (passing
+   `project_name` and `aws_region` from the values derived in step 3), then
+   records the resulting bucket name at `.gsd/tfvars-bucket` — a file at the
+   repo root, gitignored, used purely as a local marker for the operator. If
+   a local `terraform/terraform.tfvars` already exists, the script uploads it
+   to `s3://<bucket>/terraform.tfvars`, but **only if that key doesn't already
+   exist in the bucket** (checked via `aws s3api head-object`) — so re-running
+   `setup.sh` never clobbers a tfvars file that's already been pushed or
+   edited in S3.
+5. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
    table (`{project_name}-tf-locks`) if they don't already exist. The bucket
    gets versioning, public-access blocking, and AES-256 encryption enabled.
    The script waits for the DynamoDB table to reach `ACTIVE` status before
    continuing. Both names are derived from `project_name` in
    `terraform.tfvars` (default: `game-servers`). This step requires the
    `s3:*` permissions in the inline policy above.
-5. Runs `terraform init` inside `terraform/`, passing the bucket and table
+6. Runs `terraform init` inside `terraform/`, passing the bucket and table
    as `-backend-config` flags. If a local `terraform.tfstate` is present
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
 
 ### Bootstrap the tfvars bucket (required before the first `terraform apply`)
 
-`terraform/bootstrap/` is a separate, standalone Terraform module — not part
-of the `setup.sh` flow above — that provisions a **second, distinct S3
-bucket** whose only job is to hold your `terraform.tfvars` (and other
-per-deployment secrets) outside of source control. This is unrelated to the
-`{project_name}-tf-state` bucket `setup.sh` creates for the Terraform
-backend. The root module's `data "aws_s3_bucket" "tfvars"` (in
-`terraform/main.tf`) reads this bucket, so it **must already exist before
-you run `terraform apply` in the root `terraform/` directory** — skipping
-this step makes the root `terraform plan`/`terraform apply` fail at plan
-time with a "bucket not found" error. Run it once, before the main
-`terraform init`/`terraform apply` steps below, to get a durable, versioned
-place to keep `tfvars` outside your parent repo — if you'd rather pre-create
-the bucket some other way (e.g. manually or via a different tool), that
-works too, as long as the name matches `tfvars_bucket_name` (see below).
+`terraform/bootstrap/` is a separate, standalone Terraform module that
+provisions a **second, distinct S3 bucket** whose only job is to hold your
+`terraform.tfvars` (and other per-deployment secrets) outside of source
+control. This is unrelated to the `{project_name}-tf-state` bucket `setup.sh`
+creates for the Terraform backend. The root module's `data "aws_s3_bucket"
+"tfvars"` (in `terraform/main.tf`) reads this bucket, so it **must already
+exist before you run `terraform apply` in the root `terraform/` directory** —
+skipping this step makes the root `terraform plan`/`terraform apply` fail at
+plan time with a "bucket not found" error.
+
+**On Linux/macOS, `./setup.sh` can do this for you** — see step 4 above
+(`GSD_TFVARS_BACKEND=s3`, or accept the interactive prompt). It runs the same
+`terraform init`/`terraform apply` shown below, records the bucket name at
+`.gsd/tfvars-bucket`, and uploads your local `terraform.tfvars` if the bucket
+doesn't already have one. Use the manual steps below if you're on
+`setup.ps1` (not yet supported there), opted for `GSD_TFVARS_BACKEND=local`
+and changed your mind, or just want to run it standalone — either way, get
+this done once, before the main `terraform init`/`terraform apply` steps
+below, to have a durable, versioned place to keep `tfvars` outside your
+parent repo. If you'd rather pre-create the bucket some other way (e.g.
+manually or via a different tool), that works too, as long as the name
+matches `tfvars_bucket_name` (see below).
 
 ```bash
 cd terraform/bootstrap
