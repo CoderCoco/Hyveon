@@ -83,8 +83,8 @@ tsx scripts/tfvars-sync.ts check  [--bucket <name>] [--path <file>] [--key <key>
   step): compares the local lock's recorded version id against the remote
   object's current version id. Prints `✓ in sync: ...` and **exits `0`** when
   they match; prints `✗ drift detected: <reason>` and **exits `1`** otherwise
-  (no lock file, remote object missing, or version mismatch), with a clear,
-  specific reason in each case.
+  (no lock file, remote object missing, the bucket lacking S3 versioning, or
+  a version mismatch), with a clear, specific reason in each case.
 
 ### Flags
 
@@ -154,11 +154,13 @@ against it.
 - **`0`** — the local lock's version id matches the remote object's current
   version id (`inSync: true`).
 - **`1`** — the versions don't match, printing the specific reason: no local
-  lock file was found, the remote object doesn't exist, or the lock's
-  recorded version id differs from the remote's current version id. Wire
-  this into `make apply` (or CI) as a pre-flight drift gate so an apply never
-  runs against a `terraform.tfvars` that has silently drifted from the
-  version stored in S3.
+  lock file was found, the remote object doesn't exist, the bucket doesn't
+  appear to have S3 versioning enabled (`HeadObject` returned no
+  `VersionId`, so drift can't be detected), or the lock's recorded version
+  id differs from the remote's current version id. Wire this into
+  `make apply` (or CI) as a pre-flight drift gate so an apply never runs
+  against a `terraform.tfvars` that has silently drifted from the version
+  stored in S3.
 
 ### Requirements
 
