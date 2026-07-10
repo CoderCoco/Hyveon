@@ -16,6 +16,7 @@ import {
   pushTfvars,
   diffTfvars,
   lockStatus,
+  checkTfvars,
   VersionMismatchError,
   BucketNotVersionedError,
   type LockFile,
@@ -341,6 +342,72 @@ describe('tfvars-sync', () => {
 
       expect(result.remote.exists).toBe(false);
       expect(result.inSync).toBe(false);
+    });
+  });
+
+  describe('checkTfvars', () => {
+    it('should report inSync: true with a clear reason when the local lock version matches the remote head version', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'v1',
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(true);
+      expect(result.reason).toContain('v1');
+    });
+
+    it('should report inSync: false with a clear reason when the local lock version differs from the remote head version', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'stale-version',
+        etag: 'stale-etag',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v2', ETag: '"etag-2"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('stale-version');
+      expect(result.reason).toContain('v2');
+    });
+
+    it('should report inSync: false with a clear reason when no local lock file was found', async () => {
+      s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('no local lock file found');
+    });
+
+    it('should report inSync: false with a clear reason when the remote object does not exist', async () => {
+      writeLockFile(localPath, {
+        bucket: 'my-bucket',
+        key: 'terraform.tfvars',
+        versionId: 'v1',
+        etag: 'etag-1',
+        size: 22,
+        lastModified: '2024-01-01T00:00:00.000Z',
+        pulledAt: '2024-01-01T00:00:01.000Z',
+      });
+      s3Mock.on(HeadObjectCommand).rejects({ name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+
+      const result = await checkTfvars({ bucket: 'my-bucket', path: localPath, key: 'terraform.tfvars' });
+
+      expect(result.inSync).toBe(false);
+      expect(result.reason).toContain('does not exist');
     });
   });
 });
