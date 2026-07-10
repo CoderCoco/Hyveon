@@ -62,7 +62,13 @@ expect(
 // ── plan/apply/setup gating ──────────────────────────────────────────────────
 expect(
   'Makefile gates plan auto-pull on TFVARS_BACKEND and NO_PULL',
-  mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$${NO_PULL:-}" ]; then $(TFVARS_SYNC) pull; fi'),
+  mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$${NO_PULL:-}" ]; then'),
+);
+expect(
+  'Makefile pull-tfvars-if-needed aborts on a dirty TFVARS before auto-pulling, same as tfvars-pull',
+  /pull-tfvars-if-needed:\n(?:\t.*\n)*?\t\s*if \[ -n "\$\$\(git -C \$\(REPO_ROOT\) status --porcelain -- \$\(TFVARS\)\)" \]; then echo .* >&2; exit 1; fi;/.test(
+    mk,
+  ),
 );
 expect('Makefile plan depends on pull-tfvars-if-needed', mk.includes('plan: pull-tfvars-if-needed copy-tfvars'));
 expect(
@@ -70,9 +76,21 @@ expect(
   mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check; fi'),
 );
 expect('Makefile apply depends on check-tfvars-if-needed', mk.includes('apply: check-tfvars-if-needed copy-tfvars'));
+// setup's post-bootstrap check must NOT reference the TFVARS_BACKEND/TFVARS_BUCKET make
+// variables: GNU Make expands a rule's whole recipe (including any $(wildcard ...)/
+// $(shell ...) calls hiding inside those variables) before running the recipe's first
+// line, so a make-variable-based check would still see the filesystem from before
+// setup.sh ran earlier in the same recipe. The check must be shell-native instead.
+const setupRecipeMatch = /^setup:.*\n(?:(?:\t|#).*\n?)*/m.exec(mk);
+const setupRecipe = setupRecipeMatch ? setupRecipeMatch[0] : '';
+expect('Makefile has a setup: recipe to inspect', setupRecipe !== '');
 expect(
-  'Makefile setup runtime-pulls tfvars post-bootstrap when TFVARS_BACKEND is s3',
-  mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ]; then') && mk.includes('$(TFVARS_SYNC) pull ||'),
+  'Makefile setup runtime-pulls tfvars post-bootstrap via a shell-native (not make-variable) S3 backend check',
+  setupRecipe.includes(
+    '[ "$${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }',
+  ) &&
+    setupRecipe.includes('$(TFVARS_SYNC) pull ||') &&
+    !/if \[ "\$\(TFVARS_BACKEND\)" = s3 \]/.test(setupRecipe),
 );
 expect(
   'Makefile setup tolerates a first-time pull against an empty bucket instead of aborting',

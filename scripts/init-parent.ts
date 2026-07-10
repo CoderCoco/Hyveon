@@ -118,15 +118,17 @@ async function askRequired(rl: Interface, label: string, def?: string): Promise<
  *   dev   → pull live tfstate into .make/, then `make dev` in submodule
  *
  * Three extra targets — tfvars-pull, tfvars-push, tfvars-diff — wrap
- * scripts/tfvars-sync.ts for manual use. All tfvars-* behaviour (including
- * plan/apply's auto-pull/check and setup's post-bootstrap pull) is gated on
- * TFVARS_BACKEND, which resolves to "s3" or "local" in this order:
+ * scripts/tfvars-sync.ts for manual use. plan/apply's auto-pull/check are
+ * gated on TFVARS_BACKEND, which resolves to "s3" or "local" in this order:
  *   1. GSD_TFVARS_BACKEND=s3    — force s3, even without a marker file yet
  *   2. GSD_TFVARS_BACKEND=local — force local, even if a marker file exists
  *   3. otherwise: "s3" when the `.gsd/tfvars-bucket` marker file setup.sh
  *      writes inside the submodule directory exists, else "local"
  * When TFVARS_BACKEND is "local", plan/apply/setup behave exactly as
- * before — no S3 calls are made.
+ * before — no S3 calls are made. setup's post-bootstrap pull applies the
+ * same override semantics but re-implements them directly in its shell
+ * recipe rather than referencing TFVARS_BACKEND — see the comment on that
+ * recipe below for why.
  *
  * API_TOKEN is loaded from .env (gitignored) — never hardcoded.
  */
@@ -161,9 +163,15 @@ TFVARS_LOCK   := $(TFVARS).lock
 #   - GSD_TFVARS_BACKEND=s3    → force s3, even if the marker file is missing
 #   - GSD_TFVARS_BACKEND=local → force local, even if a marker file is present
 #   - unset                    → s3 when the marker file exists, else local
-# Recursive ('=', not ':='), and \$(wildcard ...) is re-checked on every
-# reference, so \`setup\`'s post-bootstrap pull (below) sees a marker that
-# setup.sh only just wrote earlier in the very same recipe.
+# Recursive ('=', not ':='), so \$(wildcard ...) is re-evaluated whenever this
+# variable is referenced from a *separate* \`make\` invocation (plan, apply,
+# tfvars-pull, etc. all see current marker-file state that way). It must NOT
+# be used to gate \`setup\`'s post-bootstrap pull: GNU Make expands a rule's
+# entire recipe before running the first line of that recipe, so a reference
+# to this variable inside the same \`setup\` recipe that runs setup.sh would
+# still see the pre-setup.sh filesystem state even though it appears later in
+# the recipe text. \`setup\` re-implements the same override logic directly in
+# its shell recipe instead — see below.
 TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(TFVARS_MARKER)),s3,local)))
 
 # TFVARS_BUCKET is display-only (used in log messages below); GSD_TFVARS_BUCKET
@@ -201,12 +209,19 @@ setup: | $(STAMP_DIR)
 \tgit submodule update --init --recursive
 \tbash $(SUBMODULE)/setup.sh
 \t@sha256sum $(SUBMODULE)/setup.sh | cut -d' ' -f1 > $(SETUP_STAMP)
-# Runtime (not parse-time) check: setup.sh may have just bootstrapped the S3
-# tfvars backend and written the marker file above, so pull the canonical
-# tfvars down now that it exists.
-\t@if [ "$(TFVARS_BACKEND)" = s3 ]; then \\
-\t  echo "S3 tfvars backend detected (s3://$(TFVARS_BUCKET)) — pulling terraform.tfvars..."; \\
-\t  $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$(TFVARS_BUCKET) yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+# Runtime (not parse-time) check, evaluated entirely inside this shell
+# command: GNU Make expands a rule's whole recipe — including any
+# $(wildcard ...)/$(shell ...) calls hiding inside TFVARS_BACKEND/
+# TFVARS_BUCKET — before running the first line of that recipe, so a
+# make-variable-based check here would still see the filesystem from before
+# setup.sh (above) ran, even though it's written later in the recipe text.
+# Mirror TFVARS_BACKEND's own GSD_TFVARS_BACKEND override semantics by hand,
+# and defer both the marker-file test and its \`cat\` to the shell so they
+# see whatever setup.sh just wrote.
+\t@if [ "$\${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$\${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }; then \\
+\t  bucket="$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"; \\
+\t  echo "S3 tfvars backend detected (s3://$$bucket) — pulling terraform.tfvars..."; \\
+\t  $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$$bucket yet — run 'make tfvars-push' to seed the bucket" >&2; \\
 \t fi
 
 # ── Copy tfvars into the submodule terraform dir ─────────────────────────────
@@ -220,8 +235,15 @@ copy-tfvars: $(TFVARS)
 # ── Terraform targets ────────────────────────────────────────────────────────
 # Internal gates: silently no-op in local mode (TFVARS_BACKEND=local) so
 # plan/apply behave exactly as they did before S3 sync existed.
+# pull-tfvars-if-needed guards against clobbering uncommitted local edits the
+# same way the manual tfvars-pull target does below: a pull overwrites
+# $(TFVARS) in place, so if git sees it as dirty we abort instead of silently
+# discarding the operator's changes (NO_PULL=1 still skips the pull entirely).
 pull-tfvars-if-needed:
-\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${NO_PULL:-}" ]; then $(TFVARS_SYNC) pull; fi
+\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${NO_PULL:-}" ]; then \\
+\t  if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — commit or stash them before pulling from S3 (or rerun with NO_PULL=1)." >&2; exit 1; fi; \\
+\t  $(TFVARS_SYNC) pull; \\
+\t fi
 
 check-tfvars-if-needed:
 \t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check; fi
