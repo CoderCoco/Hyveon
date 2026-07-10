@@ -30,6 +30,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stdin as input, stdout as output, argv, cwd, exit } from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 interface Answers {
   parentDir: string;
@@ -215,8 +216,13 @@ async function askRequired(rl: Interface, label: string, def?: string): Promise<
  * recipe below for why.
  *
  * API_TOKEN is loaded from .env (gitignored) — never hardcoded.
+ *
+ * Only reads `submoduleDir` and `projectName` off `a`, so it accepts a
+ * `Pick<Answers, ...>` rather than a full `Answers` — `runMigrate` re-renders
+ * the Makefile from an already-scaffolded parent repo without re-collecting
+ * every bootstrap answer.
  */
-export function renderMakefile(a: Answers): string {
+export function renderMakefile(a: Pick<Answers, 'submoduleDir' | 'projectName'>): string {
   return `SHELL      := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
@@ -719,13 +725,152 @@ export async function runBootstrap(options: BootstrapOptions = { s3Tfvars: false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Migrate (dispatch only — the migration itself lands in a follow-up task)
+// Migrate
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Runs the `migrate` subcommand for an already-validated `direction`. Migration itself lands in a follow-up task, so this only wires up dispatch: it prints a "not implemented yet" message and exits non-zero. */
-export function runMigrate(direction: MigrateDirection): void {
-  process.stderr.write(`\n  ✗ migrate --${direction} is not implemented yet.\n`);
-  exit(1);
+/** Flags from {@link parseCliArgs} that {@link runMigrate} cares about. */
+export interface MigrateOptions {
+  /** Skips the interactive confirmation prompt, proceeding immediately. */
+  yes: boolean;
+}
+
+/**
+ * The subset of {@link Answers} `runMigrate` can recover by inspecting an
+ * already-scaffolded parent repo (as opposed to `runBootstrap`, which
+ * collects the full set interactively). `renderMakefile` only ever reads
+ * these two fields.
+ */
+type ExistingParentInfo = Pick<Answers, 'parentDir' | 'submoduleDir' | 'projectName'>;
+
+/**
+ * Locates an already-scaffolded parent repo (a directory containing both
+ * `Makefile` and `terraform.tfvars`, as written by `runBootstrap`) starting
+ * from `cwd()` — walking up to the nearest `.gitmodules` first, same as
+ * `runBootstrap`'s guess, and falling back to `cwd()` itself. Pulls
+ * `submoduleDir` out of the existing Makefile's `SUBMODULE` line and
+ * `projectName` out of the existing `terraform.tfvars`'s `project_name`.
+ * Throws a plain `Error` (message intended for stderr) if either file is
+ * missing or `project_name` can't be found.
+ */
+function readExistingParent(scriptDir: string): ExistingParentInfo {
+  const parentDir = findParentRepoRoot(cwd()) ?? cwd();
+  const makefilePath = join(parentDir, 'Makefile');
+  const tfvarsPath = join(parentDir, 'terraform.tfvars');
+
+  if (!existsSync(makefilePath) || !existsSync(tfvarsPath)) {
+    throw new Error(
+      `${parentDir} doesn't look like a scaffolded parent repo (missing Makefile and/or terraform.tfvars) — run \`init-parent.ts\` (bootstrap) first.`,
+    );
+  }
+
+  const makefile = readFileSync(makefilePath, 'utf8');
+  const submoduleMatch = makefile.match(/^SUBMODULE\s*:=\s*\$\(REPO_ROOT\)\/(.+)$/m);
+  const submoduleDir = submoduleMatch ? submoduleMatch[1] : detectSubmodulePath(parentDir, scriptDir);
+
+  const tfvars = readFileSync(tfvarsPath, 'utf8');
+  const projectMatch = tfvars.match(/^project_name\s*=\s*"([^"]+)"/m);
+  if (!projectMatch) {
+    throw new Error(`Couldn't find "project_name" in ${tfvarsPath} — is it a valid terraform.tfvars?`);
+  }
+
+  return { parentDir, submoduleDir, projectName: projectMatch[1] };
+}
+
+/**
+ * Migrates an already-scaffolded parent repo's tfvars backend.
+ *
+ * `--to-s3`: writes the `.gsd/tfvars-bucket` marker (same `${projectName}-tfvars`
+ * naming `runBootstrap`'s `--s3-tfvars` path uses), rewrites the Makefile with
+ * the s3-aware targets (identical output to a fresh `runBootstrap` render —
+ * the Makefile is always s3-aware, only the marker's presence flips
+ * `TFVARS_BACKEND`), then runs `make setup` with `GSD_TFVARS_BACKEND=s3` so
+ * `terraform/bootstrap/` provisions the bucket. `terraform.tfvars` itself is
+ * never read for anything other than `project_name`, nor written — the
+ * one-time pull to fetch it back down from S3 is left to the operator via the
+ * printed `make tfvars-pull` note (and to `make setup`'s own post-bootstrap
+ * pull, which no-ops the first time since the bucket starts empty).
+ *
+ * `--to-local` is not implemented yet — lands in a follow-up task.
+ */
+export async function runMigrate(direction: MigrateDirection, options: MigrateOptions = { yes: false }): Promise<void> {
+  if (direction === 'to-local') {
+    process.stderr.write(`\n  ✗ migrate --${direction} is not implemented yet.\n`);
+    exit(1);
+    return;
+  }
+
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const info = readExistingParent(scriptDir);
+  const markerPath = join(info.parentDir, '.gsd', 'tfvars-bucket');
+  const bucketName = `${info.projectName}-tfvars`;
+
+  output.write('\n');
+  output.write('  Hyveon — migrate tfvars backend to S3\n');
+  output.write('  ────────────────────────────────────────────────────\n');
+  output.write('\n');
+  output.write(`  Parent repo:  ${info.parentDir}\n`);
+  output.write(`  Submodule:    ${info.submoduleDir}\n`);
+  output.write(`  Bucket:       ${bucketName}\n`);
+  output.write('\n');
+  output.write('  This will:\n');
+  output.write(`    1. Write .gsd/tfvars-bucket recording the target bucket name.\n`);
+  output.write(`    2. Rewrite Makefile with the s3-aware targets.\n`);
+  output.write(`    3. Run \`make setup\` (GSD_TFVARS_BACKEND=s3) to bootstrap the bucket.\n`);
+  output.write('\n');
+  output.write('  terraform.tfvars itself is left untouched.\n');
+  output.write('\n');
+
+  if (!options.yes) {
+    const rl = createInterface({ input, output });
+    let proceed: boolean;
+    try {
+      proceed = await askBool(rl, 'Proceed?', false);
+    } finally {
+      rl.close();
+    }
+    if (!proceed) {
+      output.write('\n  Aborted — no files were changed.\n\n');
+      return;
+    }
+  }
+
+  output.write('  Writing files…\n');
+  status(markerPath, writeIfSafe(markerPath, `${bucketName}\n`), info.parentDir);
+
+  // Migrate always rewrites the Makefile it's migrating — that's the whole
+  // point of the command — regardless of the global --force flag, which only
+  // governs runBootstrap's skip-if-exists behaviour.
+  const makefilePath = join(info.parentDir, 'Makefile');
+  mkdirSync(dirname(makefilePath), { recursive: true });
+  writeFileSync(makefilePath, renderMakefile({ submoduleDir: info.submoduleDir, projectName: info.projectName }));
+  status(makefilePath, 'overwrote', info.parentDir);
+
+  output.write('\n  Running `make setup` (GSD_TFVARS_BACKEND=s3)…\n\n');
+  const result = spawnSync('make', ['setup'], {
+    cwd: info.parentDir,
+    stdio: 'inherit',
+    env: { ...process.env, GSD_TFVARS_BACKEND: 's3' },
+  });
+
+  if (result.error) {
+    process.stderr.write(`\n  ✗ failed to run \`make setup\`: ${result.error.message}\n`);
+    exit(1);
+    return;
+  }
+  if (result.status !== 0) {
+    process.stderr.write(`\n  ✗ \`make setup\` failed (exit ${result.status ?? 'unknown'}).\n`);
+    process.stderr.write(
+      `  .gsd/tfvars-bucket and the rewritten Makefile are already in place — no need to redo the\n` +
+        `  confirmation, marker, or Makefile steps. Fix the underlying issue and just re-run \`make setup\`.\n`,
+    );
+    exit(1);
+    return;
+  }
+
+  output.write('\n  ✓ Migrated to the S3 tfvars backend.\n\n');
+  output.write(`  Your tfvars are now in S3 (s3://${bucketName}) — this is a one-time note:\n`);
+  output.write(`  run \`make tfvars-pull\` any time you need to refresh your local terraform.tfvars\n`);
+  output.write(`  from the bucket (e.g. after editing it from another machine).\n\n`);
 }
 
 // Only run when this file is the entry point — keeps the renderers importable
@@ -748,7 +893,10 @@ if (isEntrypoint) {
   if (CLI.command === 'migrate') {
     // parseCliArgs guarantees exactly one of --to-s3 | --to-local by the time
     // command === 'migrate' is returned, so direction is always defined here.
-    runMigrate(CLI.direction as MigrateDirection);
+    runMigrate(CLI.direction as MigrateDirection, { yes: CLI.yes }).catch((err) => {
+      process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      exit(1);
+    });
   } else {
     FORCE = CLI.force;
     runBootstrap({ s3Tfvars: CLI.s3Tfvars, yes: CLI.yes }).catch((err) => {
