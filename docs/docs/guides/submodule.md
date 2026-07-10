@@ -227,11 +227,15 @@ reading `terraform.tfvars` straight off disk:
    comparison `make tfvars-diff` / `tfvars-sync.ts diff` uses) and **aborts,
    leaving every file untouched**, if they've drifted — reconcile with
    `make tfvars-pull` or `make tfvars-push` first, then re-run the
-   migration.
-4. On a clean match, deletes both the parent-root and submodule-local
-   `.gsd/tfvars-bucket` markers and the `terraform.tfvars.lock` sidecar.
-   `terraform.tfvars` itself is left in place — it's already the correct
-   source of truth for local mode once the markers are gone.
+   migration. If `s3://<bucket>/terraform.tfvars` doesn't exist at all (the
+   bucket was created but never seeded), this comparison is skipped
+   entirely — there's nothing remote to reconcile against, so migration
+   proceeds straight to deleting the markers in step 4.
+4. On a clean match (or when the remote object was never seeded), deletes
+   both the parent-root and submodule-local `.gsd/tfvars-bucket` markers and
+   the `terraform.tfvars.lock` sidecar. `terraform.tfvars` itself is left in
+   place — it's already the correct source of truth for local mode once the
+   markers are gone.
 
 `migrate --to-local` **never deletes the S3 bucket** — it only removes the
 markers that make the parent repo look at it. Tear the bucket down yourself
