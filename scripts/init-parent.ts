@@ -220,8 +220,11 @@ setup: | $(STAMP_DIR)
 # see whatever setup.sh just wrote.
 \t@if [ "$\${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$\${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }; then \\
 \t  bucket="$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"; \\
-\t  echo "S3 tfvars backend detected (s3://$$bucket) — pulling terraform.tfvars..."; \\
-\t  $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$$bucket yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+\t  if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — skipping S3 pull to avoid clobbering them (commit or stash them, then run 'make tfvars-pull')." >&2; \\
+\t  else \\
+\t    echo "S3 tfvars backend detected (s3://$$bucket) — pulling terraform.tfvars..."; \\
+\t    $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$$bucket yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+\t  fi; \\
 \t fi
 
 # ── Copy tfvars into the submodule terraform dir ─────────────────────────────
