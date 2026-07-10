@@ -353,12 +353,15 @@ export async function pushTfvars(opts: TfvarsSyncOptions): Promise<PushResult> {
 
   const body = readFileSync(opts.path);
 
-  // Guard the window between the HeadObject check above and this write: pass
-  // `IfMatch` (S3 conditional write) whenever a lock is on file for an
-  // existing remote object, so a concurrent push that slips in between the
-  // head check and this PutObject fails with 412 instead of silently
-  // overwriting. The head check above still runs first purely to produce a
-  // friendlier, more specific error message for the common (non-racy) case.
+  // Guard the window between the HeadObject check above and this write with an
+  // S3 conditional write, so a concurrent push that slips in between the head
+  // check and this PutObject fails with 412 instead of silently overwriting.
+  // For an existing remote object, pass `IfMatch` whenever a lock is on file.
+  // For a brand-new object (no remote object observed above), pass
+  // `IfNoneMatch: '*'` so a concurrent first-ever push also fails with 412
+  // instead of one silently clobbering the other. The head check above still
+  // runs first purely to produce a friendlier, more specific error message
+  // for the common (non-racy) case.
   let put;
   try {
     put = await s3.send(
@@ -367,6 +370,7 @@ export async function pushTfvars(opts: TfvarsSyncOptions): Promise<PushResult> {
         Key: key,
         Body: body,
         ...(remote.exists && lock ? { IfMatch: `"${lock.etag}"` } : {}),
+        ...(!remote.exists ? { IfNoneMatch: '*' } : {}),
       }),
     );
   } catch (err) {
