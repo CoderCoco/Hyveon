@@ -43,11 +43,13 @@ Makefile's shell expectations.
 
 ## `tfvars-sync.ts`
 
-CLI mirror of the app's `RemoteTfvarsStore` service: pulls, pushes, diffs, and
-reports status for a `terraform.tfvars` file stored in the versioned S3 bucket
+Standalone CLI for syncing `terraform.tfvars` with the versioned S3 bucket
 provisioned by `terraform/bootstrap` (see `docs/docs/setup.md` for the
-bootstrap flow). Useful when you want to sync tfvars from a shell or CI job
-without going through the desktop app.
+bootstrap flow): pulls, pushes, diffs, and reports status. Useful when you
+want to sync tfvars from a shell or CI job without going through the desktop
+app. (A `RemoteTfvarsStore` service exposing the same pull/push/diff/status
+operations to `desktop-main` is planned as a follow-up; this CLI does not
+depend on it.)
 
 ### Usage
 
@@ -82,9 +84,9 @@ tsx scripts/tfvars-sync.ts status [--bucket <name>] [--path <file>] [--key <key>
 - `--bucket <name>` — target S3 bucket. See resolution order below.
 - `--path <file>` — local file to read from / write to. Defaults to
   `terraform/terraform.tfvars`.
-- `--key <key>` — S3 object key. Defaults to `terraform.tfvars` — pass it
-  explicitly if the bucket should hold the object under a different key than
-  the local file's basename.
+- `--key <key>` — S3 object key. Always defaults to the fixed key
+  `terraform.tfvars`, regardless of `--path` — pass it explicitly if the
+  bucket should hold the object under a different key.
 - `--region <region>` — AWS region override; falls back to the AWS SDK's
   default provider chain when omitted.
 
