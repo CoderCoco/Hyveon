@@ -73,7 +73,7 @@ expect(
 expect('Makefile plan depends on pull-tfvars-if-needed', mk.includes('plan: pull-tfvars-if-needed copy-tfvars'));
 expect(
   'Makefile gates apply check on TFVARS_BACKEND and FORCE_APPLY',
-  mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check; fi'),
+  mk.includes('if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check $(TFVARS_SYNC_ARGS); fi'),
 );
 expect('Makefile apply depends on check-tfvars-if-needed', mk.includes('apply: check-tfvars-if-needed copy-tfvars'));
 // setup's post-bootstrap check must NOT reference the TFVARS_BACKEND/TFVARS_BUCKET make
@@ -89,12 +89,27 @@ expect(
   setupRecipe.includes(
     '[ "$${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }',
   ) &&
-    setupRecipe.includes('$(TFVARS_SYNC) pull ||') &&
+    setupRecipe.includes('$(TFVARS_SYNC) pull $(TFVARS_SYNC_ARGS) 2>&1') &&
     !/if \[ "\$\(TFVARS_BACKEND\)" = s3 \]/.test(setupRecipe),
 );
 expect(
   'Makefile setup tolerates a first-time pull against an empty bucket instead of aborting',
-  /\$\(TFVARS_SYNC\) pull \|\| echo ".*run 'make tfvars-push' to seed the bucket"/.test(mk),
+  /\$\(TFVARS_SYNC\) pull \$\(TFVARS_SYNC_ARGS\) 2>&1\); then[\s\S]*?run 'make tfvars-push' to seed the bucket/.test(mk),
+);
+// ── tfvars-sync.ts argv order: subcommand MUST be argv[0] (parseArgs()
+// throws its usage error otherwise) — every $(TFVARS_SYNC) call site must
+// render "<subcommand> $(TFVARS_SYNC_ARGS)", never flags before the
+// subcommand. Regression coverage for the blocker where --path/--bucket
+// were rendered ahead of pull|check|push|diff.
+expect(
+  'Makefile never renders TFVARS_SYNC flags before the subcommand',
+  !/\$\(TFVARS_SYNC\)\s+--(path|bucket|key|region)\b/.test(mk),
+);
+expect(
+  'Makefile renders TFVARS_SYNC_ARGS (--path/--bucket) after the pull|push|check|diff subcommand at every call site',
+  (mk.match(/\$\(TFVARS_SYNC\)\s+(pull|push|check|diff)\b/g) ?? []).length ===
+    (mk.match(/\$\(TFVARS_SYNC\)\s+(?:pull|push|check|diff)\s+\$\(TFVARS_SYNC_ARGS\)/g) ?? []).length &&
+    (mk.match(/\$\(TFVARS_SYNC\)\s+(pull|push|check|diff)\b/g) ?? []).length === 6,
 );
 
 // ── Updated help text ────────────────────────────────────────────────────────

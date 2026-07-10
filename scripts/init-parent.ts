@@ -177,7 +177,13 @@ TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,
 # TFVARS_BUCKET is display-only (used in log messages below); GSD_TFVARS_BUCKET
 # wins if already set, otherwise the marker file's contents.
 TFVARS_BUCKET = $(if $(GSD_TFVARS_BUCKET),$(GSD_TFVARS_BUCKET),$(shell cat $(TFVARS_MARKER) 2>/dev/null))
-TFVARS_SYNC   = npx --prefix $(SUBMODULE)/scripts tsx $(SUBMODULE)/scripts/tfvars-sync.ts --path $(TFVARS) --bucket "$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"
+# TFVARS_SYNC is deliberately just the interpreter invocation with no
+# subcommand or flags: tfvars-sync.ts's parseArgs() requires the subcommand
+# (pull/push/check/diff) to be argv[0], so every call site must render
+# "$(TFVARS_SYNC) <subcommand> $(TFVARS_SYNC_ARGS)" — never put flags before
+# the subcommand.
+TFVARS_SYNC      = npx --prefix $(SUBMODULE)/scripts tsx $(SUBMODULE)/scripts/tfvars-sync.ts
+TFVARS_SYNC_ARGS = --path $(TFVARS) --bucket "$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"
 
 .PHONY: help setup plan apply update dev copy-tfvars pull-tfvars-if-needed check-tfvars-if-needed tfvars-pull tfvars-push tfvars-diff
 
@@ -223,7 +229,15 @@ setup: | $(STAMP_DIR)
 \t  if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — skipping S3 pull to avoid clobbering them (commit or stash them, then run 'make tfvars-pull')." >&2; \\
 \t  else \\
 \t    echo "S3 tfvars backend detected (s3://$$bucket) — pulling terraform.tfvars..."; \\
-\t    $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$$bucket yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+\t    if pull_out=$$($(TFVARS_SYNC) pull $(TFVARS_SYNC_ARGS) 2>&1); then \\
+\t      echo "$$pull_out"; \\
+\t    elif echo "$$pull_out" | grep -qi 'NoSuchKey\\|specified key does not exist'; then \\
+\t      echo "no tfvars object found in s3://$$bucket yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+\t    else \\
+\t      echo "$$pull_out" >&2; \\
+\t      echo "tfvars pull failed — aborting setup; check credentials/network, then run 'make tfvars-pull' once resolved" >&2; \\
+\t      exit 1; \\
+\t    fi; \\
 \t  fi; \\
 \t fi
 
@@ -245,11 +259,11 @@ copy-tfvars: $(TFVARS)
 pull-tfvars-if-needed:
 \t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${NO_PULL:-}" ]; then \\
 \t  if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — commit or stash them before pulling from S3 (or rerun with NO_PULL=1)." >&2; exit 1; fi; \\
-\t  $(TFVARS_SYNC) pull; \\
+\t  $(TFVARS_SYNC) pull $(TFVARS_SYNC_ARGS); \\
 \t fi
 
 check-tfvars-if-needed:
-\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check; fi
+\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check $(TFVARS_SYNC_ARGS); fi
 
 # plan auto-pulls the latest tfvars from S3 first (skip with NO_PULL=1), so a
 # stale local copy can't silently drive \`terraform plan\`. In local mode
@@ -272,15 +286,15 @@ apply: check-tfvars-if-needed copy-tfvars
 tfvars-pull:
 \t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
 \t@if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — commit or stash them before pulling from S3." >&2; exit 1; fi
-\t$(TFVARS_SYNC) pull
+\t$(TFVARS_SYNC) pull $(TFVARS_SYNC_ARGS)
 
 tfvars-push:
 \t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
-\t$(TFVARS_SYNC) push
+\t$(TFVARS_SYNC) push $(TFVARS_SYNC_ARGS)
 
 tfvars-diff:
 \t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
-\t$(TFVARS_SYNC) diff
+\t$(TFVARS_SYNC) diff $(TFVARS_SYNC_ARGS)
 
 # ── Submodule update with idempotent setup.sh re-run ─────────────────────────
 update: | $(STAMP_DIR)
