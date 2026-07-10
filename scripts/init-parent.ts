@@ -108,11 +108,25 @@ async function askRequired(rl: Interface, label: string, def?: string): Promise<
 
 /**
  * Mirrors the structure documented in the Makefile-driven submodule pattern:
- *   setup → init submodule, run setup.sh, stamp its sha
- *   plan  → copy tfvars in, delegate to submodule's `make tf-plan`
- *   apply → same, delegate to `make tf-apply`
+ *   setup → init submodule, run setup.sh, stamp its sha, then pull tfvars
+ *            from S3 if setup.sh just bootstrapped a backend
+ *   plan  → auto-pull tfvars from S3 (unless NO_PULL=1), copy tfvars in,
+ *            delegate to submodule's `make tf-plan`
+ *   apply → check tfvars are in sync with S3 first (unless FORCE_APPLY=1),
+ *            copy tfvars in, delegate to `make tf-apply`
  *   update → bump submodule, rerun setup.sh only if its sha changed
  *   dev   → pull live tfstate into .make/, then `make dev` in submodule
+ *
+ * Three extra targets — tfvars-pull, tfvars-push, tfvars-diff — wrap
+ * scripts/tfvars-sync.ts for manual use. All tfvars-* behaviour (including
+ * plan/apply's auto-pull/check and setup's post-bootstrap pull) is gated on
+ * TFVARS_BACKEND, which resolves to "s3" or "local" in this order:
+ *   1. GSD_TFVARS_BACKEND=s3    — force s3, even without a marker file yet
+ *   2. GSD_TFVARS_BACKEND=local — force local, even if a marker file exists
+ *   3. otherwise: "s3" when the `.gsd/tfvars-bucket` marker file setup.sh
+ *      writes inside the submodule directory exists, else "local"
+ * When TFVARS_BACKEND is "local", plan/apply/setup behave exactly as
+ * before — no S3 calls are made.
  *
  * API_TOKEN is loaded from .env (gitignored) — never hardcoded.
  */
@@ -133,17 +147,50 @@ include $(REPO_ROOT)/.env
 export
 endif
 
-.PHONY: help setup plan apply update dev copy-tfvars
+# ── S3 tfvars backend detection ──────────────────────────────────────────────
+# TFVARS_MARKER is the bucket-name marker file setup.sh writes when it
+# bootstraps the versioned S3 tfvars backend (see setup.sh's
+# bootstrap_tfvars_backend()). TFVARS_LOCK is the sidecar lock file
+# tfvars-sync.ts writes after every successful pull/push, recording the S3
+# version id/etag last synced.
+TFVARS_MARKER := $(SUBMODULE)/.gsd/tfvars-bucket
+TFVARS_LOCK   := $(TFVARS).lock
+
+# TFVARS_BACKEND resolves the s3-vs-local decision explicitly, so an operator
+# can always force one or the other regardless of what's on disk:
+#   - GSD_TFVARS_BACKEND=s3    → force s3, even if the marker file is missing
+#   - GSD_TFVARS_BACKEND=local → force local, even if a marker file is present
+#   - unset                    → s3 when the marker file exists, else local
+# Recursive ('=', not ':='), and \$(wildcard ...) is re-checked on every
+# reference, so \`setup\`'s post-bootstrap pull (below) sees a marker that
+# setup.sh only just wrote earlier in the very same recipe.
+TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(TFVARS_MARKER)),s3,local)))
+
+# TFVARS_BUCKET is display-only (used in log messages below); GSD_TFVARS_BUCKET
+# wins if already set, otherwise the marker file's contents.
+TFVARS_BUCKET = $(if $(GSD_TFVARS_BUCKET),$(GSD_TFVARS_BUCKET),$(shell cat $(TFVARS_MARKER) 2>/dev/null))
+TFVARS_SYNC   = npx --prefix $(SUBMODULE)/scripts tsx $(SUBMODULE)/scripts/tfvars-sync.ts --path $(TFVARS) --bucket "$\${GSD_TFVARS_BUCKET:-$$(cat $(TFVARS_MARKER) 2>/dev/null)}"
+
+.PHONY: help setup plan apply update dev copy-tfvars pull-tfvars-if-needed check-tfvars-if-needed tfvars-pull tfvars-push tfvars-diff
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 \t@echo "${a.projectName} — submodule deployment wrapper"
 \t@echo ""
-\t@echo "  make setup    One-time bootstrap: init submodule, install deps, terraform init"
-\t@echo "  make plan     Copy tfvars into submodule then terraform plan"
-\t@echo "  make apply    Copy tfvars into submodule then terraform apply"
-\t@echo "  make update   Pull latest ${a.submoduleDir}/main; rerun setup.sh if changed"
-\t@echo "  make dev      Start dev servers (Nest :3001 + Vite :5173)"
+\t@echo "  make setup         One-time bootstrap: init submodule, install deps, terraform init"
+\t@echo "                     (pulls terraform.tfvars from S3 afterwards if setup.sh bootstrapped a backend)"
+\t@echo "  make plan          Copy tfvars into submodule then terraform plan"
+\t@echo "                     (auto-pulls tfvars from S3 first when a backend is detected; NO_PULL=1 to skip)"
+\t@echo "  make apply         Copy tfvars into submodule then terraform apply"
+\t@echo "                     (checks tfvars are in sync with S3 first when a backend is detected; FORCE_APPLY=1 to skip)"
+\t@echo "  make update        Pull latest ${a.submoduleDir}/main; rerun setup.sh if changed"
+\t@echo "  make dev           Start dev servers (Nest :3001 + Vite :5173)"
+\t@echo "  make tfvars-pull   Pull terraform.tfvars from the S3 backend (requires one to be configured)"
+\t@echo "  make tfvars-push   Push terraform.tfvars to the S3 backend"
+\t@echo "  make tfvars-diff   Show a unified diff between local and remote terraform.tfvars"
+\t@echo ""
+\t@echo "  S3 tfvars backend detection: GSD_TFVARS_BACKEND=s3|local overrides;"
+\t@echo "  otherwise inferred from the $(TFVARS_MARKER) marker file."
 
 # ── Stamp dir ────────────────────────────────────────────────────────────────
 $(STAMP_DIR):
@@ -154,6 +201,13 @@ setup: | $(STAMP_DIR)
 \tgit submodule update --init --recursive
 \tbash $(SUBMODULE)/setup.sh
 \t@sha256sum $(SUBMODULE)/setup.sh | cut -d' ' -f1 > $(SETUP_STAMP)
+# Runtime (not parse-time) check: setup.sh may have just bootstrapped the S3
+# tfvars backend and written the marker file above, so pull the canonical
+# tfvars down now that it exists.
+\t@if [ "$(TFVARS_BACKEND)" = s3 ]; then \\
+\t  echo "S3 tfvars backend detected (s3://$(TFVARS_BUCKET)) — pulling terraform.tfvars..."; \\
+\t  $(TFVARS_SYNC) pull || echo "no tfvars object found in s3://$(TFVARS_BUCKET) yet — run 'make tfvars-push' to seed the bucket" >&2; \\
+\t fi
 
 # ── Copy tfvars into the submodule terraform dir ─────────────────────────────
 $(TF_DIR)/terraform.tfvars: $(TFVARS)
@@ -164,11 +218,44 @@ copy-tfvars: $(TFVARS)
 \tcp $(TFVARS) $(TF_DIR)/terraform.tfvars
 
 # ── Terraform targets ────────────────────────────────────────────────────────
-plan: copy-tfvars
+# Internal gates: silently no-op in local mode (TFVARS_BACKEND=local) so
+# plan/apply behave exactly as they did before S3 sync existed.
+pull-tfvars-if-needed:
+\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${NO_PULL:-}" ]; then $(TFVARS_SYNC) pull; fi
+
+check-tfvars-if-needed:
+\t@if [ "$(TFVARS_BACKEND)" = s3 ] && [ -z "$\${FORCE_APPLY:-}" ]; then $(TFVARS_SYNC) check; fi
+
+# plan auto-pulls the latest tfvars from S3 first (skip with NO_PULL=1), so a
+# stale local copy can't silently drive \`terraform plan\`. In local mode
+# pull-tfvars-if-needed is a no-op and this is unchanged from before.
+plan: pull-tfvars-if-needed copy-tfvars
 \t$(MAKE) -C $(SUBMODULE) tf-plan
 
-apply: copy-tfvars
+# apply checks tfvars are still in sync with S3 first (skip with
+# FORCE_APPLY=1), so drift can't silently drive \`terraform apply\`. In local
+# mode check-tfvars-if-needed is a no-op and this is unchanged from before.
+apply: check-tfvars-if-needed copy-tfvars
 \t$(MAKE) -C $(SUBMODULE) tf-apply
+
+# ── Manual remote tfvars sync (gated on TFVARS_BACKEND) ─────────────────────
+# Unlike the internal gates above, these fail fast with a pointer to
+# configure a backend instead of silently no-opping — they're operator-driven.
+# tfvars-pull additionally refuses to clobber uncommitted local edits: a pull
+# overwrites $(TFVARS) in place, so if git sees it as dirty we abort instead
+# of silently discarding the operator's changes.
+tfvars-pull:
+\t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
+\t@if [ -n "$$(git -C $(REPO_ROOT) status --porcelain -- $(TFVARS))" ]; then echo "$(TFVARS) has uncommitted changes — commit or stash them before pulling from S3." >&2; exit 1; fi
+\t$(TFVARS_SYNC) pull
+
+tfvars-push:
+\t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
+\t$(TFVARS_SYNC) push
+
+tfvars-diff:
+\t@if [ "$(TFVARS_BACKEND)" != s3 ]; then echo "No S3 tfvars backend detected (TFVARS_BACKEND=$(TFVARS_BACKEND)) — set GSD_TFVARS_BACKEND=s3 (with GSD_TFVARS_BUCKET) or bootstrap one via setup.sh." >&2; exit 1; fi
+\t$(TFVARS_SYNC) diff
 
 # ── Submodule update with idempotent setup.sh re-run ─────────────────────────
 update: | $(STAMP_DIR)
@@ -286,6 +373,10 @@ export function renderGitignore(a: Answers): string {
 terraform.tfstate
 terraform.tfstate.backup
 *.tfvars.local
+
+# tfvars-sync.ts sidecar lock file (S3 version/etag metadata, not a secret,
+# but machine-local and irrelevant to commit)
+*.tfvars.lock
 
 # Editor / OS noise
 .DS_Store
