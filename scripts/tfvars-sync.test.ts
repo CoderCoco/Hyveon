@@ -17,6 +17,7 @@ import {
   diffTfvars,
   lockStatus,
   checkTfvars,
+  parseArgs,
   VersionMismatchError,
   BucketNotVersionedError,
   type LockFile,
@@ -426,6 +427,45 @@ describe('tfvars-sync', () => {
 
       expect(result.inSync).toBe(false);
       expect(result.reason).toContain('versioning');
+    });
+  });
+
+  describe('parseArgs', () => {
+    /**
+     * The generated parent Makefile (see `renderMakefile()` in
+     * `init-parent.ts`) renders every call site as
+     * `$(TFVARS_SYNC) <subcommand> $(TFVARS_SYNC_ARGS)`, which Make expands
+     * to `... tfvars-sync.ts <subcommand> --path <file> --bucket <bucket>`
+     * — i.e. the subcommand always precedes the flags. This is the exact
+     * argv shape `parseArgs()` must accept.
+     */
+    it('should parse the subcommand-then-flags argv shape the generated Makefile emits', () => {
+      const { command, options } = parseArgs(['pull', '--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket']);
+
+      expect(command).toBe('pull');
+      expect(options.path).toBe('/tmp/parent/terraform.tfvars');
+      expect(options.bucket).toBe('my-bucket');
+    });
+
+    it('should parse the subcommand-then-flags argv shape for every Makefile-driven subcommand (push/diff/check)', () => {
+      for (const command of ['push', 'diff', 'check'] as const) {
+        const parsed = parseArgs([command, '--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket']);
+        expect(parsed.command).toBe(command);
+        expect(parsed.options.bucket).toBe('my-bucket');
+      }
+    });
+
+    it('should throw a usage error when flags precede the subcommand', () => {
+      // Regression pin: an earlier Makefile template baked --path/--bucket
+      // into the TFVARS_SYNC variable itself, so every call site rendered
+      // "--path <file> --bucket <bucket> <subcommand>" — flags before the
+      // subcommand. parseArgs() takes argv[0] as the command unconditionally,
+      // so that shape threw this exact usage error on every tfvars-pull/
+      // push/diff/check/setup invocation, yet no test exercised parseArgs()
+      // with the Makefile's actual emitted argv shape to catch it.
+      expect(() =>
+        parseArgs(['--path', '/tmp/parent/terraform.tfvars', '--bucket', 'my-bucket', 'pull']),
+      ).toThrow(/Usage: tfvars-sync\.ts <pull\|push\|diff\|status\|check>/);
     });
   });
 });
