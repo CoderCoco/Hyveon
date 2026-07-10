@@ -18,6 +18,8 @@
  *   - terraform.tfvars   skeleton populated from your answers
  *   - .env               API_TOKEN for the management app (gitignored)
  *   - .gitignore         covers .env, .make/, terraform.tfstate*, etc.
+ *   - .gsd/tfvars-bucket S3 backend marker (only when --s3-tfvars is passed,
+ *                        or you answer yes to the interactive prompt)
  *
  * It NEVER reads or modifies anything inside the submodule.
  */
@@ -41,6 +43,8 @@ interface Answers {
   discordApplicationId?: string;
   discordBotToken?: string;
   discordPublicKey?: string;
+  /** Whether an S3-backed tfvars store was requested (flag or interactive prompt), i.e. whether `.gsd/tfvars-bucket` was written. */
+  s3Tfvars?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -572,8 +576,16 @@ function isValidDomain(s: string): boolean {
 // Bootstrap (the pre-existing interactive flow, unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The interactive bootstrap flow: prompts for parent-repo details and writes Makefile/terraform.tfvars/.env/.gitignore. Exported so the entrypoint guard below can invoke it after CLI parsing. */
-export async function runBootstrap(): Promise<void> {
+/** Flags from {@link parseCliArgs} that {@link runBootstrap} cares about. */
+export interface BootstrapOptions {
+  /** Pre-answers the "bootstrap an S3-backed tfvars store?" prompt with yes, skipping it. */
+  s3Tfvars: boolean;
+  /** Skips the interactive prompt entirely when `s3Tfvars` wasn't already passed, defaulting to no. */
+  yes: boolean;
+}
+
+/** The interactive bootstrap flow: prompts for parent-repo details and writes Makefile/terraform.tfvars/.env/.gitignore (and, when requested, the `.gsd/tfvars-bucket` S3 backend marker). Exported so the entrypoint guard below can invoke it after CLI parsing. */
+export async function runBootstrap(options: BootstrapOptions = { s3Tfvars: false, yes: false }): Promise<void> {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const guessedParent = findParentRepoRoot(cwd()) ?? findParentRepoRoot(scriptDir) ?? cwd();
 
@@ -628,6 +640,15 @@ export async function runBootstrap(): Promise<void> {
 
     const configureDiscord = await askBool(rl, 'Seed Discord credentials in tfvars now?', false);
 
+    // A --s3-tfvars flag pre-answers this and skips the prompt; --yes without
+    // --s3-tfvars also skips the prompt but defaults to "no" (an explicit
+    // opt-in is required to write the marker).
+    const wantsS3Tfvars = options.s3Tfvars
+      ? true
+      : options.yes
+        ? false
+        : await askBool(rl, 'Bootstrap an S3-backed tfvars store now? (records the target bucket for `make setup` to create)', false);
+
     let discordApplicationId: string | undefined;
     let discordBotToken: string | undefined;
     let discordPublicKey: string | undefined;
@@ -649,6 +670,7 @@ export async function runBootstrap(): Promise<void> {
       discordApplicationId,
       discordBotToken,
       discordPublicKey,
+      s3Tfvars: wantsS3Tfvars,
     };
 
     output.write('\n  Writing files…\n');
@@ -656,6 +678,17 @@ export async function runBootstrap(): Promise<void> {
     status(join(parentDir, 'terraform.tfvars'), writeIfSafe(join(parentDir, 'terraform.tfvars'), renderTfvars(answers)), parentDir);
     status(join(parentDir, '.env'), writeIfSafe(join(parentDir, '.env'), renderEnv(answers)), parentDir);
     status(join(parentDir, '.gitignore'), writeIfSafe(join(parentDir, '.gitignore'), renderGitignore(answers)), parentDir);
+    // The marker records the S3 bucket `setup.sh`'s bootstrap_tfvars_backend()
+    // will create (see terraform/bootstrap/main.tf's coalesce default) — it's
+    // written up-front, before setup.sh has ever run, so PARENT_TFVARS_MARKER
+    // in the generated Makefile can force GSD_TFVARS_BACKEND=s3 for `make setup`.
+    if (wantsS3Tfvars) {
+      status(
+        join(parentDir, '.gsd', 'tfvars-bucket'),
+        writeIfSafe(join(parentDir, '.gsd', 'tfvars-bucket'), `${projectName}-tfvars\n`),
+        parentDir,
+      );
+    }
 
     output.write('\n  ✓ Done.\n\n');
     output.write('  Next steps:\n');
@@ -663,6 +696,12 @@ export async function runBootstrap(): Promise<void> {
     output.write(`    2. Run \`make setup\` to bootstrap the submodule and Terraform.\n`);
     output.write(`    3. Run \`make plan\` then \`make apply\`.\n`);
     output.write(`    4. \`make dev\` to launch the management app on :5173.\n\n`);
+
+    if (wantsS3Tfvars) {
+      output.write(`  S3-backed tfvars store requested — .gsd/tfvars-bucket recorded (${projectName}-tfvars).\n`);
+      output.write(`  \`make setup\` will bootstrap that S3 bucket automatically before running terraform init,\n`);
+      output.write(`  and \`make tfvars-push\` to seed the bucket if setup reports it empty.\n\n`);
+    }
 
     if (existsSync(join(parentDir, '.gitmodules'))) {
       const gm = readFileSync(join(parentDir, '.gitmodules'), 'utf8');
@@ -712,7 +751,7 @@ if (isEntrypoint) {
     runMigrate(CLI.direction as MigrateDirection);
   } else {
     FORCE = CLI.force;
-    runBootstrap().catch((err) => {
+    runBootstrap({ s3Tfvars: CLI.s3Tfvars, yes: CLI.yes }).catch((err) => {
       process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
       exit(1);
     });
