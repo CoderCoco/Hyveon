@@ -70,6 +70,61 @@ module has no remote backend of its own (it creates the bucket other things
 eventually read from, so storing its own state there would be
 chicken-and-egg); its state stays local and is gitignored.
 
+### Bucket layout
+
+The bucket holds exactly one object: the key `terraform.tfvars` (overridable
+via `tfvars-sync.ts --key`, e.g. if a parent repo wants to store the file
+under a different name). There is no per-environment prefixing or additional
+objects — one bucket maps to one `terraform.tfvars`. S3 **versioning**
+(`aws_s3_bucket_versioning.tfvars`, `Enabled`) keeps every prior revision of
+that object under its own `versionId`, which doubles as the change history
+and the substrate for the conflict-detection scheme below — there is no
+separate DynamoDB lock table for this bucket the way the Terraform state
+backend uses one. The **lifecycle rule**
+(`aws_s3_bucket_lifecycle_configuration.tfvars`) expires noncurrent versions
+after 90 days, so history isn't kept forever, but recent revisions remain
+recoverable via `aws s3api list-object-versions` / `get-object --version-id`
+if a bad push needs to be rolled back.
+
+### Optimistic locking (version/etag conflict semantics)
+
+Nothing in this bucket takes a blocking lock. Instead, `scripts/tfvars-sync.ts`
+(the CLI the parent-repo Makefile's `tfvars-pull` / `tfvars-push` / `tfvars-diff`
+targets wrap — see `renderMakefile()` in `scripts/init-parent.ts`) coordinates
+concurrent edits with **optimistic locking** against the object's S3 version
+id and etag:
+
+- **`pull`** downloads the object and writes a sidecar lock file
+  `terraform.tfvars.lock` next to it, recording the `versionId`, `etag`,
+  size, and `lastModified` observed at pull time (plus a local `pulledAt`
+  timestamp). This lock file is machine-local and gitignored — see
+  `renderGitignore()`'s `*.tfvars.lock` entry — it is never committed.
+- **`push`** refuses to upload unless the local lock's `versionId` still
+  matches the object's *current* `versionId` (checked via `HeadObject`
+  immediately before the write): a missing lock (never pulled) or a
+  stale one (someone else pushed since your last pull) both raise
+  `VersionMismatchError`, and the fix is the same either way — run `pull`
+  again to refresh, resolve any diff, then retry `push`.
+- **The check-then-write race is closed with a conditional `PutObject`.**
+  Between the `HeadObject` check and the actual upload there's a window
+  where a concurrent push could slip in; `push` guards it with `IfMatch:
+  "<locked etag>"` for an existing object (or `IfNoneMatch: '*'` for a
+  brand-new one). If S3 rejects the write with `412 Precondition Failed`
+  because the object changed in that window, `tfvars-sync.ts` surfaces the
+  same `VersionMismatchError` rather than silently overwriting the other
+  side's change.
+- **`BucketNotVersionedError`** is thrown instead if `HeadObject` reports no
+  `VersionId` for an existing object — i.e. the bucket lost (or never had)
+  versioning enabled. The version-based conflict check has nothing to
+  compare against in that case, so `push` refuses outright rather than
+  guessing; versioning must be restored on the bucket before pushing again.
+- **`diff`** and **`check`** are read-only: `diff` byte-compares the local
+  file against the current remote object (used by `migrate --to-local` to
+  confirm it's safe to drop the S3 marker), and `check` compares the local
+  lock's `versionId` against the remote `HeadObject` `versionId` as a fast
+  drift gate — this is what the Makefile's `apply` target runs before every
+  `terraform apply` (skippable with `FORCE_APPLY=1`).
+
 ## Variables
 
 | Name | Type | Default | Purpose |
