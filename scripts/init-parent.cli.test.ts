@@ -112,6 +112,23 @@ describe('parseCliArgs', () => {
   it('should throw CliUsageError when migrate is given both --to-s3 and --to-local', () => {
     expect(() => parseCliArgs(['migrate', '--to-s3', '--to-local'])).toThrow(CliUsageError);
   });
+
+  it('should throw CliUsageError for an unrecognized subcommand', () => {
+    expect(() => parseCliArgs(['frobnicate'])).toThrow(CliUsageError);
+    expect(() => parseCliArgs(['frobnicate'])).toThrow('Unknown subcommand "frobnicate".');
+  });
+
+  it('should throw CliUsageError for an unknown flag under the default bootstrap command', () => {
+    expect(() => parseCliArgs(['--to-s3'])).toThrow(CliUsageError);
+    expect(() => parseCliArgs(['--to-s3'])).toThrow(
+      'Unknown flag "--to-s3" for the default bootstrap command.',
+    );
+  });
+
+  it('should throw CliUsageError when migrate is given a bootstrap-only flag', () => {
+    expect(() => parseCliArgs(['migrate', '--force'])).toThrow(CliUsageError);
+    expect(() => parseCliArgs(['migrate', '--force'])).toThrow('Unknown flag "--force" for \'migrate\'.');
+  });
 });
 
 describe('runBootstrap --s3-tfvars', () => {
@@ -153,6 +170,29 @@ describe('runBootstrap --s3-tfvars', () => {
     expect(makefile).toContain('PARENT_TFVARS_MARKER := $(REPO_ROOT)/.gsd/tfvars-bucket');
     expect(existsSync(join(parentDir, 'terraform.tfvars'))).toBe(true);
     expect(existsSync(join(parentDir, '.env'))).toBe(true);
+  });
+
+  it('should write the .gsd/tfvars-bucket marker when --s3-tfvars is omitted but the operator answers "y" to the interactive prompt', async () => {
+    queueReadlineAnswers([
+      parentDir, // Parent repo path
+      'Hyveon', // Submodule path
+      'test-parent', // Project name
+      'us-east-1', // AWS region
+      'example.com', // Route 53 hosted zone
+      '', // API_TOKEN (accept generated)
+      'n', // Seed Discord credentials?
+      'y', // Bootstrap an S3-backed tfvars store now?
+    ]);
+
+    const { s3Tfvars, yes } = parseCliArgs([]);
+    expect(s3Tfvars).toBe(false);
+    expect(yes).toBe(false);
+
+    await runBootstrap({ s3Tfvars, yes });
+
+    const markerPath = join(parentDir, '.gsd', 'tfvars-bucket');
+    expect(existsSync(markerPath)).toBe(true);
+    expect(readFileSync(markerPath, 'utf8')).toBe('test-parent-tfvars\n');
   });
 
   it('should NOT write the .gsd/tfvars-bucket marker when --s3-tfvars is omitted and --yes defaults the prompt to no', async () => {
@@ -413,5 +453,132 @@ describe('runMigrate --to-local (bucket never seeded)', () => {
     expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(false);
     expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(false);
     expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe(tfvarsContent);
+  });
+});
+
+describe('runMigrate --to-local (confirmation declined)', () => {
+  let parentDir: string;
+  let originalCwd: string;
+  const tfvarsContent = 'project_name = "test-parent"\n';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), 'init-parent-cli-test-')));
+    parentDir = process.cwd();
+    s3Mock.reset();
+
+    writeFileSync(join(parentDir, 'Makefile'), 'SUBMODULE   := $(REPO_ROOT)/Hyveon\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars'), tfvarsContent);
+    mkdirSync(join(parentDir, '.gsd'), { recursive: true });
+    writeFileSync(join(parentDir, '.gsd', 'tfvars-bucket'), 'test-parent-tfvars\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars.lock'), '{}\n');
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(parentDir, { recursive: true, force: true });
+  });
+
+  it('should make no changes and never contact S3 when the confirmation prompt is declined', async () => {
+    queueReadlineAnswers(['n']); // Declines the "Proceed?" prompt.
+
+    await runMigrate('to-local', { yes: false });
+
+    expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(true);
+    expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(true);
+    expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe(tfvarsContent);
+    // The drift check (lockStatus/diffTfvars, both backed by the S3 client)
+    // only runs after the confirmation — a decline must short-circuit before
+    // any S3 call is made.
+    expect(s3Mock.calls()).toHaveLength(0);
+    expect(vi.mocked(exit)).not.toHaveBeenCalled();
+  });
+});
+
+describe('runMigrate --to-local (no resolvable bucket)', () => {
+  let parentDir: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), 'init-parent-cli-test-')));
+    parentDir = process.cwd();
+    s3Mock.reset();
+    delete process.env.GSD_TFVARS_BUCKET;
+
+    writeFileSync(join(parentDir, 'Makefile'), 'SUBMODULE   := $(REPO_ROOT)/Hyveon\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars'), 'project_name = "test-parent"\n');
+    // Deliberately no .gsd/tfvars-bucket marker anywhere (parent root or
+    // submodule) and no GSD_TFVARS_BUCKET env var — this parent repo was
+    // never migrated to S3, so there's nothing to resolve.
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(parentDir, { recursive: true, force: true });
+  });
+
+  it('should exit 1 without contacting S3 when neither GSD_TFVARS_BUCKET nor any marker file resolves a bucket', async () => {
+    await runMigrate('to-local', { yes: true });
+
+    expect(vi.mocked(exit)).toHaveBeenCalledWith(1);
+    expect(s3Mock.calls()).toHaveLength(0);
+    expect(readFileSync(join(parentDir, 'terraform.tfvars'), 'utf8')).toBe('project_name = "test-parent"\n');
+  });
+});
+
+describe('runMigrate --to-local (bucket resolution precedence)', () => {
+  let parentDir: string;
+  let originalCwd: string;
+  const tfvarsContent = 'project_name = "test-parent"\n';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), 'init-parent-cli-test-')));
+    parentDir = process.cwd();
+    s3Mock.reset();
+    delete process.env.GSD_TFVARS_BUCKET;
+
+    writeFileSync(join(parentDir, 'Makefile'), 'SUBMODULE   := $(REPO_ROOT)/Hyveon\n');
+    writeFileSync(join(parentDir, 'terraform.tfvars'), tfvarsContent);
+    writeFileSync(join(parentDir, 'terraform.tfvars.lock'), '{}\n');
+
+    s3Mock.on(HeadObjectCommand).resolves({ VersionId: 'v1', ETag: '"etag-1"' });
+    s3Mock.on(GetObjectCommand).resolves({ Body: fakeBody(tfvarsContent) as never });
+  });
+
+  afterEach(() => {
+    delete process.env.GSD_TFVARS_BUCKET;
+    process.chdir(originalCwd);
+    rmSync(parentDir, { recursive: true, force: true });
+  });
+
+  it('should prefer GSD_TFVARS_BUCKET over the parent-root marker when both are set', async () => {
+    mkdirSync(join(parentDir, '.gsd'), { recursive: true });
+    writeFileSync(join(parentDir, '.gsd', 'tfvars-bucket'), 'marker-bucket\n');
+    process.env.GSD_TFVARS_BUCKET = 'env-bucket';
+
+    await runMigrate('to-local', { yes: true });
+
+    expect(vi.mocked(exit)).not.toHaveBeenCalled();
+    expect(s3Mock.commandCalls(HeadObjectCommand)[0]?.args[0].input).toMatchObject({ Bucket: 'env-bucket' });
+    // The env var takes precedence for bucket resolution, but the marker
+    // deleted is still whichever one(s) exist on disk.
+    expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(false);
+  });
+
+  it('should fall back to the submodule-local marker and delete it when no parent-root marker exists', async () => {
+    const submoduleMarkerDir = join(parentDir, 'Hyveon', '.gsd');
+    mkdirSync(submoduleMarkerDir, { recursive: true });
+    writeFileSync(join(submoduleMarkerDir, 'tfvars-bucket'), 'submodule-bucket\n');
+    // Deliberately no parent-root .gsd/tfvars-bucket marker.
+
+    await runMigrate('to-local', { yes: true });
+
+    expect(vi.mocked(exit)).not.toHaveBeenCalled();
+    expect(s3Mock.commandCalls(HeadObjectCommand)[0]?.args[0].input).toMatchObject({ Bucket: 'submodule-bucket' });
+    expect(existsSync(join(submoduleMarkerDir, 'tfvars-bucket'))).toBe(false);
+    expect(existsSync(join(parentDir, '.gsd', 'tfvars-bucket'))).toBe(false);
+    expect(existsSync(join(parentDir, 'terraform.tfvars.lock'))).toBe(false);
   });
 });
