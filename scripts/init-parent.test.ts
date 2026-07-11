@@ -39,13 +39,39 @@ expect('Makefile does NOT inline API_TOKEN', !/API_TOKEN\s*:?=\s*[a-f0-9]{40,}/.
 // ── S3 tfvars backend detection block ───────────────────────────────────────
 expect('Makefile defines TFVARS_MARKER', mk.includes('TFVARS_MARKER := $(SUBMODULE)/.gsd/tfvars-bucket'));
 expect('Makefile defines TFVARS_LOCK', mk.includes('TFVARS_LOCK   := $(TFVARS).lock'));
+expect('Makefile defines PARENT_TFVARS_MARKER at the parent repo root', mk.includes('PARENT_TFVARS_MARKER := $(REPO_ROOT)/.gsd/tfvars-bucket'));
 expect(
-  'Makefile defines TFVARS_BACKEND gated on GSD_TFVARS_BACKEND override then the marker file',
+  'Makefile defines TFVARS_BACKEND gated on GSD_TFVARS_BACKEND override, then the parent-root marker, then the submodule marker',
   mk.includes(
-    'TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(TFVARS_MARKER)),s3,local)))',
+    'TFVARS_BACKEND = $(if $(filter s3,$(GSD_TFVARS_BACKEND)),s3,$(if $(filter local,$(GSD_TFVARS_BACKEND)),local,$(if $(wildcard $(PARENT_TFVARS_MARKER)),s3,$(if $(wildcard $(TFVARS_MARKER)),s3,local))))',
   ),
 );
 expect('Makefile routes TFVARS_SYNC --bucket through TFVARS_MARKER', mk.includes('cat $(TFVARS_MARKER)'));
+
+// ── Parent-root marker precedence (prefers parent, falls back to submodule) ─
+expect(
+  'Makefile TFVARS_BACKEND checks the parent-root marker before the submodule marker',
+  mk.indexOf('$(wildcard $(PARENT_TFVARS_MARKER))') < mk.indexOf('$(wildcard $(TFVARS_MARKER))') &&
+    mk.indexOf('$(wildcard $(PARENT_TFVARS_MARKER))') !== -1,
+);
+expect(
+  'Makefile TFVARS_BACKEND falls back to the submodule marker when no parent-root marker exists',
+  mk.includes('$(if $(wildcard $(TFVARS_MARKER)),s3,local)'),
+);
+expect(
+  'Makefile TFVARS_BUCKET prefers the parent-root marker contents, falling back to the submodule marker',
+  mk.includes(
+    'TFVARS_BUCKET = $(if $(GSD_TFVARS_BUCKET),$(GSD_TFVARS_BUCKET),$(shell cat $(PARENT_TFVARS_MARKER) 2>/dev/null || cat $(TFVARS_MARKER) 2>/dev/null))',
+  ),
+);
+expect(
+  'Makefile TFVARS_SYNC_ARGS resolves --bucket from the parent-root marker before the submodule marker',
+  mk.includes('cat $(PARENT_TFVARS_MARKER) 2>/dev/null || cat $(TFVARS_MARKER) 2>/dev/null'),
+);
+expect(
+  'Makefile help text mentions the parent-root marker before the submodule marker fallback',
+  /otherwise inferred from \$\(PARENT_TFVARS_MARKER\), falling back to \$\(TFVARS_MARKER\)/.test(mk),
+);
 
 // ── Gated tfvars-* targets ───────────────────────────────────────────────────
 expect('Makefile phonies list tfvars-pull/push/diff (not tfvars-status)', mk.includes('tfvars-pull tfvars-push tfvars-diff'));
@@ -84,13 +110,45 @@ expect('Makefile apply depends on check-tfvars-if-needed', mk.includes('apply: c
 const setupRecipeMatch = /^setup:.*\n(?:(?:\t|#).*\n?)*/m.exec(mk);
 const setupRecipe = setupRecipeMatch ? setupRecipeMatch[0] : '';
 expect('Makefile has a setup: recipe to inspect', setupRecipe !== '');
+// Regression coverage: setup.sh's bootstrap_tfvars_backend() derives
+// TF_PROJECT from $(TF_DIR)/terraform.tfvars, not from the parent-root
+// $(TFVARS)/PARENT_TFVARS_MARKER. Without copying the parent's tfvars into
+// the submodule first, a first-ever `make setup` would see the
+// "game-servers" default from terraform.tfvars.example and bootstrap a
+// differently-named bucket than the one PARENT_TFVARS_MARKER records.
 expect(
-  'Makefile setup runtime-pulls tfvars post-bootstrap via a shell-native (not make-variable) S3 backend check',
+  'Makefile setup copies the parent tfvars into the submodule before running setup.sh, so TF_PROJECT (and the bucket setup.sh bootstraps) matches the project name PARENT_TFVARS_MARKER was derived from',
+  setupRecipe.includes('cp $(TFVARS) $(TF_DIR)/terraform.tfvars') &&
+    setupRecipe.indexOf('cp $(TFVARS) $(TF_DIR)/terraform.tfvars') < setupRecipe.indexOf('bash $(SUBMODULE)/setup.sh'),
+);
+expect(
+  'Makefile setup runtime-pulls tfvars post-bootstrap via a shell-native (not make-variable) S3 backend check that also honors the parent-root marker',
   setupRecipe.includes(
-    '[ "$${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$${GSD_TFVARS_BACKEND:-}" != local ] && [ -f $(TFVARS_MARKER) ]; }',
+    '[ "$${GSD_TFVARS_BACKEND:-}" = s3 ] || { [ "$${GSD_TFVARS_BACKEND:-}" != local ] && { [ -f $(PARENT_TFVARS_MARKER) ] || [ -f $(TFVARS_MARKER) ]; }; }',
   ) &&
     setupRecipe.includes('$(TFVARS_SYNC) pull $(TFVARS_SYNC_ARGS) 2>&1') &&
     !/if \[ "\$\(TFVARS_BACKEND\)" = s3 \]/.test(setupRecipe),
+);
+
+// ── setup exports GSD_TFVARS_BACKEND=s3 when the parent-root marker exists ──
+// (but only when GSD_TFVARS_BACKEND is not already set — an explicit
+// GSD_TFVARS_BACKEND=local override must survive into setup.sh's environment
+// too, per TFVARS_BACKEND's own override precedence)
+expect(
+  'Makefile setup exports GSD_TFVARS_BACKEND=s3 into setup.sh\'s environment when the parent-root marker exists and GSD_TFVARS_BACKEND is unset',
+  /if \[ -z "\$\$\{GSD_TFVARS_BACKEND:-\}" \] && \[ -f \$\(PARENT_TFVARS_MARKER\) \]; then export GSD_TFVARS_BACKEND=s3; fi; \\\n\tbash \$\(SUBMODULE\)\/setup\.sh/.test(
+    setupRecipe,
+  ),
+);
+expect(
+  'Makefile setup\'s parent-marker export does not clobber an explicit GSD_TFVARS_BACKEND=local override',
+  setupRecipe.includes('if [ -z "$${GSD_TFVARS_BACKEND:-}" ] && [ -f $(PARENT_TFVARS_MARKER) ]; then export GSD_TFVARS_BACKEND=s3; fi;'),
+);
+expect(
+  'Makefile setup\'s parent-marker export line precedes the bash setup.sh invocation within the same recipe',
+  setupRecipe.indexOf('export GSD_TFVARS_BACKEND=s3') <
+    setupRecipe.indexOf('bash $(SUBMODULE)/setup.sh') &&
+    setupRecipe.indexOf('export GSD_TFVARS_BACKEND=s3') !== -1,
 );
 expect(
   'Makefile setup tolerates a first-time pull against an empty bucket instead of aborting',

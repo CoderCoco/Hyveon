@@ -16,6 +16,11 @@ the whole stack from the parent repo root.
 
 ### Usage
 
+```bash
+init-parent.ts [--force] [--s3-tfvars] [--yes]            Interactive bootstrap (default)
+init-parent.ts migrate --to-s3 | --to-local [--yes]        Migrate an existing parent repo's tfvars backend
+```
+
 From the parent (private) repo root, after adding the submodule:
 
 ```bash
@@ -26,12 +31,78 @@ node --import tsx Hyveon/scripts/init-parent.ts
 npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts
 ```
 
-Flags:
+### Subcommands
 
-- `--force` — overwrite existing files instead of skipping them.
+`bootstrap` is the implicit default, selected whenever the first argument is
+omitted or starts with `--` (e.g. `tsx init-parent.ts --force` keeps working
+unchanged). It can also be passed explicitly as the first token (e.g. `tsx
+init-parent.ts bootstrap --s3-tfvars`) — both forms parse identically. Only a
+genuinely unrecognized first token (one that isn't `bootstrap`, `migrate`, or
+a `--` flag) exits `1` with `Unknown subcommand "<token>"`.
 
-The script never reads or modifies anything inside the submodule. Safe to
-re-run; without `--force` it leaves existing files alone.
+- **`bootstrap`** (default; may be given explicitly or omitted) — the interactive scaffolder described above:
+  prompts for parent-repo details and writes `Makefile`, `terraform.tfvars`,
+  `.env`, and `.gitignore`, plus (only when requested) the
+  `.gsd/tfvars-bucket` S3 backend marker.
+- **`migrate --to-s3`** — migrates an already-scaffolded parent repo (one
+  that already has a `Makefile`, i.e. `bootstrap` has already run) from a
+  local-file tfvars backend onto a versioned S3 bucket. Writes
+  `.gsd/tfvars-bucket` (`${project_name}-tfvars`, read out of the existing
+  `terraform.tfvars`'s `project_name` key), rewrites the `Makefile` with the
+  S3-aware targets, then runs `make setup` with `GSD_TFVARS_BACKEND=s3` so
+  `terraform/bootstrap/` provisions the bucket. `terraform.tfvars` itself is
+  left untouched — pull it back down from S3 afterwards with `make
+  tfvars-pull` if you want confirmation it round-tripped.
+- **`migrate --to-local`** — the reverse: drops an already-scaffolded parent
+  repo's S3 tfvars backend, reverting `make plan`/`make apply` to reading
+  `terraform.tfvars` straight off disk. Resolves the target bucket
+  (`GSD_TFVARS_BUCKET` env var, else the parent-root marker, else the
+  submodule-local marker), pulls `terraform.tfvars` down from S3 first if
+  it's missing locally, aborts with no changes if the local file has
+  drifted from the remote object (checked the same way `tfvars-sync.ts
+  diff` does — skipped entirely if the remote object was never seeded, in
+  which case migration proceeds straight to deleting the markers), then
+  deletes both `.gsd/tfvars-bucket` markers and the `terraform.tfvars.lock`
+  sidecar. `terraform.tfvars` itself is left in place. The S3 bucket is
+  **not** deleted — destroy it manually with `terraform
+  -chdir=<submodule>/terraform/bootstrap destroy` if you no longer need it.
+
+### Flags
+
+- `--force` — (`bootstrap` only) overwrite existing files instead of
+  skipping them.
+- `--s3-tfvars` — (`bootstrap` only) pre-answers the "bootstrap an
+  S3-backed tfvars store?" prompt with yes, skipping it, and writes the
+  `.gsd/tfvars-bucket` marker up front.
+- `--to-s3` / `--to-local` — (`migrate` only) selects the migration
+  direction. Exactly one is required; passing both or neither is a usage
+  error.
+- `--yes` — for `migrate`, skips the "Proceed?" confirmation and runs
+  immediately. For `bootstrap`, it only pre-answers the "bootstrap an
+  S3-backed tfvars store?" prompt (defaulting to no unless `--s3-tfvars`
+  was also passed); all other bootstrap prompts (parent repo path,
+  submodule path, project name, AWS region, hosted zone, API token,
+  Discord credentials) still run interactively.
+
+An unrecognized subcommand, an unrecognized flag for the resolved
+subcommand, or (for `migrate`) anything other than exactly one of
+`--to-s3`/`--to-local` prints a usage error to stderr and exits `1`.
+
+From inside this repo's own workspace (e.g. while developing the scaffolder
+itself), the `scripts:init-parent` npm script is an equivalent way to invoke
+it — pass subcommands/flags after `--`:
+
+```bash
+npm run scripts:init-parent -- migrate --to-s3
+npm run scripts:init-parent -- migrate --to-local
+npm run scripts:init-parent -- --force --s3-tfvars
+```
+
+`bootstrap` never reads or modifies anything inside the submodule, and is
+safe to re-run; without `--force` it leaves existing files alone. `migrate`
+is the exception: `--to-local` may delete the submodule-local
+`.gsd/tfvars-bucket` marker (see above), and `--to-s3` runs `make setup`,
+which executes `setup.sh` inside the submodule.
 
 ### Requirements
 
