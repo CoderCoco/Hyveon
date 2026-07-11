@@ -146,9 +146,9 @@ parent's `terraform.tfvars` between runs.
 ## S3 tfvars backend detection
 
 See [S3 tfvars storage](/guides/s3-tfvars) for the full guide to bootstrapping,
-day-to-day syncing, and migrating an existing parent repo onto (or off) this
-backend. The rest of this section covers how the generated Makefile detects
-which backend is active.
+day-to-day syncing, migrating an existing parent repo onto (or off) this
+backend, and troubleshooting sync conflicts. The rest of this section covers
+how the generated Makefile detects which backend is active.
 
 The three `tfvars-*` targets, and the automatic gating baked into
 `setup`/`plan`/`apply` above, all key off the same `TFVARS_BACKEND`
