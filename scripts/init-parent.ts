@@ -615,10 +615,13 @@ export interface BootstrapOptions {
   s3Tfvars: boolean;
   /** Skips the interactive prompt entirely when `s3Tfvars` wasn't already passed, defaulting to no. */
   yes: boolean;
+  /** Overwrites existing Makefile/terraform.tfvars/.env/.gitignore instead of skipping them. Mirrors the module-level `FORCE` flag so callers of the exported API (not just the CLI entrypoint) can drive `--force` behaviour. */
+  force?: boolean;
 }
 
 /** The interactive bootstrap flow: prompts for parent-repo details and writes Makefile/terraform.tfvars/.env/.gitignore (and, when requested, the `.gsd/tfvars-bucket` S3 backend marker). Exported so the entrypoint guard below can invoke it after CLI parsing. */
 export async function runBootstrap(options: BootstrapOptions = { s3Tfvars: false, yes: false }): Promise<void> {
+  FORCE = options.force ?? FORCE;
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const guessedParent = findParentRepoRoot(cwd()) ?? findParentRepoRoot(scriptDir) ?? cwd();
 
@@ -1152,27 +1155,34 @@ const isEntrypoint =
   argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(argv[1]);
 
 if (isEntrypoint) {
-  let CLI: CliArgs;
-  try {
-    CLI = parseCliArgs(argv.slice(2));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`\n  ✗ ${message}\n\n${USAGE}`);
-    exit(1);
-  }
+  // Wrapped in an IIFE (rather than left as bare top-level statements) so the
+  // catch block below can `return;` immediately after `exit(1)` — top-level
+  // `return` isn't legal in an ES module, and without it a mocked `exit()` in
+  // tests would fall through to `CLI.command` while `CLI` is still
+  // unassigned.
+  (function dispatchCli(): void {
+    let CLI: CliArgs;
+    try {
+      CLI = parseCliArgs(argv.slice(2));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`\n  ✗ ${message}\n\n${USAGE}`);
+      exit(1);
+      return;
+    }
 
-  if (CLI.command === 'migrate') {
-    // parseCliArgs guarantees exactly one of --to-s3 | --to-local by the time
-    // command === 'migrate' is returned, so direction is always defined here.
-    runMigrate(CLI.direction as MigrateDirection, { yes: CLI.yes }).catch((err) => {
-      process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
-      exit(1);
-    });
-  } else {
-    FORCE = CLI.force;
-    runBootstrap({ s3Tfvars: CLI.s3Tfvars, yes: CLI.yes }).catch((err) => {
-      process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
-      exit(1);
-    });
-  }
+    if (CLI.command === 'migrate') {
+      // parseCliArgs guarantees exactly one of --to-s3 | --to-local by the time
+      // command === 'migrate' is returned, so direction is always defined here.
+      runMigrate(CLI.direction as MigrateDirection, { yes: CLI.yes }).catch((err) => {
+        process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
+        exit(1);
+      });
+    } else {
+      runBootstrap({ s3Tfvars: CLI.s3Tfvars, yes: CLI.yes, force: CLI.force }).catch((err) => {
+        process.stderr.write(`\n  ✗ ${err instanceof Error ? err.message : String(err)}\n`);
+        exit(1);
+      });
+    }
+  })();
 }
