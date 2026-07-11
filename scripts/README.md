@@ -33,14 +33,14 @@ npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts
 
 ### Subcommands
 
-`bootstrap` has no subcommand token of its own — it is the implicit default,
-selected whenever the first argument is omitted or starts with `--` (e.g.
-`tsx init-parent.ts --force` keeps working unchanged). Passing the literal
-word `bootstrap` as an argument is **not** supported and exits `1` with
-`Unknown subcommand "bootstrap"` — the only recognized subcommand token is
-`migrate`.
+`bootstrap` is the implicit default, selected whenever the first argument is
+omitted or starts with `--` (e.g. `tsx init-parent.ts --force` keeps working
+unchanged). It can also be passed explicitly as the first token (e.g. `tsx
+init-parent.ts bootstrap --s3-tfvars`) — both forms parse identically. Only a
+genuinely unrecognized first token (one that isn't `bootstrap`, `migrate`, or
+a `--` flag) exits `1` with `Unknown subcommand "<token>"`.
 
-- **`bootstrap`** (default, invoked with no subcommand token) — the interactive scaffolder described above:
+- **`bootstrap`** (default; may be given explicitly or omitted) — the interactive scaffolder described above:
   prompts for parent-repo details and writes `Makefile`, `terraform.tfvars`,
   `.env`, and `.gitignore`, plus (only when requested) the
   `.gsd/tfvars-bucket` S3 backend marker.
