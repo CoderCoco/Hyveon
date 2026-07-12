@@ -248,11 +248,49 @@ describe('ConfigService', () => {
     });
   });
 
+  describe('readEnvTfvarsCacheTtlMs', () => {
+    afterEach(() => {
+      delete process.env['TFVARS_CACHE_TTL_MS'];
+    });
+
+    it('should default to 30000 when TFVARS_CACHE_TTL_MS is unset', () => {
+      delete process.env['TFVARS_CACHE_TTL_MS'];
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(30000);
+    });
+
+    it('should default to 30000 when TFVARS_CACHE_TTL_MS is empty', () => {
+      process.env['TFVARS_CACHE_TTL_MS'] = '';
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(30000);
+    });
+
+    it('should parse a valid TFVARS_CACHE_TTL_MS value', () => {
+      process.env['TFVARS_CACHE_TTL_MS'] = '60000';
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(60000);
+    });
+
+    it('should default to 30000 and warn when TFVARS_CACHE_TTL_MS is not a number', () => {
+      process.env['TFVARS_CACHE_TTL_MS'] = 'not-a-number';
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(30000);
+    });
+
+    it('should default to 30000 when TFVARS_CACHE_TTL_MS is negative', () => {
+      process.env['TFVARS_CACHE_TTL_MS'] = '-1';
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(30000);
+    });
+
+    it('should default to 30000 when TFVARS_CACHE_TTL_MS is zero', () => {
+      process.env['TFVARS_CACHE_TTL_MS'] = '0';
+      expect(service.readEnvTfvarsCacheTtlMs()).toBe(30000);
+    });
+  });
+
   describe('path resolution', () => {
     afterEach(() => {
       vi.restoreAllMocks();
       delete process.env['TF_STATE_PATH'];
       delete process.env['SERVER_CONFIG_PATH'];
+      delete process.env['TFVARS_PATH'];
+      delete process.env['GSD_TFVARS_BUCKET'];
     });
 
     it('should return packaged tfstate path when readIsPackaged returns true', () => {
@@ -290,6 +328,70 @@ describe('ConfigService', () => {
       const result = service.getServerConfigPath();
       expect(result).toMatch(/server_config\.json$/);
       expect(path.isAbsolute(result)).toBe(true);
+    });
+
+    it('should return the TFVARS_PATH env var value when set', () => {
+      process.env['TFVARS_PATH'] = '/custom/tfvars/terraform.tfvars';
+      expect(service.getTfvarsPath()).toBe('/custom/tfvars/terraform.tfvars');
+    });
+
+    it('should return packaged tfvars path when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
+      expect(service.getTfvarsPath()).toBe(
+        path.join('/fake/resources', 'terraform', 'terraform.tfvars'),
+      );
+    });
+
+    it('should return the repo-relative tfvars fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
+      const result = service.getTfvarsPath();
+      expect(result).toMatch(/terraform[/\\]terraform\.tfvars$/);
+      expect(path.isAbsolute(result)).toBe(true);
+    });
+
+    it('should return the GSD_TFVARS_BUCKET env var value when set', () => {
+      process.env['GSD_TFVARS_BUCKET'] = 'my-project-tfvars';
+      expect(service.getTfvarsBucket()).toBe('my-project-tfvars');
+    });
+
+    it('should return the marker file contents when GSD_TFVARS_BUCKET is unset', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue('marker-bucket-name\n');
+      expect(service.getTfvarsBucket()).toBe('marker-bucket-name');
+    });
+
+    it('should walk up from a nested cwd to find the marker file at an ancestor directory', () => {
+      const repoRoot = path.join(path.sep, 'repo');
+      const nestedCwd = path.join(repoRoot, 'app', 'packages', 'desktop-main');
+      const markerPath = path.join(repoRoot, '.gsd', 'tfvars-bucket');
+
+      vi.spyOn(process, 'cwd').mockReturnValue(nestedCwd);
+      mockExists.mockImplementation((p) => p === markerPath);
+      mockRead.mockReturnValue('nested-bucket-name');
+
+      expect(service.getTfvarsBucket()).toBe('nested-bucket-name');
+      expect(mockRead).toHaveBeenCalledWith(markerPath, 'utf-8');
+    });
+
+    it('should return null when neither the env var nor the marker file resolve', () => {
+      mockExists.mockReturnValue(false);
+      expect(service.getTfvarsBucket()).toBeNull();
+    });
+
+    it('should return null when the marker file is empty', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue('   ');
+      expect(service.getTfvarsBucket()).toBeNull();
+    });
+
+    it('should return null and warn when the marker file cannot be read', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockImplementation(() => {
+        throw new Error('EACCES');
+      });
+      expect(service.getTfvarsBucket()).toBeNull();
     });
   });
 });

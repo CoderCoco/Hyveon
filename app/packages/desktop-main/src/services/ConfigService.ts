@@ -59,6 +59,12 @@ const DEFAULT_CONFIG: WatchdogConfig = {
 };
 
 /**
+ * Default in-memory cache TTL (milliseconds) `TfvarsService` uses for the
+ * parsed tfvars payload when `TFVARS_CACHE_TTL_MS` is unset or invalid.
+ */
+const DEFAULT_TFVARS_CACHE_TTL_MS = 30000;
+
+/**
  * Identifier for the cloud provider the app is currently driving. A union
  * type (rather than a bare string) so additional providers can be added
  * without widening every consumer's type to `string`.
@@ -184,6 +190,27 @@ export class ConfigService {
   }
 
   /**
+   * Read the tfvars in-memory cache TTL override (milliseconds) from
+   * `TFVARS_CACHE_TTL_MS`. Extracted for test-stubbing, mirroring
+   * {@link readEnvRegion} / {@link readEnvApiToken}.
+   *
+   * Defaults to {@link DEFAULT_TFVARS_CACHE_TTL_MS} (30s) when the env var is
+   * unset, empty, not a finite number, or non-positive (zero included) — the
+   * default is applied here rather than pushed onto callers.
+   */
+  readEnvTfvarsCacheTtlMs(): number {
+    const raw = process.env['TFVARS_CACHE_TTL_MS'];
+    if (raw === undefined || raw.length === 0) return DEFAULT_TFVARS_CACHE_TTL_MS;
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      logger.warn('Invalid TFVARS_CACHE_TTL_MS value, using default', { raw });
+      return DEFAULT_TFVARS_CACHE_TTL_MS;
+    }
+    return parsed;
+  }
+
+  /**
    * Return `process.resourcesPath` when running inside an Electron packaged app,
    * or `undefined` otherwise. Extracted as a protected method so tests can stub
    * it via `vi.spyOn` without touching `process.resourcesPath` directly.
@@ -271,6 +298,84 @@ export class ConfigService {
     }
 
     return join(_APP_ROOT, 'server_config.json');
+  }
+
+  /**
+   * Resolve the absolute path to the local fallback copy of
+   * `terraform.tfvars`. This is the file `TfvarsService` reads/writes when
+   * running in "local" mode — i.e. no S3 tfvars backend is configured (see
+   * {@link getTfvarsBucket}). See `docs/docs/guides/s3-tfvars.md` for the
+   * local-vs-S3 tradeoff this mirrors.
+   *
+   * Resolution order (identical in structure to {@link getTfStatePath}):
+   *  1. `TFVARS_PATH` env var — wins when set.
+   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform/terraform.tfvars`.
+   *  3. Dev/test fallback — repo root `terraform/terraform.tfvars`.
+   */
+  getTfvarsPath(): string {
+    const envOverride = process.env['TFVARS_PATH'];
+    if (envOverride) return envOverride;
+
+    if (this.readIsPackaged()) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      return join(this.readResourcesPath()!, 'terraform', 'terraform.tfvars');
+    }
+
+    // Dev fallback: repo root is one level above _APP_ROOT (app/)
+    return join(_APP_ROOT, '..', 'terraform', 'terraform.tfvars');
+  }
+
+  /**
+   * Resolve the S3 bucket name backing the optional versioned tfvars store
+   * described in `docs/docs/guides/s3-tfvars.md`. Returns `null` when no S3
+   * backend is configured, which callers treat as "local mode" — read/write
+   * {@link getTfvarsPath} directly instead.
+   *
+   * Resolution order (mirrors the `--bucket` fallback chain in
+   * `scripts/tfvars-sync.ts` and the `Makefile` targets it generates):
+   *  1. `GSD_TFVARS_BUCKET` env var — wins when set.
+   *  2. The nearest `.gsd/tfvars-bucket` marker file, found by walking up
+   *     from `process.cwd()` toward the filesystem root — written by
+   *     `setup.sh`'s S3 bootstrap or `init-parent.ts bootstrap --s3-tfvars`.
+   *     Matches `findBucketMarker()` in `scripts/tfvars-sync.ts` so the CLI
+   *     and the app agree on which marker file wins regardless of the
+   *     directory the app happens to be launched from.
+   *  3. `null` — no backend configured.
+   */
+  getTfvarsBucket(): string | null {
+    const envOverride = process.env['GSD_TFVARS_BUCKET'];
+    if (envOverride) return envOverride;
+
+    const markerPath = this.findTfvarsBucketMarker(process.cwd());
+    if (!markerPath) return null;
+
+    try {
+      const contents = readFileSync(markerPath, 'utf-8').trim();
+      return contents.length > 0 ? contents : null;
+    } catch (err) {
+      logger.warn('Could not read .gsd/tfvars-bucket marker file', { err, path: markerPath });
+      return null;
+    }
+  }
+
+  /**
+   * Walk up from `startDir` toward the filesystem root looking for a
+   * `.gsd/tfvars-bucket` marker file, one directory at a time. Mirrors
+   * `findBucketMarker()` in `scripts/tfvars-sync.ts` so both the CLI and the
+   * app resolve to the same marker file. Returns the marker file's absolute
+   * path once found, or `undefined` if the filesystem root is reached
+   * without a match.
+   */
+  private findTfvarsBucketMarker(startDir: string): string | undefined {
+    let dir = startDir;
+    while (true) {
+      const markerPath = join(dir, '.gsd', 'tfvars-bucket');
+      if (existsSync(markerPath)) return markerPath;
+
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
   }
 
   /**

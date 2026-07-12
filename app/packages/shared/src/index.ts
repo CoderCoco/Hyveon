@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './tfvars.js';
 export * from './cloud.js';
 export * from './sanitize.js';
 export * from './canRun.js';

@@ -17,6 +17,7 @@
     "@aws-sdk/client-ecs": "^3.600.0",
     "@aws-sdk/client-secrets-manager": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@cdktf/hcl2json": "^0.21.0",
     "@grpc/proto-loader": "^0.8.1",
     "@hyveon/cloud-aws": "*",
     "@hyveon/shared": "*",

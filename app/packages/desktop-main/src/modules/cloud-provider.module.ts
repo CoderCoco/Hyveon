@@ -28,6 +28,22 @@ export interface CloudBindings {
 }
 
 /**
+ * Resolves the `{ bucket, region }` config the AWS `RemoteFileStore`'s
+ * `getConfig` callback needs to target the tfvars bucket: the bucket comes
+ * from `ConfigService.getTfvarsBucket()` (falling back to `''` — an empty
+ * bucket name — when tfvars sync isn't configured, so `AwsRemoteFileStore`
+ * surfaces its own "bucket not configured" error rather than this factory
+ * silently defaulting somewhere), and the region from `getRegion()`.
+ * Exported as a standalone function (rather than inlined in
+ * {@link CLOUD_BINDINGS}) so a unit test can exercise the resolution logic
+ * directly without constructing an `@aws-sdk/client-s3`-backed store, which
+ * `@hyveon/desktop-main` tests aren't permitted to import.
+ */
+export function resolveTfvarsFileStoreConfig(config: ConfigService): { bucket: string; region: string } {
+  return { bucket: config.getTfvarsBucket() ?? '', region: config.getRegion() };
+}
+
+/**
  * Registry of per-cloud bindings, keyed by `ActiveCloud` (or any future cloud
  * string). Today only `'aws'` is populated; adding a new cloud provider
  * package means adding an entry here rather than touching the module's
@@ -38,7 +54,7 @@ export const CLOUD_BINDINGS: Record<string, CloudBindings> = {
   aws: {
     cloudProvider: (config) => createAwsCloudProvider(config),
     secretsStore: (config) => new AwsSecretsStore(() => config.getRegion()),
-    remoteFileStore: () => new AwsRemoteFileStore(),
+    remoteFileStore: (config) => new AwsRemoteFileStore(() => resolveTfvarsFileStoreConfig(config)),
     discordReceiver: () => new AwsDiscordEventReceiver(),
   },
 };

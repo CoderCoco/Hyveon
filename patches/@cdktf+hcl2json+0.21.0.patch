@@ -1,0 +1,13 @@
+diff --git a/node_modules/@cdktf/hcl2json/wasm/bridge_wasm_exec.js b/node_modules/@cdktf/hcl2json/wasm/bridge_wasm_exec.js
+index 743a6b8..7f1edc0 100644
+--- a/node_modules/@cdktf/hcl2json/wasm/bridge_wasm_exec.js
++++ b/node_modules/@cdktf/hcl2json/wasm/bridge_wasm_exec.js
+@@ -11,7 +11,7 @@ globalThis.fs = require("fs");
+ globalThis.TextEncoder = require("util").TextEncoder;
+ globalThis.TextDecoder = require("util").TextDecoder;
+ 
+-globalThis.performance ??= require("performance");
++globalThis.performance ??= require("perf_hooks").performance;
+ 
+ // Node >= 19 has a crypto function object, lower node versions need this polyfill
+ if (!globalThis.crypto) {
