@@ -38,7 +38,7 @@ function makeEcs(): EcsService {
 function makeTfvars(): TfvarsService {
   return {
     invalidateCache: vi.fn(),
-  } as unknown as TfvarsService;
+  } as Partial<TfvarsService> as TfvarsService;
 }
 
 /**
