@@ -161,7 +161,7 @@ describe('TfvarsService', () => {
   });
 
   describe('getRawHcl', () => {
-    it('should return the raw HCL text without a versionId in local mode', async () => {
+    it('should return the raw HCL text without an etag in local mode', async () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue(FIXTURE_TFVARS);
 
@@ -169,10 +169,10 @@ describe('TfvarsService', () => {
       const result = await service.getRawHcl();
 
       expect(result.hcl).toBe(FIXTURE_TFVARS);
-      expect(result.versionId).toBeUndefined();
+      expect(result.etag).toBeUndefined();
     });
 
-    it('should return the raw HCL text plus the RemoteFileStore etag as versionId in s3 mode', async () => {
+    it('should return the raw HCL text plus the RemoteFileStore etag in s3 mode', async () => {
       remoteFileStore.get.mockResolvedValue({
         body: new TextEncoder().encode(FIXTURE_TFVARS),
         etag: 'etag-1',
@@ -182,7 +182,7 @@ describe('TfvarsService', () => {
       const result = await service.getRawHcl();
 
       expect(result.hcl).toBe(FIXTURE_TFVARS);
-      expect(result.versionId).toBe('etag-1');
+      expect(result.etag).toBe('etag-1');
     });
 
     it('should reject when the tfvars source is unreadable, unlike getGameServers', async () => {

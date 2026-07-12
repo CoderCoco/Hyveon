@@ -67,6 +67,17 @@ export class TfvarsService {
   private cache: CachedGameServers | null = null;
 
   /**
+   * Monotonically incremented by {@link invalidateCache}. `getGameServers()`
+   * snapshots this value before starting a fetch and only commits the result
+   * to `this.cache` if the counter is unchanged when the fetch resolves —
+   * this stops a late-resolving fetch that was already in flight when
+   * `invalidateCache()` was called from resurrecting a stale, pre-invalidation
+   * parse with a fresh `cachedAt` (which would otherwise serve stale data for
+   * a full TTL window despite the explicit invalidation).
+   */
+  private cacheGeneration = 0;
+
+  /**
    * `remoteFileStore` is typed against the cloud-agnostic `RemoteFileStore`
    * contract (not a concrete AWS class) so this service depends only on the
    * interface; `@Inject(REMOTE_FILE_STORE)` tells Nest which concrete
@@ -95,6 +106,7 @@ export class TfvarsService {
    */
   invalidateCache(): void {
     this.cache = null;
+    this.cacheGeneration += 1;
   }
 
   /**
@@ -118,30 +130,40 @@ export class TfvarsService {
 
     logger.debug('tfvars cache miss — loading terraform.tfvars', {});
 
+    const generation = this.cacheGeneration;
+
     try {
       const { hcl } = await this.fetchRawTfvars();
       const value = this.parseGameServers(await this.parseHclContents(hcl));
-      this.cache = { value, cachedAt: this.now(), failed: false };
+      if (generation === this.cacheGeneration) {
+        this.cache = { value, cachedAt: this.now(), failed: false };
+      }
       logger.info('Loaded terraform.tfvars game_servers', { count: value.length });
       return value;
     } catch (err) {
       logger.error('Failed to load terraform.tfvars game_servers — returning empty list', { err });
-      this.cache = { value: [], cachedAt: this.now(), failed: true };
+      if (generation === this.cacheGeneration) {
+        this.cache = { value: [], cachedAt: this.now(), failed: true };
+      }
       return [];
     }
   }
 
   /**
    * Returns the raw, unparsed `terraform.tfvars` HCL text plus a source
-   * version marker: in S3 mode, the `RemoteFileStore.get()` etag (as
-   * `versionId`); in local mode, `versionId` is omitted since the local
-   * filesystem has no equivalent versioning concept. Unlike
-   * {@link getGameServers}, this bypasses the in-memory cache and rejects
-   * (rather than swallowing) a missing file/object — callers that need the
-   * raw text (e.g. an editor) want to know immediately if the source is
-   * unreadable rather than silently getting stale/empty data.
+   * integrity marker: in S3 mode, the `RemoteFileStore.get()` etag (as
+   * `etag`) — the same value `RemoteFileStore.put()` expects as its
+   * `ifMatch` guard, so callers can round-trip a conditional write; in local
+   * mode, `etag` is omitted since the local filesystem has no equivalent
+   * concept. This is distinct from `RemoteFileStore.listVersions()`'s
+   * `versionId`, which identifies a specific S3 object version rather than
+   * an etag — the two are not comparable. Unlike {@link getGameServers},
+   * this bypasses the in-memory cache and rejects (rather than swallowing) a
+   * missing file/object — callers that need the raw text (e.g. an editor)
+   * want to know immediately if the source is unreadable rather than
+   * silently getting stale/empty data.
    */
-  async getRawHcl(): Promise<{ hcl: string; versionId?: string }> {
+  async getRawHcl(): Promise<{ hcl: string; etag?: string }> {
     return this.fetchRawTfvars();
   }
 
@@ -153,7 +175,7 @@ export class TfvarsService {
    * Shared by {@link getGameServers} (which catches and swallows the error)
    * and {@link getRawHcl} (which lets it propagate).
    */
-  private async fetchRawTfvars(): Promise<{ hcl: string; versionId?: string }> {
+  private async fetchRawTfvars(): Promise<{ hcl: string; etag?: string }> {
     const bucket = this.config.getTfvarsBucket();
     const path = this.config.getTfvarsPath();
 
@@ -163,7 +185,7 @@ export class TfvarsService {
       if (!obj) {
         throw new Error(`tfvars object "${key}" not found in S3 bucket "${bucket}".`);
       }
-      return { hcl: new TextDecoder().decode(obj.body), versionId: obj.etag };
+      return { hcl: new TextDecoder().decode(obj.body), etag: obj.etag };
     }
 
     if (!existsSync(path)) {
