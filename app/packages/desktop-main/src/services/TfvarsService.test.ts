@@ -81,11 +81,26 @@ const EXPECTED_GAME_SERVERS = [
 function makeRemoteFileStore(): RemoteFileStore & {
   get: ReturnType<typeof vi.fn>;
 } {
-  return {
+  const store: Partial<RemoteFileStore> = {
     get: vi.fn(),
     put: vi.fn(),
     listVersions: vi.fn(),
-  } as unknown as RemoteFileStore & { get: ReturnType<typeof vi.fn> };
+  };
+  return store as RemoteFileStore & { get: ReturnType<typeof vi.fn> };
+}
+
+/**
+ * Test-only subclass exposing a directly-controllable `now()` mock, so tests
+ * can simulate TTL expiry without real timers. Avoids reaching into
+ * `TfvarsService`'s protected `now()` via an `as unknown as { now }` cast.
+ */
+class TestableTfvarsService extends TfvarsService {
+  /** Mock backing `now()`; call `nowMock.mockReturnValue(...)` to control the clock. */
+  readonly nowMock = vi.fn<[], number>(() => Date.now());
+
+  protected override now(): number {
+    return this.nowMock();
+  }
 }
 
 /**
@@ -248,9 +263,8 @@ describe('TfvarsService', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue('this is not { valid hcl @@@');
 
-      const service = new TfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
-      const nowSpy = vi.spyOn(service as unknown as { now: () => number }, 'now');
-      nowSpy.mockReturnValue(1_000_000);
+      const service = new TestableTfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
+      service.nowMock.mockReturnValue(1_000_000);
 
       await expect(service.getGameServers()).resolves.toEqual([]);
       expect(mockRead).toHaveBeenCalledTimes(1);
@@ -258,7 +272,7 @@ describe('TfvarsService', () => {
       // Fix the underlying source, but stay within the TTL — the negatively
       // cached failure should still be served, not a fresh (now-valid) read.
       mockRead.mockReturnValue(FIXTURE_TFVARS);
-      nowSpy.mockReturnValue(1_010_000); // 10s later, well within a 30s TTL
+      service.nowMock.mockReturnValue(1_010_000); // 10s later, well within a 30s TTL
       await expect(service.getGameServers()).resolves.toEqual([]);
       expect(mockRead).toHaveBeenCalledTimes(1);
     });
@@ -267,14 +281,13 @@ describe('TfvarsService', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue('this is not { valid hcl @@@');
 
-      const service = new TfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
-      const nowSpy = vi.spyOn(service as unknown as { now: () => number }, 'now');
-      nowSpy.mockReturnValue(1_000_000);
+      const service = new TestableTfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
+      service.nowMock.mockReturnValue(1_000_000);
 
       await expect(service.getGameServers()).resolves.toEqual([]);
 
       mockRead.mockReturnValue(FIXTURE_TFVARS);
-      nowSpy.mockReturnValue(1_000_000 + 30001); // just past the 30s TTL
+      service.nowMock.mockReturnValue(1_000_000 + 30001); // just past the 30s TTL
       const result = await service.getGameServers();
 
       expect(result).toEqual(EXPECTED_GAME_SERVERS);
@@ -296,12 +309,11 @@ describe('TfvarsService', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue(FIXTURE_TFVARS);
 
-      const service = new TfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
-      const nowSpy = vi.spyOn(service as unknown as { now: () => number }, 'now');
-      nowSpy.mockReturnValue(1_000_000);
+      const service = new TestableTfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
+      service.nowMock.mockReturnValue(1_000_000);
 
       const first = await service.getGameServers();
-      nowSpy.mockReturnValue(1_010_000); // 10s later, well within a 30s TTL
+      service.nowMock.mockReturnValue(1_010_000); // 10s later, well within a 30s TTL
       const second = await service.getGameServers();
 
       expect(mockRead).toHaveBeenCalledTimes(1);
@@ -312,12 +324,11 @@ describe('TfvarsService', () => {
       mockExists.mockReturnValue(true);
       mockRead.mockReturnValue(FIXTURE_TFVARS);
 
-      const service = new TfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
-      const nowSpy = vi.spyOn(service as unknown as { now: () => number }, 'now');
-      nowSpy.mockReturnValue(1_000_000);
+      const service = new TestableTfvarsService(makeConfig({ bucket: null, ttlMs: 30000 }), remoteFileStore);
+      service.nowMock.mockReturnValue(1_000_000);
 
       await service.getGameServers();
-      nowSpy.mockReturnValue(1_000_000 + 30001); // just past the 30s TTL
+      service.nowMock.mockReturnValue(1_000_000 + 30001); // just past the 30s TTL
       await service.getGameServers();
 
       expect(mockRead).toHaveBeenCalledTimes(2);
