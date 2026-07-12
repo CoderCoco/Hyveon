@@ -13,7 +13,12 @@ import type {
   CostBreakdown,
   DateRange,
 } from '@hyveon/shared';
-import { CLOUD_BINDINGS, resolveCloudBindings, type CloudBindings } from './cloud-provider.module.js';
+import {
+  CLOUD_BINDINGS,
+  resolveCloudBindings,
+  resolveTfvarsFileStoreConfig,
+  type CloudBindings,
+} from './cloud-provider.module.js';
 import type { ConfigService, ActiveCloud } from '../services/ConfigService.js';
 
 /**
@@ -22,10 +27,11 @@ import type { ConfigService, ActiveCloud } from '../services/ConfigService.js';
  * to be stubbed. The cast lets tests exercise an unregistered/fake cloud
  * value without widening `ActiveCloud` itself.
  */
-function makeConfig(activeCloud: ActiveCloud): ConfigService {
+function makeConfig(activeCloud: ActiveCloud, tfvarsBucket: string | null = 'test-tfvars-bucket'): ConfigService {
   const stub: Partial<ConfigService> = {
     getActiveCloud: () => activeCloud,
     getRegion: () => 'us-east-1',
+    getTfvarsBucket: () => tfvarsBucket,
   };
   return stub as ConfigService;
 }
@@ -131,6 +137,16 @@ describe('resolveCloudBindings', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
       expect(bindings.remoteFileStore(config)).toBeInstanceOf(AwsRemoteFileStore);
+    });
+
+    it('should resolve the tfvars file store bucket from ConfigService.getTfvarsBucket() and region from getRegion()', () => {
+      const config = makeConfig('aws', 'my-tfvars-bucket');
+      expect(resolveTfvarsFileStoreConfig(config)).toEqual({ bucket: 'my-tfvars-bucket', region: 'us-east-1' });
+    });
+
+    it('should fall back to an empty bucket name when getTfvarsBucket() reports no bucket configured', () => {
+      const config = makeConfig('aws', null);
+      expect(resolveTfvarsFileStoreConfig(config)).toEqual({ bucket: '', region: 'us-east-1' });
     });
 
     it('should produce an AwsDiscordEventReceiver from the aws discordReceiver factory', () => {
