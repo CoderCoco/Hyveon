@@ -7,6 +7,7 @@ import type {
   WatchdogConfig,
   ActualCosts,
   DiscordConfigRedacted,
+  GameListEntry,
 } from '@/api.js';
 import {
   ENV_DATA,
@@ -75,7 +76,10 @@ export interface StubOptions {
   /**
    * Game names returned by `GET /api/games` (used by the Logs page).
    * Defaults to the names derived from `statuses`. Override when the Logs
-   * page should expose games that aren't part of `statuses`.
+   * page should expose games that aren't part of `statuses`. Each name is
+   * wrapped into a `GameListEntry` (`declared: true, deployed: true`) before
+   * being sent — the endpoint now emits `{ games: GameListEntry[] }`, not
+   * bare strings — see issue #92.
    */
   games?: string[];
   /**
@@ -135,7 +139,14 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
     return route.fulfill({ json: s });
   });
 
-  await page.route('**/api/games', (route) => route.fulfill({ json: { games } }));
+  await page.route('**/api/games', (route) => {
+    const entries: GameListEntry[] = games.map((name) => ({
+      name,
+      declared: true,
+      deployed: true,
+    }));
+    return route.fulfill({ json: { games: entries } });
+  });
 
   await page.route('**/api/costs/estimate', (route) => route.fulfill({ json: costs }));
 
