@@ -15,9 +15,11 @@
   },
   "devDependencies": {
     "electron-builder": "^25.0.0",
-    "electron-vite": "^5.0.0"
+    "electron-vite": "^5.0.0",
+    "patch-package": "^8.0.1"
   },
   "scripts": {
+    "postinstall": "patch-package",
     "app:dev": "npm run dev            -w game-server-manager",
     "app:build": "npm run build          -w game-server-manager",
     "app:start": "npm run start          -w game-server-manager",
