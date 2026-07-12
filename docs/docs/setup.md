@@ -193,7 +193,15 @@ Both scripts are idempotent — safe to re-run at any time. They:
    tfvars S3 bucket (`terraform/bootstrap/`), controlled by the
    `GSD_TFVARS_BACKEND` environment variable:
    - `GSD_TFVARS_BACKEND=s3` — bootstraps the bucket non-interactively.
-   - `GSD_TFVARS_BACKEND=local` — skips it entirely, no AWS/Terraform calls.
+   - `GSD_TFVARS_BACKEND=local` — skips this automatic step, no AWS/Terraform
+     calls from `setup.sh` itself. **This does not make the bucket optional**:
+     the root module's `data "aws_s3_bucket" "tfvars"` (`terraform/main.tf`)
+     reads it unconditionally, regardless of `GSD_TFVARS_BACKEND`, so you must
+     still create a `{project_name}-tfvars` bucket yourself (see
+     [Bootstrap the tfvars bucket](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+     below) before the root `terraform plan`/`apply` will succeed. `local`
+     only means you won't use the `tfvars-sync` CLI to keep `terraform.tfvars`
+     itself in sync with S3.
    - Unset, interactive shell (a TTY) — prompts
      `Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]`;
      anything other than `y`/`Y`/`yes`/`YES` falls back to `local`.
@@ -222,12 +230,59 @@ Both scripts are idempotent — safe to re-run at any time. They:
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
 
+### tfvars storage: local vs S3
+
+`terraform.tfvars` can live purely as a local file — the default, and all
+you need for a single operator on a single machine, with no `tfvars-sync`
+commands to run. Switch to the optional **S3 backend** once any of these
+apply: more than one person (or a CI job) needs to run `terraform
+plan`/`apply`, you want version history/recoverability for tfvars edits
+independent of git, you want `terraform apply` to refuse to run against a
+stale local copy, or you want the desktop app's remote tfvars editing
+(`RemoteTfvarsStore`'s pull/push/diff/lock flow) to be able to read and write
+`terraform.tfvars` without SSH/file-share access to whichever machine last
+ran `terraform apply`. If none of that applies to you, stay on `local` and
+skip ahead to [step 4](#4-configure-your-servers) once you've completed the
+[one-time bucket bootstrap](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+below — `local` mode skips the day-to-day S3 sync workflow, **not** the
+bucket itself: the root module reads it unconditionally, so it must exist
+before the first `terraform apply` no matter which mode you choose.
+
+Which mode `setup.sh` sets up is controlled by the `GSD_TFVARS_BACKEND`
+environment variable (see step 4 above):
+
+- `GSD_TFVARS_BACKEND=s3` — bootstraps the tfvars bucket non-interactively
+  (the steps below) and leaves a `.gsd/tfvars-bucket` marker so later
+  `make`/CLI tooling knows it's in S3 mode.
+- `GSD_TFVARS_BACKEND=local` — skips `setup.sh`'s automatic bucket bootstrap
+  and the `tfvars-sync` day-to-day workflow; `terraform.tfvars` stays a plain
+  local file you edit and `terraform apply` directly. The bucket itself is
+  **not** skipped: it still must exist (see
+  [Bootstrap the tfvars bucket](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+  below) before the root `terraform plan`/`apply` will succeed.
+- Unset — `setup.sh` prompts interactively on a TTY
+  (`Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]`),
+  or silently falls back to `local` in a non-interactive shell (CI).
+
+> **IAM warning:** the S3 backend needs bucket access on top of the core
+> deploy policy. Confirm the `GameServerTfvarsBucket` statement from
+> [step 1](#1-create-and-authorise-an-iam-user) is attached to whatever
+> IAM user/role runs `setup.sh`/`terraform apply`/`terraform/bootstrap`
+> *before* you opt into `GSD_TFVARS_BACKEND=s3` — without it, bootstrapping
+> the bucket and every subsequent `pull`/`push`/`plan`/`apply` against it
+> will fail with an S3 `AccessDenied` error.
+
+For the full day-to-day S3 workflow — the `tfvars-sync` CLI, the generated
+`make tfvars-pull`/`push`/`diff` targets, migrating an existing parent repo
+between `local` and `s3`, and a troubleshooting table — see the dedicated
+[S3 tfvars storage guide](/guides/s3-tfvars). The rest of this section
+covers only the one-time bootstrap step.
+
 ### Bootstrap the tfvars bucket (required before the first `terraform apply`)
 
 `terraform/bootstrap/` is a separate, standalone Terraform module that
 provisions a **second, distinct S3 bucket** whose only job is to hold your
-`terraform.tfvars` (and other per-deployment secrets) outside of source
-control. This is unrelated to the `{project_name}-tf-state` bucket `setup.sh`
+`terraform.tfvars` outside of source control. This is unrelated to the `{project_name}-tf-state` bucket `setup.sh`
 creates for the Terraform backend. The root module's `data "aws_s3_bucket"
 "tfvars"` (in `terraform/main.tf`) reads this bucket, so it **must already
 exist before you run `terraform apply` in the root `terraform/` directory** —
