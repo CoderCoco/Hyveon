@@ -1,4 +1,4 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig, externalizeDepsPlugin, swcPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,19 @@ export default defineConfig({
     // startup or the main process throws ERR_MODULE_NOT_FOUND before any window
     // opens. `@grpc/proto-loader` is therefore a required dependency of
     // `@hyveon/desktop-main` despite appearing unused — do not remove it.
-    plugins: [externalizeDepsPlugin()],
+    //
+    // `swcPlugin()` swaps electron-vite's default esbuild transform for SWC
+    // for this build only. Nest's DI container relies on TypeScript's
+    // `emitDecoratorMetadata` (enabled in `app/tsconfig.base.json`) to read
+    // constructor parameter types at runtime via `reflect-metadata`. esbuild
+    // does not implement `emitDecoratorMetadata` — it strips decorators
+    // without emitting the `design:paramtypes` metadata, so every
+    // `@Injectable()`/`@Controller()` constructor loses its parameter types
+    // and Nest can't resolve providers, crashing the main process at
+    // bootstrap. SWC's decorator transform does emit that metadata, so it's
+    // used here in place of esbuild. The renderer and preload builds don't
+    // use Nest DI and stay on the default esbuild transform.
+    plugins: [externalizeDepsPlugin(), swcPlugin()],
     build: {
       rollupOptions: {
         input: r('app/packages/desktop-main/src/electron-entry.ts'),

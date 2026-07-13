@@ -23,6 +23,14 @@ export class LogsController implements OnModuleInit {
    * dispatcher — it does **not** call `ipcMain.handle`, so `ipcRenderer.invoke`
    * would otherwise hang. This hook bridges the gap.
    *
+   * `logs.stream` bridges itself here rather than through the generic
+   * `registerIpcMainBridges` helper (`../ipc-main-bridge.js`) because its
+   * handler needs to mint a `streamId` and push follow-up chunk/end messages
+   * over side channels derived from it — see `SELF_BRIDGED_PATTERNS` in
+   * `ipc-main-bridge.ts`, which excludes `logs.stream` for that reason. Every
+   * other `@MessagePattern` channel in this app is bridged generically by
+   * that helper instead of being hand-wired like this.
+   *
    * Only runs inside a real Electron main process. In plain-Node runtimes
    * (integration test server, Docker, CI) `process.versions.electron` is
    * undefined and importing `electron` would throw — either MODULE_NOT_FOUND

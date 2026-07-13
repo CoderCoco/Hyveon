@@ -6,7 +6,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * vi.mock() factory functions run (vi.mock calls are hoisted to the top of the
  * compiled output, above regular const/let declarations).
  */
-const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock, mockApp, createLoggerMock } = vi.hoisted(() => {
+const {
+  ElectronIPCTransportMock,
+  fakeApp,
+  createMicroserviceMock,
+  applyFixPathMock,
+  mockApp,
+  createLoggerMock,
+  registerIpcMainBridgesMock,
+} = vi.hoisted(() => {
   /** Fake NestJS microservice app returned by `NestFactory.createMicroservice`. */
   const fakeApp = { listen: vi.fn().mockResolvedValue(undefined) };
   /** Spy constructor for ElectronIPCTransport — tracks `new` invocations. */
@@ -19,7 +27,17 @@ const { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathM
   const mockApp = { getPath: vi.fn().mockReturnValue('/fake/userData') };
   /** Spy for `createLogger` — verifies the file logger is initialised before bootstrap. */
   const createLoggerMock = vi.fn();
-  return { ElectronIPCTransportMock, fakeApp, createMicroserviceMock, applyFixPathMock, mockApp, createLoggerMock };
+  /** Spy for `registerIpcMainBridges` — verifies it fires once after `app.listen()`. */
+  const registerIpcMainBridgesMock = vi.fn().mockResolvedValue(undefined);
+  return {
+    ElectronIPCTransportMock,
+    fakeApp,
+    createMicroserviceMock,
+    applyFixPathMock,
+    mockApp,
+    createLoggerMock,
+    registerIpcMainBridgesMock,
+  };
 });
 
 vi.mock('electron', () => ({
@@ -32,6 +50,17 @@ vi.mock('./logger.js', () => ({
 
 vi.mock('nestjs-electron-ipc-transport', () => ({
   ElectronIPCTransport: ElectronIPCTransportMock,
+}));
+
+/**
+ * Stub the IPC bridge module so `main.ts` gets a spy-able
+ * `BridgedElectronIPCTransport` constructor (reusing the same mock as
+ * `ElectronIPCTransport` above) plus a `registerIpcMainBridges` spy, without
+ * pulling in the real Electron `ipcMain` bridging logic.
+ */
+vi.mock('./ipc-main-bridge.js', () => ({
+  BridgedElectronIPCTransport: ElectronIPCTransportMock,
+  registerIpcMainBridges: registerIpcMainBridgesMock,
 }));
 
 vi.mock('@nestjs/core', () => ({
@@ -66,6 +95,7 @@ describe('main bootstrap', () => {
     applyFixPathMock.mockImplementation(() => undefined);
     mockApp.getPath.mockReturnValue('/fake/userData');
     createLoggerMock.mockImplementation(() => undefined);
+    registerIpcMainBridgesMock.mockResolvedValue(undefined);
     // Simulate an Electron main-process environment so the module-level guard passes.
     vi.stubGlobal('process', { ...process, versions: { ...process.versions, electron: '36.0.0' } });
   });
@@ -113,6 +143,25 @@ describe('main bootstrap', () => {
 
     // listen() should have been called on the fake app.
     expect(fakeApp.listen).toHaveBeenCalledOnce();
+  });
+
+  it('should invoke registerIpcMainBridges once with the transport strategy after app.listen()', async () => {
+    vi.resetModules();
+    const { bootstrap } = await import('./main.js');
+    await bootstrap();
+
+    // Flush the event loop so the async bootstrap chain fully resolves.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(registerIpcMainBridgesMock).toHaveBeenCalledOnce();
+    expect(registerIpcMainBridgesMock).toHaveBeenCalledWith(
+      ElectronIPCTransportMock.mock.results[0].value,
+    );
+
+    // registerIpcMainBridges must run after app.listen() resolves, not before.
+    const listenCallOrder = fakeApp.listen.mock.invocationCallOrder[0];
+    const bridgeCallOrder = registerIpcMainBridgesMock.mock.invocationCallOrder[0];
+    expect(listenCallOrder).toBeLessThan(bridgeCallOrder);
   });
 
   it('should call applyFixPath on module initialisation', async () => {

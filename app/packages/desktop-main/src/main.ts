@@ -2,9 +2,9 @@ import 'reflect-metadata';
 import path from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions } from '@nestjs/microservices';
-import { ElectronIPCTransport } from 'nestjs-electron-ipc-transport';
 import { AppModule } from './app.module.js';
 import { applyFixPath } from './fix-path-bootstrap.js';
+import { BridgedElectronIPCTransport, registerIpcMainBridges } from './ipc-main-bridge.js';
 import { createLogger } from './logger.js';
 
 applyFixPath();
@@ -28,11 +28,21 @@ createLogger(path.join(app.getPath('userData'), 'logs'));
  *
  * Called from `electron-entry.ts` after `app.whenReady()` so that
  * `ipcMain` is available before the transport is initialised.
+ *
+ * After `app.listen()` starts the transport (registering its internal
+ * `@MessagePattern` dispatch), {@link registerIpcMainBridges} is invoked once
+ * to bridge each of those patterns onto a real `ipcMain.handle` registration
+ * — without this, `ipcRenderer.invoke` calls from the renderer hang forever
+ * because `ElectronIPCTransport.listen()` never calls `ipcMain.handle` itself
+ * (see #277).
  */
 export async function bootstrap(): Promise<void> {
+  const strategy = new BridgedElectronIPCTransport();
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(AppModule, {
-    strategy: new ElectronIPCTransport(),
+    strategy,
   });
 
   await app.listen();
+
+  await registerIpcMainBridges(strategy);
 }
