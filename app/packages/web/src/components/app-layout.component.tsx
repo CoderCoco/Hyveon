@@ -67,7 +67,7 @@ function NavSections({
         <ul aria-labelledby={`${prefix}-nav-monitoring`} className="space-y-1 list-none">
           {monitoringItems.map((item) => (
             <li key={item.to + item.label}>
-              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+              <NavLink item={item} active={currentPath === item.to || currentPath.startsWith(`${item.to}/`)} onNavigate={onNavigate} />
             </li>
           ))}
         </ul>
@@ -81,7 +81,7 @@ function NavSections({
         <ul aria-labelledby={`${prefix}-nav-configuration`} className="space-y-1 list-none">
           {configItems.map((item) => (
             <li key={item.to + item.label}>
-              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+              <NavLink item={item} active={currentPath === item.to || currentPath.startsWith(`${item.to}/`)} onNavigate={onNavigate} />
             </li>
           ))}
         </ul>
