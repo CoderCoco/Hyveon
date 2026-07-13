@@ -12,6 +12,7 @@ import {
   Bell,
   MessageSquare,
   Settings,
+  Gamepad2,
   RefreshCw,
   Menu,
   X,
@@ -33,6 +34,7 @@ const monitoringItems: NavItem[] = [
 ];
 
 const configItems: NavItem[] = [
+  { to: '/games', icon: Gamepad2, label: 'Games' },
   { to: '/discord', icon: MessageSquare, label: 'Discord' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
