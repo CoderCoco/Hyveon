@@ -34,7 +34,7 @@ output "game_names" {
 }
 
 output "applied_game_servers" {
-  description = "Full per-game game_servers configuration as last applied by Terraform (drift detection: compare field-by-field against the currently declared game_servers config)"
+  description = "Full per-game game_servers configuration as last applied by Terraform (drift detection: compare field-by-field against the currently declared game_servers config; only present in state after the next terraform apply)"
   value       = module.cloud[0].applied_game_servers
   sensitive   = true
 }
