@@ -74,14 +74,19 @@ export interface StubOptions {
    */
   discord?: DiscordConfigRedacted;
   /**
-   * Game names returned by `GET /api/games` (used by the Logs page).
-   * Defaults to the names derived from `statuses`. Override when the Logs
-   * page should expose games that aren't part of `statuses`. Each name is
-   * wrapped into a `GameListEntry` (`declared: true, deployed: true`) before
-   * being sent — the endpoint now emits `{ games: GameListEntry[] }`, not
-   * bare strings — see issue #92.
+   * Entries returned by `GET /api/games` (used by the Logs page and the
+   * read-only Games section of the Settings page). Defaults to the names
+   * derived from `statuses`, each wrapped into a `GameListEntry` with
+   * `declared: true, deployed: true` and no `config`.
+   *
+   * Each element may be either a bare game name (shorthand for the default
+   * `declared`/`deployed` wrapping above) or a full `GameListEntry` object,
+   * so a spec can mix declared-only, deployed-only, and fully-declared
+   * entries — including a `config` payload — in a single stub. See issue
+   * #92 for the `{ games: GameListEntry[] }` response shape and issue #93
+   * for the Games settings section that reads `config`.
    */
-  games?: string[];
+  games?: (string | GameListEntry)[];
   /**
    * Initial log lines surfaced via `window.gsd.logs.get(game)` (used by the
    * Logs page). Maps game name → seeded lines. Games not present in the map
@@ -140,11 +145,9 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
   });
 
   await page.route('**/api/games', (route) => {
-    const entries: GameListEntry[] = games.map((name) => ({
-      name,
-      declared: true,
-      deployed: true,
-    }));
+    const entries: GameListEntry[] = games.map((g) =>
+      typeof g === 'string' ? { name: g, declared: true, deployed: true } : g,
+    );
     return route.fulfill({ json: { games: entries } });
   });
 
