@@ -39,7 +39,7 @@ function makeConfig(outputs: Partial<TfOutputs> | null = DEFAULT_OUTPUTS): Confi
   return {
     invalidateCache: vi.fn(),
     getTfOutputs: vi.fn().mockReturnValue(outputs),
-  } as unknown as ConfigService;
+  } as Partial<ConfigService> as ConfigService;
 }
 
 /** Build a TfvarsService stub with `invalidateCache` and `getGameServers` pre-wired. */
