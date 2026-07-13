@@ -7,18 +7,22 @@
  * issues a real `GetObjectCommand` against the mocked S3 client — mirroring
  * `AwsRemoteFileStore.test.ts`'s use of `mockClient(S3Client)`.
  *
- * This spec lives in `packages/cloud-aws` (rather than alongside
- * `TfvarsService` in `packages/desktop-main`) because the ESLint
- * `no-restricted-imports` rule only allows direct `@aws-sdk/*` imports within
+ * This spec imports `@aws-sdk/client-s3` directly (only for `mockClient` /
+ * `GetObjectCommand`, never in production code) even though the ESLint
+ * `no-restricted-imports` rule normally confines `@aws-sdk/*` imports to
  * `packages/cloud-aws/**` and `packages/lambda/**` — see `eslint.config.js`.
+ * `AwsRemoteFileStore` itself is pulled in through the `@hyveon/cloud-aws`
+ * package entry point rather than a relative path into another package's
+ * `src` tree.
  */
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- test-only: exercises the real AwsRemoteFileStore against a mocked S3Client (see file header).
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { AwsRemoteFileStore } from './AwsRemoteFileStore.js';
-import { TfvarsService } from '../../desktop-main/src/services/TfvarsService.js';
-import type { ConfigService } from '../../desktop-main/src/services/ConfigService.js';
+import { AwsRemoteFileStore } from '@hyveon/cloud-aws';
+import { TfvarsService } from './TfvarsService.js';
+import type { ConfigService } from './ConfigService.js';
 
 /** Typed stand-in for the AWS S3 SDK client, shared across the tests below. */
 const s3Mock = mockClient(S3Client);
