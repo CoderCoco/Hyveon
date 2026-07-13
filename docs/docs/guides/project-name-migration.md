@@ -30,10 +30,14 @@ Renaming `project_name` forces AWS to:
   (`terraform/variables.tf`) flows through the AWS provider's
   `default_tags { tags = var.tags }` block in `terraform/main.tf` onto
   everything the stack manages.
-- **Break Cost Explorer's per-value tag activation** — AWS Billing activates
-  cost allocation tags by `(key, value)` pair, not just by key. A new
-  `Project` value needs its own fresh activation; historical cost data under
-  the old value doesn't carry over automatically.
+- **Show a visible break in Cost Explorer for the `Project` tag** — AWS
+  Billing activates cost allocation tags by *key*, not by `(key, value)`
+  pair, so an already-activated `Project` key picks up the new value
+  automatically (after AWS's usual ingestion lag) with no re-activation
+  step required. What doesn't carry over is the cost *data*: historical
+  spend recorded under the old value doesn't merge with the new value's
+  data, so any Cost Explorer report grouped by `Project` shows a visible
+  break on the day of the migration.
 
 Work through the checklist below in order.
 
@@ -89,6 +93,58 @@ turns into an accidental duplicate/orphaned stack.
 
 :::
 
+:::caution The tfvars bucket is also derived from `project_name`
+
+Separately from the backend above, `terraform/main.tf`'s
+`data "aws_s3_bucket" "tfvars"` resolves an **unconditional**, required data
+source:
+
+```hcl
+data "aws_s3_bucket" "tfvars" {
+  bucket = coalesce(var.tfvars_bucket_name, "${var.project_name}-tfvars")
+}
+```
+
+`tfvars_bucket_name` defaults to `null`, so unless you set it explicitly the
+lookup falls back to `"${var.project_name}-tfvars"` — the **new** project
+name's bucket, not the one `terraform/bootstrap/` actually created your
+tfvars store under. Because this is a data source (not a resource), Terraform
+can't paper over a missing bucket the way `apply` can for a resource: **step
+1's `terraform plan` fails outright** with a "couldn't find resource"/no
+such bucket error the moment `project_name` changes and no matching bucket
+exists yet.
+
+Worse, if you run `./setup.sh` again after changing `project_name` (e.g. with
+`GSD_TFVARS_BACKEND=s3`), its `bootstrap_tfvars_backend` step derives the
+bucket name the same way (off the *new* `project_name`) and will happily
+`terraform apply` the `terraform/bootstrap/` module to create a brand-new,
+**empty** `{new_project_name}-tfvars` bucket — silently, with no error — and
+overwrite `.gsd/tfvars-bucket` to point at it. Your real `terraform.tfvars`
+stays in the old bucket, invisible to anything reading the new marker.
+
+Before running `./setup.sh` (or `terraform plan`/`apply` directly) with the
+new `project_name`, pick one here too:
+
+- **(a) Keep the existing tfvars bucket.** Set
+  `tfvars_bucket_name = "<old-project-name>-tfvars"` in `terraform.tfvars`
+  (see the commented-out example in `terraform.tfvars.example`) so the data
+  source keeps resolving to the bucket `terraform/bootstrap/` already
+  created, regardless of what `project_name` becomes. Leave
+  `.gsd/tfvars-bucket` (if present) pointing at that same bucket name — don't
+  let a `./setup.sh` re-run rewrite it.
+- **(b) Migrate the tfvars bucket too.** Create the new
+  `{new_project_name}-tfvars` bucket (via `terraform/bootstrap/`, or let
+  `./setup.sh`'s bootstrap step do it), then copy the existing
+  `terraform.tfvars` object across — `aws s3 cp
+  s3://<old-project-name>-tfvars/terraform.tfvars
+  s3://<new-project-name>-tfvars/terraform.tfvars` — and update
+  `.gsd/tfvars-bucket` to the new bucket name before running `terraform plan`.
+  Confirm the copied object round-trips (`scripts/tfvars-sync.ts diff`, or a
+  manual `aws s3 cp ... -` and eyeball it) before treating the migration as
+  done.
+
+:::
+
 ## Checklist
 
 ### 1. Review the `terraform plan` output line by line
@@ -111,8 +167,15 @@ Enumerate every resource in the plan into one of two buckets:
   Manager secrets (`${project_name}/discord/bot-token`,
   `${project_name}/discord/public-key`), the DynamoDB table
   (`${project_name}-discord`), IAM roles/policies named after
-  `project_name`, the ECS cluster (`${project_name}-cluster`), and the
-  Lambda functions themselves.
+  `project_name`, the ECS cluster (`${project_name}-cluster`), the
+  Lambda functions themselves, and **`aws_efs_file_system.saves`**
+  (`terraform/aws/main.tf`) — its `creation_token` is
+  `"${var.project_name}-saves"`, which is a `ForceNew` argument on the EFS
+  filesystem, so it drags the mount targets (`aws_efs_mount_target.saves`)
+  and every per-game access point (`aws_efs_access_point.game`) along with
+  it as dependent replacements. See the danger box right after this list —
+  this is the most destructive replacement in the plan, not the DynamoDB
+  table.
 - **Update in place (tags only)** — resources whose name doesn't reference
   `project_name` but that pick up the new `Project` tag value via
   `default_tags`. This includes the game-server CloudWatch log groups
@@ -123,6 +186,42 @@ Enumerate every resource in the plan into one of two buckets:
 Do not apply until you've confirmed the replace-set matches what you expect —
 an unexpected replacement (e.g. the VPC) is a sign `project_name` is
 referenced somewhere you didn't account for.
+
+:::danger The EFS filesystem (`aws_efs_file_system.saves`) is destroyed and recreated empty — this permanently deletes all game save data
+
+Unlike the DynamoDB table (step 4, below), which is at least *repopulatable*
+from tfvars or a config you wrote down first, `aws_efs_file_system.saves` has
+**no equivalent recovery path**. Its `creation_token` is
+`"${var.project_name}-saves"` — a `ForceNew` argument — so any `project_name`
+change forces Terraform to destroy the filesystem and create a brand-new,
+empty one under the new creation token. Every per-game save directory
+(`aws_efs_access_point.game`) and the mount target(s) (`aws_efs_mount_target.saves`)
+are destroyed along with it. **There is no backup, no snapshot, and no
+migration path built into this stack** — once `terraform apply` completes,
+every game's save data on the old filesystem is gone.
+
+Before applying a `project_name` change on a stack with real save data on it,
+do one of:
+
+- **Back up the EFS data first.** Use [AWS Backup](https://docs.aws.amazon.com/efs/latest/ug/awsbackup.html)
+  to take an on-demand backup of the filesystem, or run an
+  [AWS DataSync](https://docs.aws.amazon.com/datasync/latest/userguide/efs-location.html)
+  task (or a plain `rsync`/`tar` from an EC2 instance or Fargate task with the
+  EFS mounted) to copy the save directories out to S3 or another filesystem
+  you control, before running `terraform apply`. Restore into the new
+  filesystem's access points afterwards.
+- **Avoid the replacement entirely.** Either keep `project_name` pinned for
+  this resource (e.g. temporarily hardcode the old creation token instead of
+  interpolating `var.project_name`, apply, then plan the rename separately
+  with a deliberate `terraform state mv` / import once you've verified the
+  token can be changed in place — it can't, today, so this is a bigger
+  change than this runbook covers), or accept the destroy and treat it as a
+  fresh, empty save volume post-migration.
+- At minimum, confirm with whoever operates the stack that save-data loss is
+  acceptable before applying — don't assume it is because the DynamoDB danger
+  box (step 4) was handled.
+
+:::
 
 ### 2. Coordinate downtime for in-flight task definitions
 
@@ -136,7 +235,7 @@ execution role are destroyed and recreated under the new name, and the
 watchdog Lambda's idle-tag bookkeeping (see step 5) resets when the task
 itself is replaced.
 
-### 3. Apply, then re-activate the `Project` cost allocation tag
+### 3. Apply, then confirm the new `Project` value shows up in Cost Explorer
 
 After `terraform apply` completes successfully:
 
@@ -144,13 +243,17 @@ After `terraform apply` completes successfully:
 terraform apply
 ```
 
-Go to **AWS Billing → Cost allocation tags** and activate the new
-`Project = <new-value>` tag (e.g. `Project = hyveon`). Cost allocation tag
-activation is per tag *value*, so the previous value (e.g.
-`Project = game-servers-poc`) stays activated separately, and its historical
-cost data does not merge with the new value's data — expect a visible break
-in any Cost Explorer report grouped by the `Project` tag on the day of the
-migration.
+Cost allocation tag activation is per tag *key*, not per value — if
+`Project` is already an activated cost allocation tag (check **AWS Billing →
+Cost allocation tags**), the new value (e.g. `Project = hyveon`) appears
+there automatically once AWS ingests the retagged resources; there's no
+re-activation step to perform. Only activate `Project` from that page if
+it isn't already listed as active. Either way, allow for AWS's usual
+ingestion lag before the new value shows up, and don't expect historical
+cost data to merge across values — spend recorded under the old value
+(e.g. `Project = game-servers-poc`) stays separate from the new value's
+data, so any Cost Explorer report grouped by the `Project` tag shows a
+visible break on the day of the migration.
 
 ### 4. Verify the Discord Secrets Manager ARNs came back online
 
