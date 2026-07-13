@@ -30,16 +30,20 @@ function formatPorts(entry: GameListEntry): string {
 export function GamesPage() {
   const [games, setGames] = useState<GameListEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
     api
       .games()
       .then(({ games: list }) => {
         if (!cancelled) setGames(list);
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load games.');
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -64,6 +68,10 @@ export function GamesPage() {
         <CardContent>
           {loading ? (
             <div className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">Loading games…</div>
+          ) : error ? (
+            <div className="rounded-[var(--radius-sm)] border border-[var(--color-red)]/40 bg-[var(--color-red)]/10 px-3 py-2 text-sm text-[var(--color-red)]">
+              Failed to load games: {error}
+            </div>
           ) : games.length === 0 ? (
             <div className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">
               No games declared or deployed yet.
