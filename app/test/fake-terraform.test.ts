@@ -169,9 +169,12 @@ describe('fake-terraform.mjs', () => {
       },
     });
 
-    const startedAt = Date.now();
+    // performance.now() is monotonic (unlike Date.now(), which tracks wall-clock
+    // time and can jump backwards under NTP/VM clock adjustments — observed as a
+    // negative elapsedMs under coverage-run parallel worker load).
+    const startedAt = performance.now();
     const { exitCode, stdout } = runFakeTerraform(['apply'], fixturePath);
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = performance.now() - startedAt;
 
     expect(exitCode).toBe(0);
     expect(stdout).toBe('first\nsecond\n');
