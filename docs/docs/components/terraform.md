@@ -131,7 +131,7 @@ id and etag:
 |---|---|---|---|
 | `active_cloud` | `string` | `aws` | Selects which cloud module the root composes. Only `"aws"` is supported in v1 — the variable's `validation` block rejects anything else. |
 | `aws_region` | `string` | `us-east-1` | AWS region for all resources. |
-| `project_name` | `string` | `game-servers` | Prefix for named resources and the Secrets Manager paths. |
+| `project_name` | `string` | `hyveon` | Prefix for named resources and the Secrets Manager paths. |
 | `vpc_cidr` | `string` | `10.0.0.0/16` | Parent CIDR; subnets are /24s within it. |
 | `game_servers` | `map(object)` | — | The single source of truth. Per-game: `image`, `cpu`, `memory`, `ports[]`, `environment[]`, `volumes[]` (`name` + `container_path`), `https`, `connect_message` (optional), `file_seeds[]` (optional). Each `volumes` entry creates its own EFS access point rooted at `/${game}/${name}`. `connect_message` controls the Discord connection hint shown when a server reaches RUNNING; supports `{host}`, `{ip}`, `{port}`, and `{game}` placeholders. See `game_servers[].file_seeds` below. |
 | `hosted_zone_name` | `string` | _(required)_ | Existing Route 53 zone looked up as a data source (e.g. `example.com`). |
