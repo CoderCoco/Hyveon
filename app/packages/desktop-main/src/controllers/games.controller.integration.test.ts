@@ -72,23 +72,25 @@ const EXPECTED_ARK_CONFIG = {
 
 /** Fake `RemoteFileStore` — unused in local mode but required by the constructor. */
 function makeRemoteFileStore(): RemoteFileStore {
-  return {
+  const store: Partial<RemoteFileStore> = {
     get: vi.fn(),
     put: vi.fn(),
     listVersions: vi.fn(),
-  } as unknown as RemoteFileStore;
+  };
+  return store as RemoteFileStore;
 }
 
 /** Builds a `ConfigService` stub exposing just what `TfvarsService`/`GamesController` read. */
 function makeConfig(gameNames: string[]): ConfigService {
   const outputs: Partial<TfOutputs> = { game_names: gameNames };
-  return {
+  const config: Partial<ConfigService> = {
     invalidateCache: vi.fn(),
     getTfOutputs: vi.fn().mockReturnValue(outputs),
     getTfvarsBucket: () => null,
     getTfvarsPath: () => '/repo/terraform/terraform.tfvars',
     readEnvTfvarsCacheTtlMs: () => 30000,
-  } as unknown as ConfigService;
+  };
+  return config as ConfigService;
 }
 
 /** Minimal `EcsService` stub — `listGames()` never calls it, but the constructor requires it. */
