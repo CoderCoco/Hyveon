@@ -195,8 +195,8 @@ describe('IPC bridge delegation', () => {
 
   it('should return the payload resolved by the bridge', async () => {
     const entries = [
-      { name: 'minecraft', declared: true, deployed: true },
-      { name: 'palworld', declared: true, deployed: false },
+      { name: 'minecraft', declared: false, deployed: true },
+      { name: 'palworld', declared: false, deployed: false },
     ];
     gsd.games.list.mockResolvedValueOnce({ games: entries });
     await expect(api.games()).resolves.toEqual({ games: entries });
