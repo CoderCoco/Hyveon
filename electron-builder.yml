@@ -9,6 +9,17 @@ directories:
 
 files:
   - out/**
+  # @cdktf/hcl2json is deliberately NOT bundled into out/main (see the
+  # `external` entry in electron.vite.config.ts) — its wasm bridge must load
+  # main.wasm.gz relative to its own module file, and its bundled copy breaks
+  # Electron's quit path. Ship the module and its transitive runtime deps
+  # (fs-extra → graceful-fs/jsonfile/universalify) so the packaged main
+  # process can resolve the bare `import '@cdktf/hcl2json'`.
+  - node_modules/@cdktf/hcl2json/**
+  - node_modules/fs-extra/**
+  - node_modules/graceful-fs/**
+  - node_modules/jsonfile/**
+  - node_modules/universalify/**
 
 extraResources:
   - from: terraform/terraform.tfstate
