@@ -173,6 +173,7 @@ When `file_seeds` is non-empty, `efs-seeder.tf` creates a seeder Lambda for the 
 | `ecs_cluster_name`, `ecs_cluster_arn` | watchdog + followup Lambda env + the management app. |
 | `efs_file_system_id`, `efs_access_points` | Reference; each task mounts its own AP. |
 | `game_names` | interactions / followup / update-dns / watchdog Lambdas (env var `GAME_NAMES`). |
+| `applied_game_servers` (sensitive) | Management app drift detection — the full per-game `game_servers` configuration object (image, cpu, memory, ports, env, volumes, `file_seeds`, etc.) as last applied by Terraform, for field-level comparison against the currently declared tfvars config. Only present in `terraform.tfstate` after the next `terraform apply`. |
 | `task_definitions` | Ops (`aws ecs run-task --task-definition palworld-server`). |
 | `hosted_zone_id`, `domain_name`, `dns_records` | update-dns / watchdog Lambda env + DNS checks. |
 | `alb_dns_name`, `acm_certificate_arn` | Null if no HTTPS games; public reference otherwise. |

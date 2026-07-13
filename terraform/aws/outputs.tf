@@ -33,6 +33,12 @@ output "game_names" {
   value       = keys(var.game_servers)
 }
 
+output "applied_game_servers" {
+  description = "Full per-game game_servers configuration as last applied by Terraform (drift detection: compare field-by-field against the currently declared game_servers config)"
+  value       = var.game_servers
+  sensitive   = true
+}
+
 output "task_definitions" {
   description = "Map of game name → ECS task definition family name"
   value       = { for game, _ in var.game_servers : game => "${game}-server" }
