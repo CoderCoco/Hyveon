@@ -17,7 +17,7 @@ import {
   CONFIGURED_DISCORD_CONFIG,
   makeActualCosts,
 } from './game-data.js';
-import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 export type {
@@ -27,6 +27,7 @@ export type {
   WatchdogConfig,
   ActualCosts,
   DiscordConfigRedacted,
+  GameListEntry,
 };
 export {
   ENV_DATA,
@@ -45,7 +46,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage } from '../pages/index.js';
+export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -239,6 +240,8 @@ type E2EFixtures = {
   logs: LogsPage;
   /** Page object for the `/settings` route. */
   settings: SettingsPage;
+  /** Page object for the `/games` and `/games/:name` routes. */
+  games: GamesPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
 };
@@ -257,6 +260,9 @@ export const test = base.extend<E2EFixtures>({
   },
   settings: async ({ page }, use) => {
     await use(new SettingsPage(page));
+  },
+  games: async ({ page }, use) => {
+    await use(new GamesPage(page));
   },
   layout: async ({ page }, use) => {
     await use(new AppLayout(page));
