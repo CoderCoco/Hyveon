@@ -94,30 +94,34 @@ terraform plan
 Enumerate every resource in the plan into one of two buckets:
 
 - **Replace (destroy + create)** — anything whose `name` embeds
-  `project_name`: CloudWatch log groups (`/ecs/{game}-server`,
-  `/aws/lambda/${project_name}-watchdog`, etc.), the two Discord Secrets
+  `project_name`: the Lambda CloudWatch log groups
+  (`/aws/lambda/${project_name}-watchdog`, etc.), the two Discord Secrets
   Manager secrets (`${project_name}/discord/bot-token`,
   `${project_name}/discord/public-key`), the DynamoDB table
   (`${project_name}-discord`), IAM roles/policies named after
-  `project_name`, and the Lambda functions themselves.
+  `project_name`, the ECS cluster (`${project_name}-cluster`), and the
+  Lambda functions themselves.
 - **Update in place (tags only)** — resources whose name doesn't reference
   `project_name` but that pick up the new `Project` tag value via
-  `default_tags`.
+  `default_tags`. This includes the game-server CloudWatch log groups
+  (`/ecs/${each.key}-server`) — their name is keyed off the game, not
+  `project_name`, so they're only retagged, not replaced — and the VPC
+  (`aws_vpc.main`), whose only `project_name` reference is its `Name` tag.
 
 Do not apply until you've confirmed the replace-set matches what you expect —
-an unexpected replacement (e.g. the ECS cluster or VPC) is a sign
-`project_name` is referenced somewhere you didn't account for.
+an unexpected replacement (e.g. the VPC) is a sign `project_name` is
+referenced somewhere you didn't account for.
 
 ### 2. Coordinate downtime for in-flight task definitions
 
-If any game-server ECS tasks are currently `RUNNING`, their task definitions
-(`{game}-server`, tagged/named off `project_name`-derived resources such as
-log groups and the security group) will be replaced by the apply. Stop
-running tasks (or schedule the apply for a window when no one is playing)
-before applying — an in-place task can lose its CloudWatch log group mid-run
-if the group is deleted and recreated under a different lifecycle, and the
-watchdog Lambda's idle-tag bookkeeping (see step 5) resets when the task
-itself is replaced.
+If any game-server ECS tasks are currently `RUNNING`, the ECS cluster
+(`${project_name}-cluster`) and the `project_name`-named task execution IAM
+role (`${project_name}-task-execution`) that those tasks depend on will be
+replaced by the apply. Stop running tasks (or schedule the apply for a
+window when no one is playing) before applying — a running task is left
+pointing at a cluster and execution role that no longer exist once they're
+destroyed and recreated under the new name, and the watchdog Lambda's
+idle-tag bookkeeping (see step 5) resets when the task itself is replaced.
 
 ### 3. Apply, then re-activate the `Project` cost allocation tag
 
