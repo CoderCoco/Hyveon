@@ -183,6 +183,43 @@ aws secretsmanager describe-secret --secret-id "<new-project-name>/discord/publi
   secrets, hit `GET /api/discord/config` and check `botTokenSet` /
   `publicKeySet` are both `true`.
 
+:::danger The DynamoDB table (`${project_name}-discord`) is wiped, not migrated
+
+Step 1's replace-bucket also includes the DynamoDB table
+`${project_name}-discord`. Unlike the two secrets — which are recreated with
+a placeholder value you then refill — the table is destroyed and recreated
+**empty** under its new name. That table is the *only* copy of:
+
+- The `DiscordConfig` row: the guild allowlist, admin users/roles, and every
+  per-game user/role permission entry read by `canRun()`
+  (`@hyveon/shared/canRun`).
+- Any pending-interaction rows written by `@hyveon/lambda-followup` for
+  in-flight `/server-start` commands (15-minute TTL — likely already expired
+  by the time you're mid-migration, but don't count on it).
+
+Until this row is repopulated, the interactions Lambda's guild-allowlist
+check has nothing to allow — **every** guild is rejected, including the ones
+that worked before the migration. There is no automatic carry-over from the
+old table to the new one.
+
+Before applying, do one of:
+
+- **Record the config first.** Hit `GET /api/discord/config` (or read the
+  guild allowlist / admin / per-game permission fields off the desktop app's
+  Discord page) and write down every value before running `terraform apply`.
+  After the apply, re-enter the same values through the desktop app's
+  Discord page — this repopulates the row via the normal `PUT` path.
+- **Reseed via tfvars.** If the allowlist/admin config is already captured in
+  `terraform.tfvars` (`discord_application_id` plus the relevant base-list
+  variables), `aws_dynamodb_table_item.discord_config_seed` repopulates the
+  row automatically on `apply` — confirm the tfvars values are current
+  *before* applying so the seed matches what was there previously.
+
+Either way, verify the allowlist is live again (`GET /api/discord/config`,
+or `/server-status` from an allowed guild) before considering step 4 done.
+
+:::
+
 ### 5. Confirm the watchdog Lambda still finds tasks by tag
 
 `@hyveon/lambda-watchdog` locates and tags running ECS tasks directly — it
