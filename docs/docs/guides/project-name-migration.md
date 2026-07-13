@@ -118,10 +118,11 @@ If any game-server ECS tasks are currently `RUNNING`, the ECS cluster
 (`${project_name}-cluster`) and the `project_name`-named task execution IAM
 role (`${project_name}-task-execution`) that those tasks depend on will be
 replaced by the apply. Stop running tasks (or schedule the apply for a
-window when no one is playing) before applying — a running task is left
-pointing at a cluster and execution role that no longer exist once they're
-destroyed and recreated under the new name, and the watchdog Lambda's
-idle-tag bookkeeping (see step 5) resets when the task itself is replaced.
+window when no one is playing) before applying — a running task can lose its
+CloudWatch logs and cluster connection because the ECS cluster and task
+execution role are destroyed and recreated under the new name, and the
+watchdog Lambda's idle-tag bookkeeping (see step 5) resets when the task
+itself is replaced.
 
 ### 3. Apply, then re-activate the `Project` cost allocation tag
 
