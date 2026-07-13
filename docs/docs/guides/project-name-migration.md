@@ -8,7 +8,7 @@ sidebar_position: 6
 `terraform/variables.tf`'s `project_name` (mirrored in `terraform/aws/variables.tf`)
 is interpolated into nearly every AWS resource name, IAM identifier, log group
 name, tag value, and Discord Secrets Manager ARN in the stack. Changing it —
-including the one-time rebrand from the old `game-servers-poc` default to
+including the one-time rebrand from the old `game-servers` default to
 `hyveon` tracked in [#213](https://github.com/CoderCoco/Hyveon/issues/213) —
 is **not** a text replacement you can apply blind. This page is the
 operational checklist to follow any time `project_name` changes on an
@@ -51,12 +51,12 @@ and your real infrastructure becomes invisible to future `plan`/`apply` runs
 
 Before running `terraform plan`/`apply` with the new `project_name`, pick one:
 
-- **(a) Keep the existing backend.** Pin `project_name = "game-servers-poc"`
+- **(a) Keep the existing backend.** Pin `project_name = "game-servers"`
   (the old default, prior to the `hyveon` rebrand tracked in
   [#213](https://github.com/CoderCoco/Hyveon/issues/213)) — or whatever value
   your stack was actually applied with — *only* for the backend, e.g. keep
-  passing `-backend-config="bucket=game-servers-poc-tf-state"
-  -backend-config="dynamodb_table=game-servers-poc-tf-locks"` (or whatever
+  passing `-backend-config="bucket=game-servers-tf-state"
+  -backend-config="dynamodb_table=game-servers-tf-locks"` (or whatever
   your current bucket/table names are) to `terraform init` while still
   letting the new `project_name` value flow through everything else via
   `terraform.tfvars`. This is the lower-risk default: the state file doesn't
@@ -139,10 +139,15 @@ migration.
 
 The two Discord secrets are recreated under new ARNs (the name segment
 changes from `{old_project_name}/discord/...` to
-`{new_project_name}/discord/...`). The followup Lambda reads
-`DISCORD_BOT_TOKEN_SECRET_ARN` / `DISCORD_PUBLIC_KEY_SECRET_ARN` from its
-environment at cold start, and the desktop app's `ConfigService` reads the
-equivalent ARNs out of `terraform.tfstate`. Confirm both paths picked up the
+`{new_project_name}/discord/...`). The interactions Lambda reads
+`DISCORD_PUBLIC_KEY_SECRET_ARN` from its environment at cold start (see
+`terraform/aws/interactions.tf`) to verify Discord's Ed25519 signatures. The
+followup Lambda doesn't read either secret ARN from its environment — it has
+no need to, since it never touches the bot token or public key directly.
+The bot token is instead resolved by the desktop app: `ConfigService` reads
+`discord_bot_token_secret_arn` / `discord_public_key_secret_arn` out of
+`terraform.tfstate`, and `DiscordConfigService` uses those ARNs to read/write
+the secrets via Secrets Manager on demand. Confirm both paths picked up the
 new ARNs:
 
 ```bash
@@ -155,9 +160,11 @@ aws secretsmanager describe-secret --secret-id "<new-project-name>/discord/publi
   `terraform.tfvars` before applying) — the new secrets are created with a
   `"placeholder"` value on first apply and won't have real credentials until
   you set them.
-- Invoke `/server-status` in Discord (or hit `/api/discord/status`) once
-  credentials are re-entered to confirm the interactions Lambda can verify
-  signatures against the new public-key secret.
+- Invoke `/server-status` in Discord once credentials are re-entered to
+  confirm the interactions Lambda can verify signatures against the new
+  public-key secret. To confirm the desktop app itself picked up the new
+  secrets, hit `GET /api/discord/config` and check `botTokenSet` /
+  `publicKeySet` are both `true`.
 
 ### 5. Confirm the watchdog Lambda still finds tasks by tag
 
