@@ -43,13 +43,24 @@ The Terraform **backend itself** — the S3 state bucket (`{project_name}-tf-sta
 and the DynamoDB lock table (`{project_name}-tf-locks`) described in
 [the setup guide](/setup) — is named off `project_name`, the same variable
 you're about to change. If you already have a live, applied stack and you
-change `project_name` before touching the backend, `terraform init` will
-silently point at a **different, nonexistent** bucket/table instead of your
-existing state — Terraform will happily initialize a brand-new empty backend,
-and your real infrastructure becomes invisible to future `plan`/`apply` runs
-(effectively orphaned, not migrated).
+change `project_name` before touching the backend, the resulting
+bucket/table names computed from the new value are **different from, and
+nonexistent relative to**, the ones your existing state lives in.
 
-Before running `terraform plan`/`apply` with the new `project_name`, pick one:
+A bare `terraform init` against a bucket/table that doesn't exist yet will
+**error out loudly** rather than silently standing up an empty backend — the
+S3 backend never auto-creates its bucket or lock table. The silent-orphan
+risk instead comes from **`./setup.sh`** (or just its bootstrap step): it
+derives `{project_name}-tf-state`/`{project_name}-tf-locks` from whatever
+`project_name` is currently set to and idempotently creates them if missing,
+then runs `terraform init` against that new backend. Re-running `./setup.sh`
+after changing `project_name` on an already-provisioned stack will therefore
+happily create a brand-new empty bucket/table pair and point Terraform at it
+— your real infrastructure's state file is left behind, untouched and
+invisible to future `plan`/`apply` runs (effectively orphaned, not migrated).
+
+Before running `./setup.sh` (or `terraform plan`/`apply` directly) with the
+new `project_name`, pick one:
 
 - **(a) Keep the existing backend.** Pin `project_name = "game-servers"`
   (the old default, prior to the `hyveon` rebrand tracked in
@@ -64,13 +75,14 @@ Before running `terraform plan`/`apply` with the new `project_name`, pick one:
   below.
 - **(b) Deliberately migrate the backend.** If you want the bucket/table
   names themselves to match the new `project_name`, create the new S3
-  bucket + DynamoDB table first (don't let `terraform init` auto-create them
-  against empty state), then run `terraform init -migrate-state` pointing at
-  the new backend config, or manually copy the state object in S3 and the
-  lock table row in DynamoDB before switching the backend block over. Verify
-  `terraform plan` shows **no unexpected creates** for already-existing
-  infrastructure before applying — a full-stack "everything will be created"
-  plan means you're looking at an empty backend, not a migration.
+  bucket + DynamoDB table first (don't let a re-run of `./setup.sh`'s
+  bootstrap step silently create them against empty state), then run
+  `terraform init -migrate-state` pointing at the new backend config, or
+  manually copy the state object in S3 and the lock table row in DynamoDB
+  before switching the backend block over. Verify `terraform plan` shows
+  **no unexpected creates** for already-existing infrastructure before
+  applying — a full-stack "everything will be created" plan means you're
+  looking at an empty backend, not a migration.
 
 Do not skip this — it is the single most common way a `project_name` change
 turns into an accidental duplicate/orphaned stack.
