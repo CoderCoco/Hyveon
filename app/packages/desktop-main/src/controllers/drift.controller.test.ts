@@ -17,7 +17,7 @@ const DEFAULT_REPORT: DriftReport = {
 function makeDrift(report: DriftReport = DEFAULT_REPORT): DriftService {
   return {
     getDrift: vi.fn().mockResolvedValue(report),
-  } as unknown as DriftService;
+  } as Partial<DriftService> as DriftService;
 }
 
 /**
