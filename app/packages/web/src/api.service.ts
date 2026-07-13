@@ -51,6 +51,52 @@ export interface ActualCosts {
   error?: string;
 }
 
+/**
+ * Per-game container configuration, keyed by game name in the
+ * `game_servers` Terraform variable (`terraform/variables.tf`).
+ *
+ * Mirrors `GameServer` in `@hyveon/shared/src/tfvars.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface GameServer {
+  name: string;
+  image: string;
+  cpu: number;
+  memory: number;
+  ports: { container: number; protocol: string }[];
+  environment?: { name: string; value: string }[];
+  volumes: { name: string; container_path: string }[];
+  https?: boolean;
+  connect_message?: string;
+  file_seeds?: { path: string; content?: string; content_base64?: string; mode?: string }[];
+}
+
+/**
+ * Response entry for the merged games list (the `games.list` IPC channel).
+ * Combines the declared view (`terraform.tfvars`, via {@link GameServer})
+ * with the deployed view (`terraform.tfstate`) so callers can tell
+ * "declared but not yet applied" apart from "live" games — see issue #92.
+ *
+ * Mirrors `GameListEntry` in `@hyveon/shared/src/tfvars.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export interface GameListEntry {
+  /**
+   * Game key. Sourced from the tfvars `game_servers` map key when
+   * `declared` is true, otherwise from the tfstate game name.
+   */
+  name: string;
+  /** True when this game has an entry in the tfvars `game_servers` map. */
+  declared: boolean;
+  /** True when this game has a deployed ECS task definition in tfstate. */
+  deployed: boolean;
+  /**
+   * Full tfvars-parsed configuration for this game. Only present when
+   * `declared` is true.
+   */
+  config?: GameServer;
+}
+
 /** Status of the FileBrowser helper task per game, returned by `GET /api/files/:game`. */
 export interface FileMgrStatus {
   game: string;
@@ -136,7 +182,7 @@ function gsd() {
 
 export const api = {
   env: async (): Promise<EnvInfo> => gsd().env.get(),
-  games: async (): Promise<{ games: string[] }> => gsd().games.list(),
+  games: async (): Promise<{ games: GameListEntry[] }> => gsd().games.list(),
   status: async (): Promise<GameStatus[]> => gsd().games.status(),
   statusGame: async (game: string): Promise<GameStatus> => gsd().games.getStatus(game),
   start: async (game: string): Promise<ActionResult> => gsd().games.start(game),

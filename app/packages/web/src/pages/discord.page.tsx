@@ -95,7 +95,9 @@ export function DiscordPage() {
   const [showWizard, setShowWizard] = useState(false);
 
   useEffect(() => {
-    api.games().then((g) => setGames(g.games)).catch(() => undefined);
+    // `api.games()` now resolves `GameListEntry[]` (declared + deployed view,
+    // see issue #92) — the permissions UI only needs the game keys.
+    api.games().then((g) => setGames(g.games.map((entry) => entry.name))).catch(() => undefined);
   }, []);
 
   /** Re-fetch the (redacted) Discord config from the API after mutations. */

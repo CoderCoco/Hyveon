@@ -59,8 +59,15 @@ async function seedBaseMocks(
       Promise.resolve({ region: 'us-east-1', domain: 'example.com', environment: 'dev' }),
     );
     gsd.__test.mock('games.status', () => Promise.resolve(s));
+    // `games.list` resolves `GameListEntry[]`, not bare strings — see issue #92.
     gsd.__test.mock('games.list', () =>
-      Promise.resolve({ games: (s as Array<{ game: string }>).map((x) => x.game) }),
+      Promise.resolve({
+        games: (s as Array<{ game: string }>).map((x) => ({
+          name: x.game,
+          declared: true,
+          deployed: true,
+        })),
+      }),
     );
     gsd.__test.mock('config.get', () =>
       Promise.resolve({

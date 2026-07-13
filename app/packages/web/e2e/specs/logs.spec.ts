@@ -42,8 +42,11 @@ async function setupLogsPage(
       // Silence the background GameStatusProvider poller.
       gsd.__test.mock('games.status', () => Promise.resolve(statuses));
 
-      // Seed the game list for the combobox selector.
-      gsd.__test.mock('games.list', () => Promise.resolve({ games: g }));
+      // Seed the game list for the combobox selector. `games.list` resolves
+      // `GameListEntry[]`, not bare strings — see issue #92.
+      gsd.__test.mock('games.list', () =>
+        Promise.resolve({ games: g.map((name) => ({ name, declared: true, deployed: true })) }),
+      );
 
       // Seed the initial log snapshot for each game.
       gsd.__test.mock('logs.get', ({ game }: { game: string }) =>
@@ -70,13 +73,8 @@ test.describe('logs page', () => {
   });
 
   test.afterEach(async () => {
-    // Clear mocks so stale handlers do not bleed into later tests.
-    await win.evaluate(() => {
-      const gsd = (window as Record<string, unknown>)['gsd'] as {
-        __test: { clearMocks: () => void };
-      };
-      gsd.__test.clearMocks();
-    });
+    // Each test launches its own Electron app in `beforeEach`, so there is no
+    // shared mock registry to clear here — just tear down the app instance.
     await app.close();
   });
 

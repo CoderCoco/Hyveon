@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi } from 'vitest';
+import type { GameServer } from '@hyveon/shared';
 import { GamesHttpController } from './games-http.controller.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 import type { EcsService } from '../services/EcsService.js';
@@ -13,6 +14,18 @@ vi.mock('../logger.js', () => ({
 const DEFAULT_OUTPUTS: Partial<TfOutputs> = {
   game_names: ['minecraft', 'valheim'],
 };
+
+/** Minimal, valid `GameServer` fixture for a single declared game. */
+function buildGameServer(name: string): GameServer {
+  return {
+    name,
+    image: 'example/image:latest',
+    cpu: 1024,
+    memory: 2048,
+    ports: [{ container: 25565, protocol: 'tcp' }],
+    volumes: [{ name: 'saves', container_path: '/data' }],
+  };
+}
 
 /**
  * Build a ConfigService stub. Pass `null` to simulate a pre-apply state
@@ -34,34 +47,49 @@ function makeEcs(): EcsService {
   } as unknown as EcsService;
 }
 
-/** Build a TfvarsService stub with `invalidateCache` pre-wired. */
-function makeTfvars(): TfvarsService {
+/**
+ * Build a TfvarsService stub with `invalidateCache` and `getGameServers`
+ * pre-wired. Defaults to an empty declared list so `listGames` tests that
+ * don't care about the declared view can ignore it.
+ */
+function makeTfvars(declared: GameServer[] = []): TfvarsService {
   return {
     invalidateCache: vi.fn(),
+    getGameServers: vi.fn().mockResolvedValue(declared),
   } as Partial<TfvarsService> as TfvarsService;
 }
 
 describe('GamesHttpController', () => {
   describe('listGames', () => {
-    it('should invalidate the tfstate cache before reading game names', () => {
+    it('should invalidate the tfstate cache before reading game names', async () => {
       const config = makeConfig();
-      new GamesHttpController(config, makeEcs(), makeTfvars()).listGames();
+      await new GamesHttpController(config, makeEcs(), makeTfvars()).listGames();
       expect(config.invalidateCache).toHaveBeenCalledOnce();
     });
 
-    it('should invalidate the TfvarsService cache before reading game names', () => {
+    it('should invalidate the TfvarsService cache before reading game names', async () => {
       const tfvars = makeTfvars();
-      new GamesHttpController(makeConfig(), makeEcs(), tfvars).listGames();
+      await new GamesHttpController(makeConfig(), makeEcs(), tfvars).listGames();
       expect(tfvars.invalidateCache).toHaveBeenCalledOnce();
     });
 
-    it('should return game names from Terraform outputs', () => {
-      const result = new GamesHttpController(makeConfig(), makeEcs(), makeTfvars()).listGames();
-      expect(result).toEqual({ games: ['minecraft', 'valheim'] });
+    it('should return the merged declared/deployed games list', async () => {
+      const valheim = buildGameServer('valheim');
+      const result = await new GamesHttpController(
+        makeConfig(),
+        makeEcs(),
+        makeTfvars([valheim]),
+      ).listGames();
+      expect(result).toEqual({
+        games: [
+          { name: 'valheim', declared: true, deployed: true, config: valheim },
+          { name: 'minecraft', declared: false, deployed: true },
+        ],
+      });
     });
 
-    it('should return an empty games array when Terraform has not been applied yet', () => {
-      const result = new GamesHttpController(makeConfig(null), makeEcs(), makeTfvars()).listGames();
+    it('should return an empty games array when Terraform has not been applied yet and nothing is declared', async () => {
+      const result = await new GamesHttpController(makeConfig(null), makeEcs(), makeTfvars()).listGames();
       expect(result).toEqual({ games: [] });
     });
   });

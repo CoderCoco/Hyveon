@@ -1,7 +1,9 @@
 import { Controller, Get, Param, Post } from '@nestjs/common';
+import type { GameListEntry } from '@hyveon/shared';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
 import { TfvarsService } from '../services/TfvarsService.js';
+import { mergeGameLists } from '../services/mergeGameLists.js';
 
 /**
  * HTTP shim that exposes the game-server operations as plain REST endpoints
@@ -12,8 +14,8 @@ import { TfvarsService } from '../services/TfvarsService.js';
  * handlers instead.
  *
  * Both controllers delegate to the same {@link ConfigService},
- * {@link EcsService}, and {@link TfvarsService} providers — there is no
- * duplicated logic.
+ * {@link EcsService}, {@link TfvarsService}, and {@link mergeGameLists}
+ * providers — there is no duplicated logic.
  */
 @Controller()
 export class GamesHttpController {
@@ -24,17 +26,21 @@ export class GamesHttpController {
   ) {}
 
   /**
-   * Lists game keys from the Terraform `game_servers` map. Invalidates the
-   * tfstate cache and the `TfvarsService` cache first so a fresh
+   * Lists games by merging the declared view (`terraform.tfvars`
+   * `game_servers` map, via {@link TfvarsService}) with the deployed view
+   * (`terraform.tfstate` `game_names` output, via {@link ConfigService}) —
+   * see {@link mergeGameLists}. Invalidates both caches first so a fresh
    * `terraform apply` / tfvars edit shows up without having to restart the
    * server.
    */
   @Get('games')
-  listGames(): { games: string[] } {
+  async listGames(): Promise<{ games: GameListEntry[] }> {
     this.config.invalidateCache();
     this.tfvars.invalidateCache();
     const outputs = this.config.getTfOutputs();
-    return { games: outputs?.game_names ?? [] };
+    const declared = await this.tfvars.getGameServers();
+    const deployed = outputs?.game_names ?? [];
+    return { games: mergeGameLists(declared, deployed) };
   }
 
   /**

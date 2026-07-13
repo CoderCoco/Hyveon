@@ -47,7 +47,9 @@ const SAMPLE_LINES = [
 
 describe('LogsPage', () => {
   beforeEach(() => {
-    apiMock.games.mockResolvedValue({ games: ['minecraft'] });
+    apiMock.games.mockResolvedValue({
+      games: [{ name: 'minecraft', declared: true, deployed: true }],
+    });
     gsdMock.logs.get.mockResolvedValue({ game: 'minecraft', lines: SAMPLE_LINES });
     // Default stream emits nothing and ends immediately — tests assert on the
     // seeded snapshot. Override per-test to drive live chunks through `for await`.

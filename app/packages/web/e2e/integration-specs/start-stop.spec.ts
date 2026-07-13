@@ -18,7 +18,13 @@ test.describe('Start / Stop game server', () => {
     serverMocks: _reset,
   }) => {
     const { games } = await ipc.dispatch(GamesController, 'listGames');
-    expect(games.slice().sort()).toEqual(['minecraft', 'valheim']);
+    // No terraform.tfvars is present in the test environment, so every game
+    // in the merged list is deployed-only (declared: false, deployed: true).
+    expect(games.map((g) => g.name).sort()).toEqual(['minecraft', 'valheim']);
+    games.forEach((g) => {
+      expect(g.declared).toBe(false);
+      expect(g.deployed).toBe(true);
+    });
 
     const statuses = await ipc.dispatch(GamesController, 'listStatus');
     expect(statuses.map((s) => s.game).sort()).toEqual(['minecraft', 'valheim']);

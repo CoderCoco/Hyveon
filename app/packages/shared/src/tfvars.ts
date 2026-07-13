@@ -56,3 +56,27 @@ export interface GameServer {
   connect_message?: string;
   file_seeds?: GameServerFileSeed[];
 }
+
+/**
+ * Response entry for the merged games list (the `games.list` IPC channel /
+ * `/api/games` HTTP route). Combines the declared view (`terraform.tfvars`,
+ * via {@link GameServer}) with the deployed view (`terraform.tfstate`) so
+ * callers can tell "declared but not yet applied" apart from "live" games —
+ * see issue #92.
+ */
+export interface GameListEntry {
+  /**
+   * Game key. Sourced from the tfvars `game_servers` map key when
+   * `declared` is true, otherwise from the tfstate game name.
+   */
+  name: string;
+  /** True when this game has an entry in the tfvars `game_servers` map. */
+  declared: boolean;
+  /** True when this game has a deployed ECS task definition in tfstate. */
+  deployed: boolean;
+  /**
+   * Full tfvars-parsed configuration for this game. Only present when
+   * `declared` is true.
+   */
+  config?: GameServer;
+}
