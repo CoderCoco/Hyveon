@@ -26,17 +26,39 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * Deterministically stringifies a value for order-insensitive comparison,
+ * recursively sorting object keys so that two objects differing only in key
+ * order (e.g. `{container, protocol}` vs `{protocol, container}`, as HCL/JSON
+ * key order isn't guaranteed to be stable) produce identical strings. Arrays
+ * preserve their element order — only object *key* order is canonicalized.
+ */
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalStringify(entry)).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    const entries = keys.map((key) => `${JSON.stringify(key)}:${canonicalStringify((value as Record<string, unknown>)[key])}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
  * The `'ports'` and `'volumes'` fields are HCL lists whose element order can
  * shift between a `terraform.tfvars` edit and the last-applied snapshot (or
  * vice versa) without the *set* of ports/volumes actually changing — e.g. an
  * operator reordering entries in the tfvars file. Comparison for these two
  * fields is therefore order-insensitive: array values are sorted by their
- * JSON representation before the equality check. All other compared fields
- * use `value` as-is (order-sensitive, which is correct for scalars).
+ * canonical (key-order-independent) string representation before the
+ * equality check, so key-order-only differences within each entry (e.g. from
+ * how Terraform serializes JSON) don't falsely trigger drift. All other
+ * compared fields use `value` as-is (order-sensitive, which is correct for
+ * scalars).
  */
 function normalizeForComparison(field: DriftChangedField, value: unknown): unknown {
   if ((field === 'ports' || field === 'volumes') && Array.isArray(value)) {
-    return [...value].map((entry) => JSON.stringify(entry)).sort();
+    return [...value].map((entry) => canonicalStringify(entry)).sort();
   }
   return value;
 }
