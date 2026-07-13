@@ -33,6 +33,14 @@ import { logger } from '../logger.js';
 const mockExists = vi.mocked(existsSync);
 const mockRead = vi.mocked(readFileSync);
 
+// `vi.mock('fs', ...)` above replaces the module for every specifier that
+// resolves to it — including 'node:fs' — so a plain `import { readFileSync }
+// from 'node:fs'` would still return the mock. `vi.importActual` bypasses the
+// mock entirely and gives back the real module, which is what's needed to
+// load the `__fixtures__/*.tfvars` files verbatim from disk below instead of
+// duplicating their contents as inline template literals.
+const { readFileSync: readFixtureFile } = await vi.importActual<typeof import('fs')>('fs');
+
 /** A minimal, valid `terraform.tfvars` fixture defining a single game server. */
 const FIXTURE_TFVARS = `
 aws_region   = "us-east-1"
@@ -74,6 +82,157 @@ const EXPECTED_GAME_SERVERS = [
     volumes: [{ name: 'saves', container_path: '/palworld' }],
     https: false,
     connect_message: 'Connect to {host}:{port}',
+  },
+];
+
+/** A `terraform.tfvars` fixture defining two entries in `game_servers`. */
+const FIXTURE_MULTIPLE_GAMES = `
+game_servers = {
+  palworld = {
+    image  = "thijsvanloef/palworld-server-docker:latest"
+    cpu    = 2048
+    memory = 8192
+    ports = [
+      { container = 8211, protocol = "udp" },
+    ]
+    volumes = [
+      { name = "saves", container_path = "/palworld" },
+    ]
+  }
+  valheim = {
+    image  = "lloesche/valheim-server"
+    cpu    = 1024
+    memory = 4096
+    ports = [
+      { container = 2456, protocol = "udp" },
+    ]
+    volumes = [
+      { name = "saves", container_path = "/config" },
+    ]
+  }
+}
+`;
+
+/** Expected `GameServer[]` produced by parsing `FIXTURE_MULTIPLE_GAMES`. */
+const EXPECTED_MULTIPLE_GAME_SERVERS = [
+  {
+    name: 'palworld',
+    image: 'thijsvanloef/palworld-server-docker:latest',
+    cpu: 2048,
+    memory: 8192,
+    ports: [{ container: 8211, protocol: 'udp' }],
+    volumes: [{ name: 'saves', container_path: '/palworld' }],
+  },
+  {
+    name: 'valheim',
+    image: 'lloesche/valheim-server',
+    cpu: 1024,
+    memory: 4096,
+    ports: [{ container: 2456, protocol: 'udp' }],
+    volumes: [{ name: 'saves', container_path: '/config' }],
+  },
+];
+
+/**
+ * `terraform.tfvars` fixture defining two entries (`minecraft`, `terraria`)
+ * with only the required `GameServer` fields (`image`, `cpu`, `memory`,
+ * `ports`, `volumes`) — every optional field (`environment`, `https`,
+ * `connect_message`, `file_seeds`) is omitted entirely. Read from disk via
+ * the real `fs` (see `readFixtureFile` above) rather than duplicated inline,
+ * so this exercises the actual `__fixtures__/optional-omitted.tfvars` file.
+ */
+const FIXTURE_OMITTED_OPTIONALS = readFixtureFile(
+  new URL('./__fixtures__/optional-omitted.tfvars', import.meta.url),
+  'utf-8',
+);
+
+/** Expected `GameServer[]` produced by parsing `FIXTURE_OMITTED_OPTIONALS`. */
+const EXPECTED_OMITTED_OPTIONALS_GAME_SERVERS = [
+  {
+    name: 'minecraft',
+    image: 'itzg/minecraft-server',
+    cpu: 1024,
+    memory: 2048,
+    ports: [{ container: 25565, protocol: 'tcp' }],
+    volumes: [{ name: 'world', container_path: '/data' }],
+  },
+  {
+    name: 'terraria',
+    image: 'ryshe/terraria',
+    cpu: 512,
+    memory: 1024,
+    ports: [{ container: 7777, protocol: 'tcp' }],
+    volumes: [{ name: 'world', container_path: '/config' }],
+  },
+];
+
+/**
+ * `terraform.tfvars` fixture exercising the harder HCL constructs
+ * `TfvarsService` must tolerate: line comments (`#` and `//`), a block
+ * comment, a heredoc `file_seeds` content string, multiple games, and (on
+ * the `valheim` entry) Terraform expressions — arithmetic, a for-expression,
+ * a ternary, and `format()` calls. Read from disk via the real `fs` (see
+ * `readFixtureFile` above) rather than duplicated inline, so this exercises
+ * the actual `__fixtures__/complex.tfvars` file.
+ */
+const FIXTURE_COMPLEX = readFixtureFile(new URL('./__fixtures__/complex.tfvars', import.meta.url), 'utf-8');
+
+/**
+ * Expected `GameServer[]` produced by parsing `FIXTURE_COMPLEX`.
+ *
+ * `@cdktf/hcl2json` does not evaluate Terraform expressions — it only
+ * converts HCL syntax to JSON. So on the `valheim` entry, fields written as
+ * expressions (`cpu = 1024 * 2`, `ports = [for p in ... ]`,
+ * `https = length(...) > 0 ? true : false`, `connect_message = format(...)`)
+ * come back as the literal, unevaluated `"${...}"` strings verified below —
+ * not the numeric/boolean values a full Terraform evaluation would produce.
+ * The `palworld` entry uses plain literals throughout, so it asserts
+ * fully-typed values as usual.
+ */
+const EXPECTED_COMPLEX_GAME_SERVERS = [
+  {
+    name: 'palworld',
+    image: 'thijsvanloef/palworld-server-docker:latest',
+    cpu: 2048,
+    memory: 8192,
+    ports: [
+      { container: 8211, protocol: 'udp' },
+      { container: 27015, protocol: 'udp' },
+    ],
+    environment: [
+      { name: 'PLAYERS', value: '16' },
+      { name: 'SERVER_NAME', value: 'My Palworld Server' },
+    ],
+    volumes: [
+      { name: 'saves', container_path: '/palworld' },
+      { name: 'mods', container_path: '/palworld/mods' },
+    ],
+    https: false,
+    connect_message: 'Connect to {host}:{port}',
+    file_seeds: [
+      {
+        path: '/palworld/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini',
+        content:
+          '[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(Difficulty=None,DayTimeSpeedRate=1.0,NightTimeSpeedRate=1.0)\n',
+      },
+      {
+        path: '/palworld/Pal/Content/Paks/MyMod.pak',
+        content_base64: 'UEsDBBQAAAAIAAAAIQAAAAAAAAAAAAAAAAAA',
+        mode: '0644',
+      },
+    ],
+  },
+  {
+    name: 'valheim',
+    image: 'lloesche/valheim-server',
+    // Unevaluated Terraform expressions — see the doc comment above.
+    cpu: '${1024 * 2}',
+    memory: '${4096 + 2048}',
+    ports: '${[for p in [2456, 2457, 2458] : { container = p, protocol = "udp" }]}',
+    environment: [{ name: 'SERVER_NAME', value: '${format("%s-valheim", "hyveon")}' }],
+    volumes: [{ name: 'saves', container_path: '/config' }],
+    https: '${length("valheim") > 0 ? true : false}',
+    connect_message: '${format("Connect via %s", "the Discord bot")}',
   },
 ];
 
@@ -291,6 +450,54 @@ describe('TfvarsService', () => {
       const result = await service.getGameServers();
 
       expect(result).toEqual(EXPECTED_GAME_SERVERS);
+    });
+  });
+
+  describe('parsing breadth', () => {
+    it('should parse multiple game_servers entries into a GameServer[] with one element per entry', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_MULTIPLE_GAMES);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+      const result = await service.getGameServers();
+
+      expect(result).toEqual(EXPECTED_MULTIPLE_GAME_SERVERS);
+    });
+
+    it('should parse an entry with every optional field omitted, leaving them undefined rather than throwing', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_OMITTED_OPTIONALS);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+      const result = await service.getGameServers();
+
+      expect(result).toEqual(EXPECTED_OMITTED_OPTIONALS_GAME_SERVERS);
+      for (const entry of result) {
+        expect(entry.environment).toBeUndefined();
+        expect(entry.https).toBeUndefined();
+        expect(entry.connect_message).toBeUndefined();
+        expect(entry.file_seeds).toBeUndefined();
+      }
+    });
+
+    it('should parse the complex fixture covering comments, a heredoc, and both file_seeds variants, and leave the valheim entry\'s Terraform expressions as literal unevaluated strings', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_COMPLEX);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+      const result = await service.getGameServers();
+
+      expect(result).toEqual(EXPECTED_COMPLEX_GAME_SERVERS);
+    });
+
+    it('should return an empty array and log a warning when the tfvars file is completely empty', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue('');
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.getGameServers()).resolves.toEqual([]);
+      expect(logger.warn).toHaveBeenCalled();
     });
   });
 
