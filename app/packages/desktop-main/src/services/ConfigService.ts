@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import type { GameServer } from '@hyveon/shared';
 import { logger } from '../logger.js';
 
 /** Absolute path to the `dist/services/` directory at runtime. */
@@ -39,6 +40,15 @@ export interface TfOutputs {
   discord_public_key_secret_arn: string;
   interactions_invoke_url: string | null;
   discord_interactions_url: string | null;
+  /**
+   * Full per-game `game_servers` configuration as last applied by Terraform
+   * (the `applied_game_servers` sensitive output — see `terraform/aws/outputs.tf`),
+   * keyed by game name. Used for drift detection: field-level comparison
+   * against the currently declared tfvars config (see `@hyveon/shared/drift.ts`).
+   * `null` when the output is absent (e.g. state predates this output, or
+   * `terraform apply` hasn't run since it was added).
+   */
+  applied_game_servers: Record<string, Omit<GameServer, 'name'>> | null;
 }
 
 /**
@@ -165,6 +175,7 @@ export class ConfigService {
         discord_public_key_secret_arn: get('discord_public_key_secret_arn', ''),
         interactions_invoke_url: get('interactions_invoke_url', null),
         discord_interactions_url: get('discord_interactions_url', null),
+        applied_game_servers: get('applied_game_servers', null),
       };
 
       logger.debug('Loaded Terraform outputs', { games: this.tfCache.game_names });

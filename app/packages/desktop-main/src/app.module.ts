@@ -20,7 +20,10 @@ import { EnvController } from './controllers/env.controller.js';
 import { EnvHttpController } from './controllers/env-http.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
+import { DriftController } from './controllers/drift.controller.js';
+import { DriftHttpController } from './controllers/drift-http.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
+import { DriftService } from './services/DriftService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
 
@@ -46,6 +49,8 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     EnvHttpController,
     DiagnosticsController,
     DiagnosticsHttpController,
+    DriftController,
+    DriftHttpController,
   ],
   providers: [
     {
@@ -60,6 +65,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
       },
     },
     DiagnosticsService,
+    DriftService,
     SafeStorageService,
     ElectronStoreService,
   ],
