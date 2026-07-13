@@ -77,6 +77,35 @@ describe('ConfigService', () => {
       expect(outputs!.subnet_ids).toBe('');
       expect(outputs!.alb_dns_name).toBeNull();
       expect(outputs!.efs_access_points).toEqual({});
+      expect(outputs!.applied_game_servers).toBeNull();
+    });
+
+    it('should parse applied_game_servers when the output is present', () => {
+      mockExists.mockReturnValue(true);
+      const appliedGameServers = {
+        minecraft: {
+          image: 'itzg/minecraft-server',
+          cpu: 1024,
+          memory: 2048,
+          ports: [{ container: 25565, protocol: 'tcp' }],
+          volumes: [{ name: 'data', container_path: '/data' }],
+        },
+      };
+      mockRead.mockReturnValue(
+        makeState({
+          applied_game_servers: { value: appliedGameServers },
+        }),
+      );
+
+      const outputs = service.getTfOutputs();
+      expect(outputs!.applied_game_servers).toEqual(appliedGameServers);
+    });
+
+    it('should default applied_game_servers to null when the output is missing', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(makeState({ aws_region: { value: 'us-west-2' } }));
+
+      expect(service.getTfOutputs()!.applied_game_servers).toBeNull();
     });
 
     it('should apply the fallback aws_region when outputs omit it', () => {
