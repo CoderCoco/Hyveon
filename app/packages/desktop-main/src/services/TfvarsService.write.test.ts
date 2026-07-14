@@ -214,6 +214,42 @@ describe('TfvarsService write path', () => {
     });
   });
 
+  describe('addGameServer name validation', () => {
+    it('should reject a name containing HCL metacharacters instead of writing a corrupt file', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_TFVARS);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.addGameServer('terraria } evil = {', NEW_ENTRY_CONFIG)).rejects.toThrow(
+        /not a valid HCL identifier/,
+      );
+      expect(mockWrite).not.toHaveBeenCalled();
+    });
+
+    it('should reject a name containing a newline instead of writing a corrupt file', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_TFVARS);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.addGameServer('terraria\nrogue_key = "x"', NEW_ENTRY_CONFIG)).rejects.toThrow(
+        /not a valid HCL identifier/,
+      );
+      expect(mockWrite).not.toHaveBeenCalled();
+    });
+
+    it('should accept a name containing hyphens and underscores since those are valid bare HCL identifiers', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_TFVARS);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.addGameServer('my-server_2', NEW_ENTRY_CONFIG)).resolves.toBeUndefined();
+      expect(mockWrite).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('concurrent writes (S3 mode)', () => {
     it('should fail the second of two concurrent writes with a clear OptimisticLockError, not silently overwrite the first', async () => {
       // Both writers read the same starting etag...

@@ -98,6 +98,19 @@ function extractEntryValueHcl(entryAssignmentHcl: string): string {
 const DEFAULT_ENTRY_INDENT = '  ';
 
 /**
+ * Matches a bare (unquoted) HCL identifier — the same shape `hclSurgeon.ts`'s
+ * internal lexer (`findTopLevelIdentifier()` / `findEntryInBody()`) requires
+ * for a `game_servers` map key to be recognized at all. `insertGameServerEntry()`
+ * validates new entry names against this pattern *before* splicing them into
+ * the map body: `locateEntry()`'s duplicate check can never match a name
+ * containing characters outside this set (its own key-matching regex is the
+ * same pattern), so an invalid name would otherwise sail past the "already
+ * exists" guard and be written into the HCL verbatim — corrupting the file if
+ * it contains structural characters like `{`, `}`, `=`, or a newline.
+ */
+const HCL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/**
  * Prefixes every non-empty line of `hcl` with `indent`, re-nesting a
  * fragment that `hclEmit.emitGameServerEntry()` always emits anchored at
  * column 0 so it lines up once spliced one level deeper into the
@@ -231,8 +244,9 @@ export class TfvarsService {
    * entry via `hclSurgeon.locateMapBody()` + `hclEmit.emitGameServerEntry()`,
    * and writes the result back via {@link writeTfvars} — see that method's
    * doc for the S3-mode conditional-put / `OptimisticLockError` contract.
-   * Throws {@link HclSurgeonError} if `name` already exists in `game_servers`
-   * or if the `game_servers` map itself can't be located in the source HCL.
+   * Throws {@link HclSurgeonError} if `name` isn't a valid bare HCL
+   * identifier, if `name` already exists in `game_servers`, or if the
+   * `game_servers` map itself can't be located in the source HCL.
    *
    * @param name - The `game_servers` map key to add.
    * @param config - The new entry's fields (everything but `name`, which is
@@ -378,11 +392,21 @@ export class TfvarsService {
    * zero (which would jam the new entry's closing `}` against the map's own
    * `}` when `game_servers` is empty) and never two (which would leave a
    * stray blank line before an existing first entry). Throws
-   * {@link HclSurgeonError} if `name` is already present in `game_servers`
-   * (use {@link updateGameServer} instead) or if the `game_servers` map
-   * can't be located at all in the source HCL.
+   * {@link HclSurgeonError} if `name` isn't a valid bare HCL identifier (see
+   * {@link HCL_IDENTIFIER_PATTERN} — this must be checked *before* the
+   * duplicate-key lookup below, since `locateEntry()` can never find an
+   * existing entry whose key contains characters outside that pattern and
+   * would otherwise let a structurally dangerous name through), if `name` is
+   * already present in `game_servers` (use {@link updateGameServer} instead),
+   * or if the `game_servers` map can't be located at all in the source HCL.
    */
   private insertGameServerEntry(hcl: string, name: string, config: RawGameServerEntry): string {
+    if (!HCL_IDENTIFIER_PATTERN.test(name)) {
+      throw new HclSurgeonError(
+        `Entry name "${name}" is not a valid HCL identifier — must match ${HCL_IDENTIFIER_PATTERN}.`,
+      );
+    }
+
     if (locateEntry(hcl, 'game_servers', name)) {
       throw new HclSurgeonError(`Entry "${name}" already exists in "game_servers" — use updateGameServer() instead.`);
     }
