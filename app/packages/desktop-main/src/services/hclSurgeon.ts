@@ -328,12 +328,28 @@ function findEntryInBody(text: string, bodyStart: number, bodyEnd: number, entry
 }
 
 /**
- * Locates the byte span of `entryKey`'s `key = <value>` assignment inside
- * the top-level `mapVariable = { ... }` object literal in `hcl`. Returns
- * `null` when `mapVariable` isn't found, isn't assigned an object literal,
- * or doesn't contain `entryKey` directly.
+ * Byte span of a top-level `mapVariable = { ... }` object literal's body, as
+ * located by {@link locateMapBody}.
  */
-export function locateEntry(hcl: string, mapVariable: string, entryKey: string): HclEntrySpan | null {
+export interface HclMapBodySpan {
+  /** Index just past the map's opening `{`. */
+  bodyStart: number;
+  /** Index of the map's own closing `}`. */
+  bodyEnd: number;
+}
+
+/**
+ * Locates the byte span of a top-level `mapVariable = { ... }` object
+ * literal's body — `[bodyStart, bodyEnd)`, where `bodyStart` is just after
+ * the opening `{` and `bodyEnd` is the index of the map's own closing `}`.
+ * Unlike {@link locateEntry}, this doesn't require any particular entry key
+ * to already be present — `TfvarsService.addGameServer()` uses it to find
+ * where to splice in a brand-new entry (as the map's first entry, right
+ * after `bodyStart`) even when the map is empty. Returns `null` when
+ * `mapVariable` isn't found at the top level or isn't assigned an object
+ * literal.
+ */
+export function locateMapBody(hcl: string, mapVariable: string): HclMapBodySpan | null {
   const nameStart = findTopLevelIdentifier(hcl, mapVariable);
   if (nameStart === null) return null;
 
@@ -343,7 +359,20 @@ export function locateEntry(hcl: string, mapVariable: string, entryKey: string):
   if (hcl[j] !== '{') return null;
 
   const mapClose = findMatchingClose(hcl, j);
-  return findEntryInBody(hcl, j + 1, mapClose, entryKey);
+  return { bodyStart: j + 1, bodyEnd: mapClose };
+}
+
+/**
+ * Locates the byte span of `entryKey`'s `key = <value>` assignment inside
+ * the top-level `mapVariable = { ... }` object literal in `hcl`. Returns
+ * `null` when `mapVariable` isn't found, isn't assigned an object literal,
+ * or doesn't contain `entryKey` directly.
+ */
+export function locateEntry(hcl: string, mapVariable: string, entryKey: string): HclEntrySpan | null {
+  const mapBody = locateMapBody(hcl, mapVariable);
+  if (!mapBody) return null;
+
+  return findEntryInBody(hcl, mapBody.bodyStart, mapBody.bodyEnd, entryKey);
 }
 
 /**
