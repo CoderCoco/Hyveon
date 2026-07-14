@@ -80,13 +80,15 @@ new `project_name`, pick one:
 - **(b) Deliberately migrate the backend.** If you want the bucket/table
   names themselves to match the new `project_name`, create the new S3
   bucket + DynamoDB table first (don't let a re-run of `./setup.sh`'s
-  bootstrap step silently create them against empty state), then run
-  `terraform init -migrate-state` pointing at the new backend config, or
-  manually copy the state object in S3 and the lock table row in DynamoDB
-  before switching the backend block over. Verify `terraform plan` shows
-  **no unexpected creates** for already-existing infrastructure before
-  applying — a full-stack "everything will be created" plan means you're
-  looking at an empty backend, not a migration.
+  bootstrap step silently create them against empty state), back up the
+  existing state object in S3, then run `terraform init -migrate-state`
+  pointing at the new backend config — let Terraform copy the state over
+  itself rather than manually copying the state object or the lock table
+  row; Terraform manages locking during the migration, and a stray copied
+  lock row can leave the new backend stuck locked. Verify `terraform plan`
+  shows **no unexpected creates** for already-existing infrastructure
+  before applying — a full-stack "everything will be created" plan means
+  you're looking at an empty backend, not a migration.
 
 Do not skip this — it is the single most common way a `project_name` change
 turns into an accidental duplicate/orphaned stack.
@@ -117,10 +119,20 @@ exists yet.
 Worse, if you run `./setup.sh` again after changing `project_name` (e.g. with
 `GSD_TFVARS_BACKEND=s3`), its `bootstrap_tfvars_backend` step derives the
 bucket name the same way (off the *new* `project_name`) and will happily
-`terraform apply` the `terraform/bootstrap/` module to create a brand-new,
-**empty** `{new_project_name}-tfvars` bucket — silently, with no error — and
-overwrite `.gsd/tfvars-bucket` to point at it. Your real `terraform.tfvars`
-stays in the old bucket, invisible to anything reading the new marker.
+`terraform apply` the `terraform/bootstrap/` module to create a brand-new
+`{new_project_name}-tfvars` bucket and overwrite `.gsd/tfvars-bucket` to
+point at it. It then checks whether `terraform/terraform.tfvars` exists
+locally on disk: if it does, and the new bucket doesn't already have an
+object at the `terraform.tfvars` key, it uploads that local file to the new
+bucket. So the new bucket ends up seeded with **whatever
+`terraform/terraform.tfvars` happens to be checked out locally at the moment
+you re-run `./setup.sh`** — which may be stale, may belong to a different
+project entirely, or may not exist at all (in which case the new bucket
+stays empty). Don't assume the "real" tfvars content silently stayed behind
+in the old bucket — **always run `aws s3 cp s3://<bucket>/terraform.tfvars -`
+(or `aws s3api head-object`) against the bucket named in `.gsd/tfvars-bucket`
+to verify what actually landed there** before trusting the rewritten marker
+for any `terraform plan`/`apply`.
 
 Before running `./setup.sh` (or `terraform plan`/`apply` directly) with the
 new `project_name`, pick one here too:
@@ -312,11 +324,17 @@ Before applying, do one of:
   Discord page) and write down every value before running `terraform apply`.
   After the apply, re-enter the same values through the desktop app's
   Discord page — this repopulates the row via the normal `PUT` path.
-- **Reseed via tfvars.** If the allowlist/admin config is already captured in
-  `terraform.tfvars` (`discord_application_id` plus the relevant base-list
-  variables), `aws_dynamodb_table_item.discord_config_seed` repopulates the
-  row automatically on `apply` — confirm the tfvars values are current
-  *before* applying so the seed matches what was there previously.
+- **Reseed via tfvars — partial only.** `aws_dynamodb_table_item.discord_config_seed`
+  only writes `clientId` into the `CONFIG#discord` row (from
+  `discord_application_id`); `allowedGuilds`, `admins`, and `gamePermissions`
+  on that row are always seeded empty. The separate
+  `aws_dynamodb_table_item.discord_base_config` resource does repopulate
+  `base_allowed_guilds` / `base_admin_user_ids` / `base_admin_role_ids` from
+  tfvars into the `BASE#discord` row, which the app merges with the config
+  row. **Per-game permissions (`gamePermissions`) and any pending-interaction
+  rows never round-trip through tfvars** — they're always empty after a
+  migration and must be re-entered manually through the desktop app's
+  Discord page.
 
 Either way, verify the allowlist is live again (`GET /api/discord/config`,
 or `/server-status` from an allowed guild) before considering step 4 done.
@@ -335,9 +353,9 @@ as a tag on each task, and its IAM role/log group names embed
   next scheduled run (`watchdog_interval_minutes`).
 - Start a game server and confirm the watchdog's idle-check tag appears on
   the running task (`aws ecs describe-tasks --tasks <task-arn> --cluster
-  <cluster> --query 'tasks[].tags'`) after one interval, and that the
-  counter increments/resets as expected rather than erroring on a missing
-  role/permission.
+  <cluster> --include TAGS --query 'tasks[].tags'`) after one interval, and
+  that the counter increments/resets as expected rather than erroring on a
+  missing role/permission.
 
 ### 6. Sanity-check Cost Explorer the next day
 
