@@ -168,8 +168,11 @@ bootstrap() {
   fi
 
   # Derive bucket/table names from terraform.tfvars (fall back to defaults).
-  TF_PROJECT=$(grep -E '^project_name\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-  TF_REGION=$(grep -E '^aws_region\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
+  # `|| true` keeps a missing entry from tripping `set -e` (grep exits 1 on no
+  # match), which would otherwise abort the script before the fallback below
+  # can run.
+  TF_PROJECT=$(grep -E '^project_name\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/' || true)
+  TF_REGION=$(grep -E '^aws_region\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/' || true)
   TF_PROJECT="${TF_PROJECT:-hyveon}"
   TF_REGION="${TF_REGION:-us-east-1}"
   TF_STATE_BUCKET="${TF_PROJECT}-tf-state"
