@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Hyveon — Windows setup script (PowerShell equivalent of setup.sh).
+  Hyveon - Windows setup script (PowerShell equivalent of setup.sh).
 
 .DESCRIPTION
   Checks prerequisites (Node.js 20+, Terraform, AWS CLI), installs missing tools
