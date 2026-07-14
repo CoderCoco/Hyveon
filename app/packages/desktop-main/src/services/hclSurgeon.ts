@@ -322,7 +322,7 @@ function findEntryInBody(text: string, bodyStart: number, bodyEnd: number, entry
 
     if (key === entryKey) {
       const priorNewline = Math.max(text.lastIndexOf('\n', keyStart - 1), bodyStart - 1);
-      return { start: priorNewline + 1, end: entryEnd, valueStart, valueEnd };
+      return { start: Math.max(bodyStart, priorNewline + 1), end: entryEnd, valueStart, valueEnd };
     }
 
     i = entryEnd;
