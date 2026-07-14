@@ -234,7 +234,10 @@ function skipValue(text: string, start: number): number {
       i++;
       continue;
     }
-    if (depth === 0 && (ch === ',' || ch === '\n')) return i;
+    if (depth === 0 && ch === ',') return i;
+    if (depth === 0 && ch === '\n') {
+      return i > start && text[i - 1] === '\r' ? i - 1 : i;
+    }
     i++;
   }
   return i;
@@ -318,7 +321,7 @@ function findEntryInBody(text: string, bodyStart: number, bodyEnd: number, entry
     if (text[entryEnd] === ',') entryEnd += 1;
 
     if (key === entryKey) {
-      const priorNewline = text.lastIndexOf('\n', keyStart - 1);
+      const priorNewline = Math.max(text.lastIndexOf('\n', keyStart - 1), bodyStart - 1);
       return { start: priorNewline + 1, end: entryEnd, valueStart, valueEnd };
     }
 
