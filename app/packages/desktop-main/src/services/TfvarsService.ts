@@ -416,7 +416,7 @@ export class TfvarsService {
       throw new HclSurgeonError('Top-level "game_servers" map not found in terraform.tfvars.');
     }
 
-    const entryHcl = indentHclLines(emitGameServerEntry({ name, ...config }), DEFAULT_ENTRY_INDENT).replace(/\n$/, '');
+    const entryHcl = indentHclLines(emitGameServerEntry({ ...config, name }), DEFAULT_ENTRY_INDENT).replace(/\n$/, '');
     const rest = hcl.slice(mapBody.bodyStart);
     const separator = /^[ \t]*\r?\n/.test(rest) ? '' : '\n';
     return hcl.slice(0, mapBody.bodyStart) + '\n' + entryHcl + separator + rest;
@@ -439,7 +439,7 @@ export class TfvarsService {
     const span = locateEntry(hcl, 'game_servers', name);
     const entryIndent = span ? /^[ \t]*/.exec(hcl.slice(span.start))![0] : DEFAULT_ENTRY_INDENT;
     const newValueHcl = indentHclLines(
-      extractEntryValueHcl(emitGameServerEntry({ name, ...config })),
+      extractEntryValueHcl(emitGameServerEntry({ ...config, name })),
       entryIndent,
       /* skipFirstLine */ true,
     );
