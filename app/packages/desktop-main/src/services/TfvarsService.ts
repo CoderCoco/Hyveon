@@ -89,6 +89,34 @@ function extractEntryValueHcl(entryAssignmentHcl: string): string {
 }
 
 /**
+ * Default indentation added when splicing a brand-new `game_servers` entry
+ * into the map body and no sibling entry's own indentation is available to
+ * copy — mirrors `hclEmit.ts`'s private `INDENT` unit (2 spaces) so a fresh
+ * splice matches the file's established convention (see the fixtures under
+ * `__fixtures__/*.tfvars` and `TfvarsService.write.test.ts`'s `FIXTURE_TFVARS`).
+ */
+const DEFAULT_ENTRY_INDENT = '  ';
+
+/**
+ * Prefixes every non-empty line of `hcl` with `indent`, re-nesting a
+ * fragment that `hclEmit.emitGameServerEntry()` always emits anchored at
+ * column 0 so it lines up once spliced one level deeper into the
+ * `game_servers` map body (see issue #96 finding: unindented splices produced
+ * `terraform fmt`-failing output). Empty lines (e.g. the trailing blank left
+ * by splitting a string that ends in `\n`) are left alone so no trailing
+ * whitespace is introduced. When `skipFirstLine` is set, the first line is
+ * left untouched too — used when that line is spliced inline after an
+ * existing `<key> = ` prefix that already sits at the target column, rather
+ * than starting a new line of its own.
+ */
+function indentHclLines(hcl: string, indent: string, skipFirstLine = false): string {
+  return hcl
+    .split('\n')
+    .map((line, i) => (line === '' || (skipFirstLine && i === 0) ? line : `${indent}${line}`))
+    .join('\n');
+}
+
+/**
  * Local-vs-S3 tfvars reader/parser — see the file-level doc comment above for
  * source resolution, parsing, and caching behaviour.
  */
@@ -220,8 +248,11 @@ export class TfvarsService {
    * Replaces an existing `game_servers` entry's value in place (see issue
    * #96). Reads the current raw HCL, replaces `name`'s value via
    * `hclSurgeon.replaceEntry()` with a freshly-serialized
-   * `hclEmit.emitGameServerEntry()` object literal, and writes the result
-   * back via {@link writeTfvars} — see that method's doc for the S3-mode
+   * `hclEmit.emitGameServerEntry()` object literal — reindented to match
+   * `name`'s own line in the source so the replacement's body/closing brace
+   * land at the correct nesting depth rather than `emitGameServerEntry()`'s
+   * native column-0 formatting — and writes the result back via
+   * {@link writeTfvars} — see that method's doc for the S3-mode
    * conditional-put / `OptimisticLockError` contract. Throws
    * {@link HclSurgeonError} if `name` doesn't already exist in `game_servers`.
    *
@@ -231,9 +262,7 @@ export class TfvarsService {
    *   used as the S3-mode conditional-put guard; omit to write unconditionally.
    */
   async updateGameServer(name: string, config: RawGameServerEntry, expectedVersionId?: string): Promise<void> {
-    await this.writeTfvars(expectedVersionId, (hcl) =>
-      replaceEntry(hcl, 'game_servers', name, extractEntryValueHcl(emitGameServerEntry({ name, ...config }))),
-    );
+    await this.writeTfvars(expectedVersionId, (hcl) => this.replaceGameServerEntry(hcl, name, config));
   }
 
   /**
@@ -339,7 +368,16 @@ export class TfvarsService {
    * Splices `name = { ... }` into `hcl`'s top-level `game_servers` map as
    * its first entry, via `hclSurgeon.locateMapBody()` (works even when the
    * map is currently empty, unlike `locateEntry()` which requires the key to
-   * already exist) + `hclEmit.emitGameServerEntry()`. Throws
+   * already exist) + `hclEmit.emitGameServerEntry()`. The emitted block is
+   * reindented one level (via {@link indentHclLines}, using
+   * {@link DEFAULT_ENTRY_INDENT}) since `emitGameServerEntry()` always
+   * formats at column 0 — without this the new entry's key, body, and
+   * closing brace would sit at the wrong depth once nested inside the map.
+   * The separator between the new entry and whatever already follows
+   * `bodyStart` is chosen so exactly one newline separates them — never
+   * zero (which would jam the new entry's closing `}` against the map's own
+   * `}` when `game_servers` is empty) and never two (which would leave a
+   * stray blank line before an existing first entry). Throws
    * {@link HclSurgeonError} if `name` is already present in `game_servers`
    * (use {@link updateGameServer} instead) or if the `game_servers` map
    * can't be located at all in the source HCL.
@@ -354,8 +392,34 @@ export class TfvarsService {
       throw new HclSurgeonError('Top-level "game_servers" map not found in terraform.tfvars.');
     }
 
-    const entryHcl = emitGameServerEntry({ name, ...config });
-    return hcl.slice(0, mapBody.bodyStart) + '\n' + entryHcl + hcl.slice(mapBody.bodyStart);
+    const entryHcl = indentHclLines(emitGameServerEntry({ name, ...config }), DEFAULT_ENTRY_INDENT).replace(/\n$/, '');
+    const rest = hcl.slice(mapBody.bodyStart);
+    const separator = /^[ \t]*\r?\n/.test(rest) ? '' : '\n';
+    return hcl.slice(0, mapBody.bodyStart) + '\n' + entryHcl + separator + rest;
+  }
+
+  /**
+   * Replaces `name`'s value inside `hcl`'s top-level `game_servers` map with
+   * a freshly-serialized `hclEmit.emitGameServerEntry()` object literal,
+   * reindented (via {@link indentHclLines}) to match the indentation of
+   * `name`'s own line in the source — `emitGameServerEntry()` always formats
+   * at column 0, so without this the replacement's body/closing brace would
+   * land at the wrong depth even though its first line (the value's opening
+   * `{`) is spliced inline after the existing `name = ` prefix and needs no
+   * extra indentation of its own. Falls back to {@link DEFAULT_ENTRY_INDENT}
+   * when `name` can't be located — `hclSurgeon.replaceEntry()` below is what
+   * actually throws {@link HclSurgeonError} in that case, so the exact
+   * fallback value here is never observed by callers.
+   */
+  private replaceGameServerEntry(hcl: string, name: string, config: RawGameServerEntry): string {
+    const span = locateEntry(hcl, 'game_servers', name);
+    const entryIndent = span ? /^[ \t]*/.exec(hcl.slice(span.start))![0] : DEFAULT_ENTRY_INDENT;
+    const newValueHcl = indentHclLines(
+      extractEntryValueHcl(emitGameServerEntry({ name, ...config })),
+      entryIndent,
+      /* skipFirstLine */ true,
+    );
+    return replaceEntry(hcl, 'game_servers', name, newValueHcl);
   }
 
   /**
