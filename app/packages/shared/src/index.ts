@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './tfvars.js';
+export * from './gameServerValidator.js';
 export * from './drift.js';
 export * from './cloud.js';
 export * from './sanitize.js';
