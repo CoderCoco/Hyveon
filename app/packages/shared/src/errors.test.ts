@@ -29,6 +29,13 @@ describe('OptimisticLockError', () => {
     expect(error.currentEtag).toBeUndefined();
   });
 
+  it('should derive a default message noting the remote etag is unknown when currentEtag is not supplied', () => {
+    const error = new OptimisticLockError('expected-etag');
+
+    expect(error.message).toContain('expected-etag');
+    expect(error.message).toContain('unknown');
+  });
+
   it('should use a custom message when one is provided', () => {
     const error = new OptimisticLockError('expected-etag', 'current-etag', 'remote moved — refresh');
 
