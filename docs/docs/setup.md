@@ -79,8 +79,8 @@ On the AWS side you need:
       "Effect": "Allow",
       "Action": "iam:*",
       "Resource": [
-        "arn:aws:iam::*:role/game-servers-*",
-        "arn:aws:iam::*:policy/game-servers-*"
+        "arn:aws:iam::*:role/hyveon-*",
+        "arn:aws:iam::*:policy/hyveon-*"
       ]
     },
     {
@@ -115,7 +115,7 @@ On the AWS side you need:
 > but since everything is `{service}:*` there is nothing to maintain.
 
 > **`iam:*` is scoped to project-prefixed ARNs**, not `Resource: *`, to avoid
-> granting `iam:PassRole` on every role in the account. The `game-servers-*`
+> granting `iam:PassRole` on every role in the account. The `hyveon-*`
 > prefix matches the default `project_name`. If you change `project_name` in
 > `terraform.tfvars`, update the two ARN patterns in `GameServerIAM` to match.
 
@@ -223,7 +223,7 @@ Both scripts are idempotent — safe to re-run at any time. They:
    gets versioning, public-access blocking, and AES-256 encryption enabled.
    The script waits for the DynamoDB table to reach `ACTIVE` status before
    continuing. Both names are derived from `project_name` in
-   `terraform.tfvars` (default: `game-servers`). This step requires the
+   `terraform.tfvars` (default: `hyveon`). This step requires the
    `s3:*` permissions in the inline policy above.
 6. Runs `terraform init` inside `terraform/`, passing the bucket and table
    as `-backend-config` flags. If a local `terraform.tfstate` is present
@@ -337,7 +337,7 @@ Open `terraform/terraform.tfvars` in your editor and fill in:
 
 ```hcl
 aws_region       = "us-east-1"
-project_name     = "game-servers"
+project_name     = "hyveon"
 hosted_zone_name = "yourdomain.com"    # must already exist in Route 53
 
 # Watchdog knobs (defaults shown)

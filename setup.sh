@@ -167,10 +167,22 @@ bootstrap() {
     echo "   Created terraform.tfvars from example — edit it with your settings."
   fi
 
-  # Derive bucket/table names from terraform.tfvars (fall back to defaults).
-  TF_PROJECT=$(grep -E '^project_name\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-  TF_REGION=$(grep -E '^aws_region\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-  TF_PROJECT="${TF_PROJECT:-game-servers}"
+  # Derive bucket/table names from terraform.tfvars, falling back to defaults
+  # only when a key is genuinely absent from an otherwise-readable file.
+  # Matching tolerates leading whitespace so indented entries aren't skipped.
+  # An unreadable terraform.tfvars fails loudly here instead of silently
+  # falling back to the defaults (which could bootstrap against the wrong
+  # state bucket/lock table).
+  if [ ! -r terraform.tfvars ]; then
+    echo "❌  terraform.tfvars exists but could not be read (check file permissions)." >&2
+    exit 1
+  fi
+  # `|| true` below only covers grep's "no match" case (exit 1) — the file
+  # readability check above already ruled out read errors, so a non-match
+  # here genuinely means the key is absent and the default should apply.
+  TF_PROJECT=$(grep -E '^[[:space:]]*project_name[[:space:]]*=' terraform.tfvars | head -1 | sed -E 's/.*=[[:space:]]*"(.*)".*/\1/' || true)
+  TF_REGION=$(grep -E '^[[:space:]]*aws_region[[:space:]]*=' terraform.tfvars | head -1 | sed -E 's/.*=[[:space:]]*"(.*)".*/\1/' || true)
+  TF_PROJECT="${TF_PROJECT:-hyveon}"
   TF_REGION="${TF_REGION:-us-east-1}"
   TF_STATE_BUCKET="${TF_PROJECT}-tf-state"
   TF_LOCK_TABLE="${TF_PROJECT}-tf-locks"

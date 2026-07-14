@@ -18,7 +18,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name used for resource naming"
   type        = string
-  default     = "game-servers"
+  default     = "hyveon"
 }
 
 variable "vpc_cidr" {
@@ -177,7 +177,7 @@ variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Project     = "game-servers-poc"
+    Project     = "hyveon"
     Environment = "poc"
     ManagedBy   = "terraform"
   }

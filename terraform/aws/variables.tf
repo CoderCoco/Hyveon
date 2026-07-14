@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name used for resource naming"
   type        = string
-  default     = "game-servers"
+  default     = "hyveon"
 }
 
 variable "vpc_cidr" {

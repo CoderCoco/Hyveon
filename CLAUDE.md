@@ -63,7 +63,7 @@ terraform plan
 terraform apply
 terraform destroy
 
-# Cost allocation: all resources tagged Project=game-servers-poc. Activate the
+# Cost allocation: all resources tagged Project=hyveon. Activate the
 # "Project" tag in AWS Billing → Cost allocation tags for Cost Explorer breakdowns.
 
 # First-time environment bootstrap (installs terraform + aws CLI if missing,

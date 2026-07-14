@@ -85,7 +85,7 @@ and Discord command autocomplete all derive from it.
 
 ```hcl
 aws_region       = "us-east-1"
-project_name     = "game-servers"
+project_name     = "hyveon"
 hosted_zone_name = "yourdomain.com"   # must exist in Route 53
 
 game_servers = {
