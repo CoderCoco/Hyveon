@@ -30,20 +30,37 @@
  * `game_servers` key, or a malformed-HCL parse error are all logged via the
  * shared Winston `logger` and resolve to `[]`, mirroring `ConfigService`'s
  * graceful degradation for polling callers.
+ *
+ * `addGameServer()`, `updateGameServer()`, and `removeGameServer()` (see
+ * issue #96) are the write-side counterpart: they mutate the raw HCL text
+ * directly via `hclSurgeon` (locate/cut/replace, byte-preserving outside the
+ * touched entry) and `hclEmit` (serializing a `GameServer` back to HCL),
+ * rather than going through the lossy `@cdktf/hcl2json` round-trip used for
+ * reads. In S3 mode, the write is a conditional `RemoteFileStore.put()`
+ * guarded by an `ifMatch` etag; a stale etag is translated from the store's
+ * `RemoteFileConflictError` into a `OptimisticLockError` so callers only
+ * ever need to handle one conflict type regardless of cloud provider. Local
+ * mode writes the file directly with no conditional guard.
  */
 import { Inject, Injectable } from '@nestjs/common';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { basename } from 'path';
 import { parse as parseHcl } from '@cdktf/hcl2json';
 import type { GameServer, RemoteFileStore } from '@hyveon/shared';
+import { OptimisticLockError, RemoteFileConflictError } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
+import { HclSurgeonError, cutEntry, locateEntry, locateMapBody, replaceEntry } from './hclSurgeon.js';
+import { emitGameServerEntry } from './hclEmit.js';
 
 /**
  * Raw JSON-decoded shape of a single `game_servers` map entry as produced by
  * `@cdktf/hcl2json`, before the map key is flattened onto it as `name`.
- * Structurally identical to `GameServer` minus the `name` field.
+ * Structurally identical to `GameServer` minus the `name` field. Also doubles
+ * as the write-side "config" parameter shape for {@link TfvarsService.addGameServer}
+ * and {@link TfvarsService.updateGameServer}, since `name` is supplied
+ * separately as the `game_servers` map key in both directions.
  */
 type RawGameServerEntry = Omit<GameServer, 'name'>;
 
@@ -56,6 +73,19 @@ interface CachedGameServers {
   value: GameServer[];
   cachedAt: number;
   failed: boolean;
+}
+
+/**
+ * Extracts just the `{ ... }` object-literal portion of
+ * `hclEmit.emitGameServerEntry()`'s output — dropping the leading
+ * `<name> = ` prefix and the trailing newline — so it can be spliced in as
+ * `hclSurgeon.replaceEntry()`'s `newValueHcl` argument, which replaces only
+ * the value expression; the `<name> = ` prefix already present in the
+ * source HCL is left untouched by `replaceEntry()` itself.
+ */
+function extractEntryValueHcl(entryAssignmentHcl: string): string {
+  const braceStart = entryAssignmentHcl.indexOf('{');
+  return entryAssignmentHcl.slice(braceStart).replace(/\n$/, '');
 }
 
 /**
@@ -168,6 +198,61 @@ export class TfvarsService {
   }
 
   /**
+   * Adds a brand-new entry to the `game_servers` map (see issue #96). Reads
+   * the current raw HCL, splices `name = { ... }` in as the map's first
+   * entry via `hclSurgeon.locateMapBody()` + `hclEmit.emitGameServerEntry()`,
+   * and writes the result back via {@link writeTfvars} — see that method's
+   * doc for the S3-mode conditional-put / `OptimisticLockError` contract.
+   * Throws {@link HclSurgeonError} if `name` already exists in `game_servers`
+   * or if the `game_servers` map itself can't be located in the source HCL.
+   *
+   * @param name - The `game_servers` map key to add.
+   * @param config - The new entry's fields (everything but `name`, which is
+   *   the map key rather than an object attribute).
+   * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
+   *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   */
+  async addGameServer(name: string, config: RawGameServerEntry, expectedVersionId?: string): Promise<void> {
+    await this.writeTfvars(expectedVersionId, (hcl) => this.insertGameServerEntry(hcl, name, config));
+  }
+
+  /**
+   * Replaces an existing `game_servers` entry's value in place (see issue
+   * #96). Reads the current raw HCL, replaces `name`'s value via
+   * `hclSurgeon.replaceEntry()` with a freshly-serialized
+   * `hclEmit.emitGameServerEntry()` object literal, and writes the result
+   * back via {@link writeTfvars} — see that method's doc for the S3-mode
+   * conditional-put / `OptimisticLockError` contract. Throws
+   * {@link HclSurgeonError} if `name` doesn't already exist in `game_servers`.
+   *
+   * @param name - The `game_servers` map key to update.
+   * @param config - The entry's new fields (everything but `name`).
+   * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
+   *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   */
+  async updateGameServer(name: string, config: RawGameServerEntry, expectedVersionId?: string): Promise<void> {
+    await this.writeTfvars(expectedVersionId, (hcl) =>
+      replaceEntry(hcl, 'game_servers', name, extractEntryValueHcl(emitGameServerEntry({ name, ...config }))),
+    );
+  }
+
+  /**
+   * Removes an entry from the `game_servers` map (see issue #96). Reads the
+   * current raw HCL, cuts `name`'s entire `key = value` assignment via
+   * `hclSurgeon.cutEntry()`, and writes the result back via
+   * {@link writeTfvars} — see that method's doc for the S3-mode
+   * conditional-put / `OptimisticLockError` contract. Throws
+   * {@link HclSurgeonError} if `name` doesn't exist in `game_servers`.
+   *
+   * @param name - The `game_servers` map key to remove.
+   * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
+   *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   */
+  async removeGameServer(name: string, expectedVersionId?: string): Promise<void> {
+    await this.writeTfvars(expectedVersionId, (hcl) => cutEntry(hcl, 'game_servers', name));
+  }
+
+  /**
    * Reads the raw tfvars text, preferring the S3 backend
    * (`ConfigService.getTfvarsBucket()`) when configured, otherwise falling
    * back to the local file at `ConfigService.getTfvarsPath()`. Throws a clear
@@ -192,6 +277,85 @@ export class TfvarsService {
       throw new Error(`tfvars file not found at "${path}".`);
     }
     return { hcl: readFileSync(path, 'utf-8') };
+  }
+
+  /**
+   * Shared write path for {@link addGameServer}, {@link updateGameServer},
+   * and {@link removeGameServer}: reads the current raw HCL via
+   * {@link fetchRawTfvars}, applies `mutate` to it, writes the mutated text
+   * back via {@link putRawTfvars} (S3-mode conditional put / local-mode
+   * direct write), and invalidates the in-memory `getGameServers()` cache so
+   * the next read reflects the write. `mutate` running before the write
+   * (rather than concurrently) keeps the S3-mode conditional-put guard
+   * meaningful — `expectedVersionId` is checked against the store's
+   * current etag at write time, so a conflicting write since `fetchRawTfvars`
+   * ran is still caught even though `mutate` itself is synchronous.
+   */
+  private async writeTfvars(expectedVersionId: string | undefined, mutate: (hcl: string) => string): Promise<void> {
+    const { hcl } = await this.fetchRawTfvars();
+    const mutatedHcl = mutate(hcl);
+    await this.putRawTfvars(mutatedHcl, expectedVersionId);
+    this.invalidateCache();
+  }
+
+  /**
+   * Writes `hcl` back to whichever tfvars source is active, mirroring
+   * {@link fetchRawTfvars}'s local-vs-S3 source resolution. In S3 mode,
+   * issues a conditional `RemoteFileStore.put()` — passing `expectedVersionId`
+   * as `ifMatch` when provided — so a write that raced a concurrent change
+   * since the caller's last read is rejected rather than silently
+   * overwriting it; the store's cloud-agnostic `RemoteFileConflictError` is
+   * caught and re-thrown as an {@link OptimisticLockError} (best-effort
+   * populating `currentEtag` from a follow-up `get()`), so every conflict —
+   * regardless of the underlying cloud provider — surfaces to callers
+   * exclusively as `OptimisticLockError`. In local mode the file is written
+   * directly with no conditional guard, since the local filesystem has no
+   * etag/versioning concept to condition on (mirroring
+   * {@link fetchRawTfvars}'s local-mode `etag`-less read).
+   */
+  private async putRawTfvars(hcl: string, expectedVersionId?: string): Promise<void> {
+    const bucket = this.config.getTfvarsBucket();
+    const path = this.config.getTfvarsPath();
+
+    if (bucket) {
+      const key = basename(path);
+      const body = new TextEncoder().encode(hcl);
+      try {
+        await this.remoteFileStore.put(key, body, expectedVersionId ? { ifMatch: expectedVersionId } : undefined);
+      } catch (err) {
+        if (err instanceof RemoteFileConflictError) {
+          const current = await this.remoteFileStore.get(key).catch(() => undefined);
+          throw new OptimisticLockError(expectedVersionId ?? '', current?.etag);
+        }
+        throw err;
+      }
+      return;
+    }
+
+    writeFileSync(path, hcl, 'utf-8');
+  }
+
+  /**
+   * Splices `name = { ... }` into `hcl`'s top-level `game_servers` map as
+   * its first entry, via `hclSurgeon.locateMapBody()` (works even when the
+   * map is currently empty, unlike `locateEntry()` which requires the key to
+   * already exist) + `hclEmit.emitGameServerEntry()`. Throws
+   * {@link HclSurgeonError} if `name` is already present in `game_servers`
+   * (use {@link updateGameServer} instead) or if the `game_servers` map
+   * can't be located at all in the source HCL.
+   */
+  private insertGameServerEntry(hcl: string, name: string, config: RawGameServerEntry): string {
+    if (locateEntry(hcl, 'game_servers', name)) {
+      throw new HclSurgeonError(`Entry "${name}" already exists in "game_servers" — use updateGameServer() instead.`);
+    }
+
+    const mapBody = locateMapBody(hcl, 'game_servers');
+    if (!mapBody) {
+      throw new HclSurgeonError('Top-level "game_servers" map not found in terraform.tfvars.');
+    }
+
+    const entryHcl = emitGameServerEntry({ name, ...config });
+    return hcl.slice(0, mapBody.bodyStart) + '\n' + entryHcl + hcl.slice(mapBody.bodyStart);
   }
 
   /**
