@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Game Server Manager — Windows setup script (PowerShell equivalent of setup.sh).
+  Hyveon — Windows setup script (PowerShell equivalent of setup.sh).
 
 .DESCRIPTION
   Checks prerequisites (Node.js 20+, Terraform, AWS CLI), installs missing tools
@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 $ScriptDir = $PSScriptRoot
 
 Write-Host ""
-Write-Host "  Game Server Manager - Setup"
+Write-Host "  Hyveon - Setup"
 Write-Host "  --------------------------------------"
 Write-Host ""
 
