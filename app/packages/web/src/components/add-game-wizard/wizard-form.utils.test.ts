@@ -111,6 +111,20 @@ describe('validateIdentityStep', () => {
     expect(issues.some((issue) => issue.path === 'connect_message')).toBe(true);
   });
 
+  it('should flag an unknown connect_message placeholder even when cpu/memory/volumes are still unset', () => {
+    // Regression test: on a fresh Identity step, cpu/memory are null and
+    // volumes is empty, so validateGameServer's structural schema parse
+    // fails before it ever reaches its own connect_message check. The
+    // wizard must still catch a bad placeholder here rather than letting
+    // Next stay enabled and only surfacing (or not surfacing) the problem
+    // at Review.
+    const issues = validateIdentityStep(
+      makeValidDraft({ connect_message: 'Connect via {password}', cpu: null, memory: null, volumes: [] }),
+      [],
+    );
+    expect(issues.some((issue) => issue.path === 'connect_message')).toBe(true);
+  });
+
   it('should pass a clean identity step', () => {
     expect(validateIdentityStep(makeValidDraft(), [])).toEqual([]);
   });
