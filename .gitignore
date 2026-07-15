@@ -30,6 +30,9 @@ Thumbs.db
 .claude/worktrees/
 .worktrees/
 
+# Plyflow — developer-local run logs
+.plyflow/
+
 # Playwright artifacts (traces, videos, screenshots) and HTML report.
 app/packages/web/test-results/
 app/packages/web/playwright-report/
