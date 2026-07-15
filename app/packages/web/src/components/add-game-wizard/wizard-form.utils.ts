@@ -144,7 +144,7 @@ function checkName(name: string, existingGames: GameServer[]): GameServerValidat
 /** Converts a {@link WizardDraft} into the plain-object shape {@link validateGameServer} expects for its `proposed` parameter, stripping unset optional fields so they don't trip type checks with empty strings. */
 function toProposedEntry(draft: WizardDraft): Record<string, unknown> {
   return {
-    image: draft.image,
+    image: draft.image.trim(),
     cpu: draft.cpu,
     memory: draft.memory,
     ports: draft.ports.map((port) => ({ container: port.container, protocol: port.protocol })),
@@ -225,7 +225,13 @@ function checkConnectMessagePlaceholders(connectMessage: string): GameServerVali
  * enforces (Fargate cpu/memory pairing, absolute volume/file_seed paths, its
  * own connect_message placeholder check, and port collisions — both within
  * the draft's own `ports` list and against `existingGames`). Returns every
- * issue found, unfiltered by step.
+ * issue found, unfiltered by step, deduped by `path`+`message` — this only
+ * matters because `validateGameServer`'s failure result isn't limited to
+ * structural parse failures: a structurally complete draft can still fail on
+ * a pure business-rule violation, and in that case `validateGameServer`'s own
+ * connect_message placeholder check already ran, so appending our own copy
+ * unconditionally on `!result.success` would otherwise double up identical
+ * issues.
  */
 export function validateWizardDraft(draft: WizardDraft, existingGames: GameServer[]): GameServerValidationIssue[] {
   const issues = [...checkName(draft.name, existingGames), ...checkImage(draft.image)];
@@ -236,12 +242,34 @@ export function validateWizardDraft(draft: WizardDraft, existingGames: GameServe
     issues.push(...result.issues);
     // validateGameServer only runs its own connect_message placeholder check
     // once the full entry parses structurally, so a structural failure here
-    // (e.g. cpu/memory still null) means that check never ran. Run our own
-    // copy so an invalid placeholder is still caught on the Identity step.
+    // (e.g. cpu/memory still null) means that check may never have run. Run
+    // our own copy so an invalid placeholder is still caught on the Identity
+    // step; duplicates against an already-run copy are removed below.
     issues.push(...checkConnectMessagePlaceholders(draft.connect_message));
   }
 
-  return issues;
+  return dedupeIssues(issues);
+}
+
+/**
+ * Removes duplicate issues (same `path` and `message`) while preserving
+ * first-seen order. Needed because {@link validateWizardDraft} can surface
+ * the same `connect_message` placeholder issue twice: once from
+ * `validateGameServer`'s own check (when the structural parse succeeded) and
+ * once from this module's independent {@link checkConnectMessagePlaceholders}
+ * copy (run unconditionally on any failure, structural or not).
+ */
+function dedupeIssues(issues: GameServerValidationIssue[]): GameServerValidationIssue[] {
+  const seen = new Set<string>();
+  const deduped: GameServerValidationIssue[] = [];
+  for (const issue of issues) {
+    const key = `${issue.path} ${issue.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(issue);
+    }
+  }
+  return deduped;
 }
 
 /**
