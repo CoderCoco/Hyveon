@@ -204,6 +204,14 @@ describe('GamesController + TfvarsService integration', () => {
  * seeded with the HCL the write actually produced — proves the mutation is
  * visible in the merged games list end-to-end, not just asserted against the
  * `GameWriteResult` return value in isolation.
+ *
+ * `mockRead`/`mockWrite` are backed by a single mutable `currentHcl` string
+ * per test: `mockWrite` overwrites it on every call and `mockRead` always
+ * returns whatever it currently holds, so `GamesWriteService`'s own
+ * post-write `tfvars.getGameServers()` call (inside `successResult()`) sees
+ * the mutation immediately — matching how the real filesystem behaves —
+ * rather than requiring a manual `mockRead.mockReturnValue(...)` reset after
+ * the fact.
  */
 describe('GamesController + GamesWriteService write-then-list round trip', () => {
   beforeEach(() => {
@@ -211,8 +219,12 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
   });
 
   it('should rewrite the tfvars HCL and show the new game as declared on a subsequent games.list when games.create writes a valid entry', async () => {
+    let currentHcl = TFVARS_DECLARING_ARK;
     mockExists.mockReturnValue(true);
-    mockRead.mockReturnValue(TFVARS_DECLARING_ARK);
+    mockRead.mockImplementation(() => currentHcl);
+    mockWrite.mockImplementation((_path, data) => {
+      currentHcl = data as string;
+    });
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
@@ -223,11 +235,22 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     expect(createResult.ok).toBe(true);
     expect(mockWrite).toHaveBeenCalledTimes(1);
-    const writtenHcl = mockWrite.mock.calls[0]![1] as string;
-    expect(writtenHcl).toContain('minecraft = {');
-
-    // Simulate the write having landed on disk so the next read reflects it.
-    mockRead.mockReturnValue(writtenHcl);
+    expect(currentHcl).toContain('minecraft = {');
+    if (createResult.ok) {
+      expect(createResult.game).toEqual({ name: 'minecraft', ...VALID_MINECRAFT_CONFIG });
+      expect(createResult.games).toHaveLength(2);
+      expect(createResult.games).toEqual(
+        expect.arrayContaining([
+          { name: 'ark', declared: true, deployed: false, config: EXPECTED_ARK_CONFIG },
+          {
+            name: 'minecraft',
+            declared: true,
+            deployed: false,
+            config: { name: 'minecraft', ...VALID_MINECRAFT_CONFIG },
+          },
+        ]),
+      );
+    }
 
     const listResult = await controller.listGames();
 
@@ -246,8 +269,12 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
   });
 
   it("should replace the entry's fields in the emitted HCL and show them updated on a subsequent games.list when games.update writes a valid config", async () => {
+    let currentHcl = TFVARS_DECLARING_ARK;
     mockExists.mockReturnValue(true);
-    mockRead.mockReturnValue(TFVARS_DECLARING_ARK);
+    mockRead.mockImplementation(() => currentHcl);
+    mockWrite.mockImplementation((_path, data) => {
+      currentHcl = data as string;
+    });
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
@@ -258,11 +285,14 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     expect(updateResult.ok).toBe(true);
     expect(mockWrite).toHaveBeenCalledTimes(1);
-    const writtenHcl = mockWrite.mock.calls[0]![1] as string;
-    expect(writtenHcl).toContain('example/ark-server:v2');
-    expect(writtenHcl).not.toContain(EXPECTED_ARK_CONFIG.image);
-
-    mockRead.mockReturnValue(writtenHcl);
+    expect(currentHcl).toContain('example/ark-server:v2');
+    expect(currentHcl).not.toContain(EXPECTED_ARK_CONFIG.image);
+    if (updateResult.ok) {
+      expect(updateResult.game).toEqual({ name: 'ark', ...UPDATED_ARK_CONFIG });
+      expect(updateResult.games).toEqual([
+        { name: 'ark', declared: true, deployed: false, config: { name: 'ark', ...UPDATED_ARK_CONFIG } },
+      ]);
+    }
 
     const listResult = await controller.listGames();
 
@@ -272,8 +302,12 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
   });
 
   it('should remove the entry so it no longer appears on a subsequent games.list when games.delete succeeds', async () => {
+    let currentHcl = TFVARS_DECLARING_ARK;
     mockExists.mockReturnValue(true);
-    mockRead.mockReturnValue(TFVARS_DECLARING_ARK);
+    mockRead.mockImplementation(() => currentHcl);
+    mockWrite.mockImplementation((_path, data) => {
+      currentHcl = data as string;
+    });
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
@@ -284,10 +318,11 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     expect(deleteResult.ok).toBe(true);
     expect(mockWrite).toHaveBeenCalledTimes(1);
-    const writtenHcl = mockWrite.mock.calls[0]![1] as string;
-    expect(writtenHcl).not.toContain('ark = {');
-
-    mockRead.mockReturnValue(writtenHcl);
+    expect(currentHcl).not.toContain('ark = {');
+    if (deleteResult.ok) {
+      expect(deleteResult.game).toBeUndefined();
+      expect(deleteResult.games).toEqual([]);
+    }
 
     const listResult = await controller.listGames();
 
