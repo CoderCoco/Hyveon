@@ -11,6 +11,11 @@ export default defineConfig({
       // works without first running `npm run build -w @hyveon/shared`. Runtime
       // (Nest server + Lambda bundles) still use the built dist/ via the
       // package.json "main" field — this alias only applies inside Vitest.
+      // The subpath alias must come first: alias matching replaces the key
+      // with its target, so '@hyveon/shared' (matched via startsWith) would
+      // otherwise shadow '@hyveon/shared/gameServerValidator' and resolve to
+      // an invalid path.
+      '@hyveon/shared/gameServerValidator': resolve(__dirname, 'packages/shared/src/gameServerValidator.ts'),
       '@hyveon/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
       // Same rationale as @hyveon/shared above — desktop-main imports
       // @hyveon/cloud-aws directly, and CI runs `vitest run` without a prior
