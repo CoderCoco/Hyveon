@@ -32,10 +32,13 @@ Hyveon/
 │           ├── followup/
 │           ├── update-dns/
 │           └── watchdog/
-├── terraform/                           # all AWS infra
-│   ├── main.tf alb.tf route53.tf watchdog.tf interactions.tf followup.tf
-│   ├── discord_store.tf variables.tf outputs.tf
-│   └── terraform.tfvars.example
+├── terraform/                           # root composer: backend/providers + module "cloud"
+│   ├── main.tf variables.tf outputs.tf moved.tf
+│   ├── terraform.tfvars.example
+│   └── aws/                             # all AWS infra (the "cloud" module)
+│       ├── main.tf alb.tf route53.tf watchdog.tf interactions.tf followup.tf
+│       ├── discord_store.tf variables.tf outputs.tf versions.tf
+│       └── discord-domain.tf efs-seeder.tf
 ├── docs/                                # this site
 ├── .github/workflows/                   # lint.yml, test.yml, docusaurus-gh-pages.yml
 ├── Dockerfile docker-compose.yml

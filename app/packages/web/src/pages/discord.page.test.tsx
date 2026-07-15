@@ -38,7 +38,9 @@ describe('DiscordPage', () => {
   beforeEach(() => {
     apiMock.status.mockResolvedValue([]);
     apiMock.costsEstimate.mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 });
-    apiMock.games.mockResolvedValue({ games: ['minecraft'] });
+    apiMock.games.mockResolvedValue({
+      games: [{ name: 'minecraft', declared: true, deployed: true }],
+    });
     apiMock.discordConfig.mockResolvedValue(REDACTED_CONFIG);
     apiMock.discordSaveCredentials.mockResolvedValue(undefined);
     toastMock.success.mockClear();

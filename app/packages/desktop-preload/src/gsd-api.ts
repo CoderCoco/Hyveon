@@ -168,14 +168,108 @@ export interface WatchdogConfigResult {
   config: WatchdogConfig;
 }
 
+/**
+ * Single TCP/UDP port a game server container listens on.
+ *
+ * Mirrors `GameServerPort` in `@hyveon/shared/src/tfvars.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export interface GameServerPort {
+  container: number;
+  protocol: string;
+}
+
+/**
+ * Environment variable injected into the game server container.
+ *
+ * Mirrors `GameServerEnvironmentVariable` in `@hyveon/shared/src/tfvars.ts`
+ * — that file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameServerEnvironmentVariable {
+  name: string;
+  value: string;
+}
+
+/**
+ * EFS-backed volume mount for a game server container.
+ *
+ * Mirrors `GameServerVolume` in `@hyveon/shared/src/tfvars.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface GameServerVolume {
+  name: string;
+  container_path: string;
+}
+
+/**
+ * File seeded into the container filesystem at task start (e.g. server
+ * config or mod files). Exactly one of `content` / `content_base64` is
+ * normally supplied.
+ *
+ * Mirrors `GameServerFileSeed` in `@hyveon/shared/src/tfvars.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameServerFileSeed {
+  path: string;
+  content?: string;
+  content_base64?: string;
+  mode?: string;
+}
+
+/**
+ * Per-game container configuration, keyed by game name in the
+ * `game_servers` Terraform variable (`terraform/variables.tf`).
+ *
+ * Mirrors `GameServer` in `@hyveon/shared/src/tfvars.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface GameServer {
+  name: string;
+  image: string;
+  cpu: number;
+  memory: number;
+  ports: GameServerPort[];
+  environment?: GameServerEnvironmentVariable[];
+  volumes: GameServerVolume[];
+  https?: boolean;
+  connect_message?: string;
+  file_seeds?: GameServerFileSeed[];
+}
+
+/**
+ * Response entry for the merged games list (the `games.list` IPC channel).
+ * Combines the declared view (`terraform.tfvars`, via {@link GameServer})
+ * with the deployed view (`terraform.tfstate`) so callers can tell
+ * "declared but not yet applied" apart from "live" games.
+ *
+ * Mirrors `GameListEntry` in `@hyveon/shared/src/tfvars.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export interface GameListEntry {
+  /**
+   * Game key. Sourced from the tfvars `game_servers` map key when
+   * `declared` is true, otherwise from the tfstate game name.
+   */
+  name: string;
+  /** True when this game has an entry in the tfvars `game_servers` map. */
+  declared: boolean;
+  /** True when this game has a deployed ECS task definition in tfstate. */
+  deployed: boolean;
+  /**
+   * Full tfvars-parsed configuration for this game. Only present when
+   * `declared` is true.
+   */
+  config?: GameServer;
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace sub-interfaces
 // ---------------------------------------------------------------------------
 
 /** Game-server lifecycle: list games, query status, start/stop ECS tasks. */
 export interface GsdGamesApi {
-  /** Lists game keys from Terraform tfstate. */
-  list: () => Promise<{ games: string[] }>;
+  /** Lists games merged from tfvars (declared) and tfstate (deployed). */
+  list: () => Promise<{ games: GameListEntry[] }>;
   /** Returns ECS status for every game in parallel. */
   status: () => Promise<GameStatus[]>;
   /** Returns ECS status for a single game. */

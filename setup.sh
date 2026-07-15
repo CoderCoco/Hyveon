@@ -11,6 +11,11 @@ Usage:
   ./setup.sh              First-time bootstrap (default).
                           Installs prereqs, builds Lambda bundles, creates the
                           S3+DynamoDB Terraform backend, and runs `terraform init`.
+                          Also offers to bootstrap a versioned S3 bucket for
+                          terraform.tfvars (terraform/bootstrap/) — set
+                          GSD_TFVARS_BACKEND=s3 to opt in non-interactively,
+                          or GSD_TFVARS_BACKEND=local to skip. Unset in a
+                          non-interactive shell defaults to local (no-op).
 
   ./setup.sh add-game     Interactive: prompts for image/cpu/memory/ports and
                           prints an HCL snippet to paste into terraform.tfvars
@@ -22,6 +27,77 @@ Usage:
 
   ./setup.sh -h | --help  Show this message.
 EOF
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# tfvars backend selection + S3 bootstrap
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# terraform/bootstrap/ is a separate, standalone Terraform module that
+# provisions a *second*, distinct S3 bucket whose only job is to hold
+# terraform.tfvars outside the operator's parent repo (see
+# docs/docs/setup.md, "Bootstrap the tfvars bucket"). GSD_TFVARS_BACKEND
+# picks how that bucket gets created:
+#   - "local" (default): skip entirely — zero new AWS/Terraform calls. This
+#     preserves today's behaviour for anyone managing tfvars by hand.
+#   - "s3": `terraform apply` the bootstrap module, record the resulting
+#     bucket name in .gsd/tfvars-bucket (parent-repo root, gitignored), and
+#     seed the bucket with the local terraform.tfvars — but only if one
+#     exists locally and the bucket doesn't already have an object at that
+#     key, so re-running never re-uploads.
+# When the env var is unset, an interactive TTY is prompted; a non-TTY
+# session (CI, scripted runs) silently defaults to "local".
+#
+# Expects TF_PROJECT and TF_REGION to already be set by the caller (bootstrap
+# derives them from terraform.tfvars before calling this).
+
+bootstrap_tfvars_backend() {
+  local backend="${GSD_TFVARS_BACKEND:-}"
+
+  if [ -z "$backend" ]; then
+    if [ -t 0 ]; then
+      local reply
+      read -rp "  Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]: " reply
+      case "$reply" in
+        y|Y|yes|YES) backend="s3" ;;
+        *) backend="local" ;;
+      esac
+    else
+      backend="local"
+    fi
+  fi
+
+  if [ "$backend" != "s3" ]; then
+    echo "   tfvars backend: local (skipping S3 bootstrap — no AWS calls)"
+    return 0
+  fi
+
+  echo ""
+  echo "☁️   Bootstrapping tfvars S3 bucket (terraform/bootstrap)..."
+  cd "$SCRIPT_DIR/terraform/bootstrap"
+  terraform init -input=false
+  terraform apply -auto-approve -input=false \
+    -var="project_name=${TF_PROJECT}" \
+    -var="aws_region=${TF_REGION}"
+
+  local bucket
+  bucket=$(terraform output -raw tfvars_bucket_name)
+
+  mkdir -p "$SCRIPT_DIR/.gsd"
+  echo "$bucket" >"$SCRIPT_DIR/.gsd/tfvars-bucket"
+  echo "   Bucket name recorded at .gsd/tfvars-bucket: ${bucket}"
+
+  local tfvars_file="$SCRIPT_DIR/terraform/terraform.tfvars"
+  if [ -f "$tfvars_file" ]; then
+    if aws s3api head-object --bucket "$bucket" --key terraform.tfvars --region "$TF_REGION" >/dev/null 2>&1; then
+      echo "   s3://${bucket}/terraform.tfvars already exists — skipping upload."
+    else
+      echo "   Uploading local terraform.tfvars to s3://${bucket}/terraform.tfvars..."
+      aws s3 cp "$tfvars_file" "s3://${bucket}/terraform.tfvars" --region "$TF_REGION"
+    fi
+  fi
+
+  cd "$SCRIPT_DIR/terraform"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,13 +167,27 @@ bootstrap() {
     echo "   Created terraform.tfvars from example — edit it with your settings."
   fi
 
-  # Derive bucket/table names from terraform.tfvars (fall back to defaults).
-  TF_PROJECT=$(grep -E '^project_name\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-  TF_REGION=$(grep -E '^aws_region\s*=' terraform.tfvars | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-  TF_PROJECT="${TF_PROJECT:-game-servers}"
+  # Derive bucket/table names from terraform.tfvars, falling back to defaults
+  # only when a key is genuinely absent from an otherwise-readable file.
+  # Matching tolerates leading whitespace so indented entries aren't skipped.
+  # An unreadable terraform.tfvars fails loudly here instead of silently
+  # falling back to the defaults (which could bootstrap against the wrong
+  # state bucket/lock table).
+  if [ ! -r terraform.tfvars ]; then
+    echo "❌  terraform.tfvars exists but could not be read (check file permissions)." >&2
+    exit 1
+  fi
+  # `|| true` below only covers grep's "no match" case (exit 1) — the file
+  # readability check above already ruled out read errors, so a non-match
+  # here genuinely means the key is absent and the default should apply.
+  TF_PROJECT=$(grep -E '^[[:space:]]*project_name[[:space:]]*=' terraform.tfvars | head -1 | sed -E 's/.*=[[:space:]]*"(.*)".*/\1/' || true)
+  TF_REGION=$(grep -E '^[[:space:]]*aws_region[[:space:]]*=' terraform.tfvars | head -1 | sed -E 's/.*=[[:space:]]*"(.*)".*/\1/' || true)
+  TF_PROJECT="${TF_PROJECT:-hyveon}"
   TF_REGION="${TF_REGION:-us-east-1}"
   TF_STATE_BUCKET="${TF_PROJECT}-tf-state"
   TF_LOCK_TABLE="${TF_PROJECT}-tf-locks"
+
+  bootstrap_tfvars_backend
 
   echo ""
   echo "☁️   Bootstrapping S3 backend (bucket: ${TF_STATE_BUCKET}, region: ${TF_REGION})..."

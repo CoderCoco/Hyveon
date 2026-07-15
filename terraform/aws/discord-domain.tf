@@ -147,10 +147,3 @@ resource "aws_route53_record" "discord_aaaa" {
     evaluate_target_health = false
   }
 }
-
-# ── Output ────────────────────────────────────────────────────────────────────
-
-output "discord_interactions_url" {
-  description = "Custom domain URL for the Discord interactions endpoint"
-  value       = "https://${local.discord_domain}/"
-}

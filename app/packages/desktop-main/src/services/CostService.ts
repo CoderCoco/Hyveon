@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { AwsCloudProvider, FARGATE_VCPU_PER_HOUR, FARGATE_GB_PER_HOUR } from '@hyveon/cloud-aws';
+import { Inject, Injectable } from '@nestjs/common';
+import { FARGATE_VCPU_PER_HOUR, FARGATE_GB_PER_HOUR } from '@hyveon/cloud-aws';
+import type { CloudProvider } from '@hyveon/shared';
+import { CLOUD_PROVIDER } from '../modules/cloud-provider.tokens.js';
 import { logger } from '../logger.js';
 
 /** Per-game Fargate cost projection derived from its CPU/memory spec. */
@@ -37,7 +39,7 @@ export interface ActualCosts {
  */
 @Injectable()
 export class CostService {
-  constructor(private readonly provider: AwsCloudProvider = new AwsCloudProvider()) {}
+  constructor(@Inject(CLOUD_PROVIDER) private readonly provider: CloudProvider) {}
 
   /**
    * Translate a Fargate task's raw `cpu` (1024 = 1 vCPU) and `memory` (MiB)

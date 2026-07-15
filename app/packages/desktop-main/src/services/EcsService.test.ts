@@ -17,7 +17,7 @@ vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { EcsService } from './EcsService.js';
+import { EcsService, createAwsCloudProvider } from './EcsService.js';
 import type { ConfigService, TfOutputs } from './ConfigService.js';
 import type { Ec2Service } from './Ec2Service.js';
 
@@ -75,6 +75,19 @@ function makeEc2(ip: string | null = '1.2.3.4'): Ec2Service {
   return stub as Ec2Service;
 }
 
+/**
+ * Constructs an `EcsService` for tests, standing in for the constructor
+ * default `EcsService` used before the `CLOUD_PROVIDER` token replaced it —
+ * the service now requires its `CloudProvider` to be passed explicitly (as
+ * Nest's DI does via the token in production), so tests wire a real
+ * `AwsCloudProvider` built from the same `config` stub. Its internal AWS SDK
+ * calls are still covered by the globally-patched `ecsMock` / `ec2Mock`
+ * clients, so `getStatus` / `start` / `stop` behave exactly as before.
+ */
+function makeService(config: ConfigService, ec2: Ec2Service): EcsService {
+  return new EcsService(config, ec2, createAwsCloudProvider(config));
+}
+
 describe('EcsService', () => {
   beforeEach(() => {
     ecsMock.reset();
@@ -83,7 +96,7 @@ describe('EcsService', () => {
 
   describe('extractEniId', () => {
     it('should return the ENI id from an ElasticNetworkInterface attachment', () => {
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const task: Task = {
         attachments: [
           {
@@ -99,13 +112,13 @@ describe('EcsService', () => {
     });
 
     it('should return null when no ENI attachment is present', () => {
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(service.extractEniId({ attachments: [] })).toBeNull();
       expect(service.extractEniId({})).toBeNull();
     });
 
     it('should ignore non-ENI attachment types', () => {
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const task: Task = {
         attachments: [
           {
@@ -121,13 +134,13 @@ describe('EcsService', () => {
   describe('findRunningTask', () => {
     it('should return null when no tasks are listed', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.findRunningTask('cluster', 'minecraft')).toBeNull();
     });
 
     it('should scope the list call to {game}-server family and RUNNING desired status', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       await service.findRunningTask('my-cluster', 'factorio');
       const input = ecsMock.commandCalls(ListTasksCommand)[0]!.args[0].input;
       expect(input.family).toBe('factorio-server');
@@ -143,21 +156,21 @@ describe('EcsService', () => {
           { taskArn: 'arn2', lastStatus: 'RUNNING' },
         ],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const task = await service.findRunningTask('c', 'g');
       expect(task?.taskArn).toBe('arn2');
     });
 
     it('should return null on API errors', async () => {
       ecsMock.on(ListTasksCommand).rejects(new Error('api-fail'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.findRunningTask('c', 'g')).toBeNull();
     });
   });
 
   describe('getStatus', () => {
     it('should return not_deployed when terraform outputs are missing', async () => {
-      const service = new EcsService(makeConfig(null), makeEc2());
+      const service = makeService(makeConfig(null), makeEc2());
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('not_deployed');
       expect(status.message).toMatch(/terraform apply/i);
@@ -182,7 +195,7 @@ describe('EcsService', () => {
       ec2Mock.on(DescribeNetworkInterfacesCommand).resolves({
         NetworkInterfaces: [{ Association: { PublicIp: '9.9.9.9' } }],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('running');
       expect(status.publicIp).toBe('9.9.9.9');
@@ -197,7 +210,7 @@ describe('EcsService', () => {
       ecsMock.on(DescribeTasksCommand).resolves({
         tasks: [{ taskArn: 'arn1', lastStatus: 'PROVISIONING' }],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('starting');
       expect(status.taskArn).toBe('arn1');
@@ -205,7 +218,7 @@ describe('EcsService', () => {
 
     it('should return stopped when no running task is found', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('stopped');
     });
@@ -216,7 +229,7 @@ describe('EcsService', () => {
       ecsMock.on(DescribeTasksCommand).resolves({
         tasks: [{ taskArn: 'arn1', lastStatus: 'RUNNING', attachments: [] }],
       });
-      const service = new EcsService(makeConfig(outputs), makeEc2(null));
+      const service = makeService(makeConfig(outputs), makeEc2(null));
       const status = await service.getStatus('minecraft');
       expect(status.state).toBe('running');
       expect(status.hostname).toBeUndefined();
@@ -225,7 +238,7 @@ describe('EcsService', () => {
 
   describe('start', () => {
     it('should return failure if terraform outputs are missing', async () => {
-      const service = new EcsService(makeConfig(null), makeEc2());
+      const service = makeService(makeConfig(null), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toMatch(/terraform apply/i);
@@ -236,7 +249,7 @@ describe('EcsService', () => {
       ecsMock.on(DescribeTasksCommand).resolves({
         tasks: [{ taskArn: 'arn1', lastStatus: 'RUNNING' }],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toMatch(/already running/i);
@@ -246,7 +259,7 @@ describe('EcsService', () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
       ecsMock.on(RunTaskCommand).resolves({ tasks: [{ taskArn: 'arn-new' }] });
 
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
 
       expect(result.success).toBe(true);
@@ -266,7 +279,7 @@ describe('EcsService', () => {
         tasks: [],
         failures: [{ reason: 'CAPACITY' }],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
       // Exact match (not toContain): this is a WorkloadLaunchError, whose
@@ -280,7 +293,7 @@ describe('EcsService', () => {
     it('should return failure when RunTask throws', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
       ecsMock.on(RunTaskCommand).rejects(new Error('throttled'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toContain('throttled');
@@ -295,7 +308,7 @@ describe('EcsService', () => {
         name: 'AccessDeniedException',
       });
       ecsMock.on(RunTaskCommand).rejects(awsError);
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.start('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toContain('AccessDeniedException');
@@ -304,14 +317,14 @@ describe('EcsService', () => {
 
   describe('stop', () => {
     it('should return failure if terraform outputs are missing', async () => {
-      const service = new EcsService(makeConfig(null), makeEc2());
+      const service = makeService(makeConfig(null), makeEc2());
       const result = await service.stop('minecraft');
       expect(result.success).toBe(false);
     });
 
     it('should return failure when nothing is running', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.stop('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toMatch(/not currently running/i);
@@ -323,7 +336,7 @@ describe('EcsService', () => {
         tasks: [{ taskArn: 'arn1', lastStatus: 'RUNNING' }],
       });
       ecsMock.on(StopTaskCommand).resolves({});
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.stop('minecraft');
       expect(result.success).toBe(true);
       const input = ecsMock.commandCalls(StopTaskCommand)[0]!.args[0].input;
@@ -337,7 +350,7 @@ describe('EcsService', () => {
         tasks: [{ taskArn: 'arn1', lastStatus: 'RUNNING' }],
       });
       ecsMock.on(StopTaskCommand).rejects(new Error('stop-error'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.stop('minecraft');
       expect(result.success).toBe(false);
       expect(result.message).toContain('stop-error');
@@ -353,7 +366,7 @@ describe('EcsService', () => {
           executionRoleArn: 'arn:aws:iam::123:role/exec',
         },
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const td = await service.getTaskDefinition('minecraft');
       expect(td).toEqual({
         cpu: 512,
@@ -366,7 +379,7 @@ describe('EcsService', () => {
       ecsMock.on(DescribeTaskDefinitionCommand).resolves({
         taskDefinition: { executionRoleArn: 'arn:...' },
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const td = await service.getTaskDefinition('minecraft');
       expect(td?.cpu).toBe(1024);
       expect(td?.memory).toBe(2048);
@@ -374,13 +387,13 @@ describe('EcsService', () => {
 
     it('should return null when no taskDefinition is returned', async () => {
       ecsMock.on(DescribeTaskDefinitionCommand).resolves({});
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.getTaskDefinition('minecraft')).toBeNull();
     });
 
     it('should return null on API error', async () => {
       ecsMock.on(DescribeTaskDefinitionCommand).rejects(new Error('bad'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.getTaskDefinition('minecraft')).toBeNull();
     });
   });
@@ -390,14 +403,14 @@ describe('EcsService', () => {
       ecsMock.on(RegisterTaskDefinitionCommand).resolves({
         taskDefinition: { taskDefinitionArn: 'arn:aws:ecs:::task-definition/foo:1' },
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const arn = await service.registerTaskDefinition({ family: 'foo' });
       expect(arn).toBe('arn:aws:ecs:::task-definition/foo:1');
     });
 
     it('should return null on API error', async () => {
       ecsMock.on(RegisterTaskDefinitionCommand).rejects(new Error('nope'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.registerTaskDefinition({ family: 'foo' })).toBeNull();
     });
   });
@@ -405,7 +418,7 @@ describe('EcsService', () => {
   describe('runTask', () => {
     it('should return taskArn when the launch succeeds', async () => {
       ecsMock.on(RunTaskCommand).resolves({ tasks: [{ taskArn: 'arn-x' }] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const result = await service.runTask({
         cluster: 'c',
         taskDefinition: 'td',
@@ -419,7 +432,7 @@ describe('EcsService', () => {
         tasks: [],
         failures: [{ reason: 'CAPACITY' }],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(
         await service.runTask({ cluster: 'c', taskDefinition: 'td' }),
       ).toBeNull();
@@ -427,7 +440,7 @@ describe('EcsService', () => {
 
     it('should return null on API error', async () => {
       ecsMock.on(RunTaskCommand).rejects(new Error('boom'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.runTask({ cluster: 'c', taskDefinition: 'td' })).toBeNull();
     });
   });
@@ -435,7 +448,7 @@ describe('EcsService', () => {
   describe('listTasksByStartedBy', () => {
     it('should return empty when no task ARNs match', async () => {
       ecsMock.on(ListTasksCommand).resolves({ taskArns: [] });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.listTasksByStartedBy('c', 'filemgr-minecraft')).toEqual([]);
     });
 
@@ -448,7 +461,7 @@ describe('EcsService', () => {
           { taskArn: 'c', lastStatus: 'DEPROVISIONING' },
         ],
       });
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       const tasks = await service.listTasksByStartedBy('cluster', 'key');
       expect(tasks).toHaveLength(1);
       expect(tasks[0]!.taskArn).toBe('a');
@@ -456,7 +469,7 @@ describe('EcsService', () => {
 
     it('should return an empty array on error', async () => {
       ecsMock.on(ListTasksCommand).rejects(new Error('err'));
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       expect(await service.listTasksByStartedBy('c', 'k')).toEqual([]);
     });
   });
@@ -464,7 +477,7 @@ describe('EcsService', () => {
   describe('stopTask', () => {
     it('should send StopTaskCommand with the provided args', async () => {
       ecsMock.on(StopTaskCommand).resolves({});
-      const service = new EcsService(makeConfig(), makeEc2());
+      const service = makeService(makeConfig(), makeEc2());
       await service.stopTask('cluster', 'arn', 'because');
       const input = ecsMock.commandCalls(StopTaskCommand)[0]!.args[0].input;
       expect(input.cluster).toBe('cluster');

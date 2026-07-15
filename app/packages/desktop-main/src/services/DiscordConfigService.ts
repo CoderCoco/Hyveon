@@ -13,9 +13,9 @@
  * configuration tab.
  */
 import { Inject, Injectable } from '@nestjs/common';
-import { AwsSecretsStore } from '@hyveon/cloud-aws';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
+import { SECRETS_STORE } from '../modules/cloud-provider.tokens.js';
 import {
   asStringArray,
   getBaseDiscordConfig,
@@ -63,15 +63,15 @@ export class DiscordConfigService {
 
   /**
    * `secrets` is typed against the cloud-agnostic `SecretsStore` contract
-   * (not the concrete `AwsSecretsStore` class) so this service depends only
-   * on the interface; `@Inject(AwsSecretsStore)` tells Nest which concrete
-   * provider (registered in `AwsModule`) to resolve for that parameter,
-   * since interfaces don't survive to runtime for Nest's reflection-based
-   * DI to key off of.
+   * (not a concrete AWS class) so this service depends only on the
+   * interface; `@Inject(SECRETS_STORE)` tells Nest which concrete provider
+   * (bound by `CloudProviderModule` for whichever cloud is active) to
+   * resolve for that parameter, since interfaces don't survive to runtime
+   * for Nest's reflection-based DI to key off of.
    */
   constructor(
     private readonly config: ConfigService,
-    @Inject(AwsSecretsStore) private readonly secrets: SecretsStore,
+    @Inject(SECRETS_STORE) private readonly secrets: SecretsStore,
   ) {}
 
   /** Resolve the DDB table name from Terraform outputs; throws if not deployed yet. */

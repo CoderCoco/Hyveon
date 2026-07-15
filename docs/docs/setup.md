@@ -79,8 +79,29 @@ On the AWS side you need:
       "Effect": "Allow",
       "Action": "iam:*",
       "Resource": [
-        "arn:aws:iam::*:role/game-servers-*",
-        "arn:aws:iam::*:policy/game-servers-*"
+        "arn:aws:iam::*:role/hyveon-*",
+        "arn:aws:iam::*:policy/hyveon-*"
+      ]
+    },
+    {
+      "Sid": "GameServerTfvarsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:GetObjectVersion",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetBucketLocation",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${project_name}-tfvars",
+        "arn:aws:s3:::${project_name}-tfvars/*"
       ]
     }
   ]
@@ -94,9 +115,25 @@ On the AWS side you need:
 > but since everything is `{service}:*` there is nothing to maintain.
 
 > **`iam:*` is scoped to project-prefixed ARNs**, not `Resource: *`, to avoid
-> granting `iam:PassRole` on every role in the account. The `game-servers-*`
+> granting `iam:PassRole` on every role in the account. The `hyveon-*`
 > prefix matches the default `project_name`. If you change `project_name` in
 > `terraform.tfvars`, update the two ARN patterns in `GameServerIAM` to match.
+
+> **`GameServerTfvarsBucket` scopes access to the tfvars-bucket storage**
+> created by the [bootstrap module](#3-clone-and-bootstrap) (see the
+> "Bootstrap the tfvars bucket" step below) — the dedicated, versioned S3
+> bucket (default name `${project_name}-tfvars`) that holds `terraform.tfvars`
+> outside source control. It grants object read/write/list/versioning access
+> plus the bucket-config actions (`PutLifecycleConfiguration`,
+> `PutEncryptionConfiguration`, `PutBucketPublicAccessBlock`,
+> `PutBucketVersioning`/`GetBucketVersioning`, `GetBucketLocation`) the
+> bootstrap module needs to configure the bucket's lifecycle rule,
+> encryption, public-access block, and versioning. Although `s3:*` in
+> `GameServerDeploy` already covers these actions on every bucket, this
+> statement documents the specific permissions the tfvars-bucket workflow
+> depends on and scopes them to just the two tfvars ARNs. If you change
+> `project_name` or `tfvars_bucket_name`, update the two ARN patterns in
+> `GameServerTfvarsBucket` to match.
 
 Two permission areas used by Terraform are **not** covered by any AWS managed policy and are explicitly included above to avoid `AccessDenied` during `terraform apply`:
 
@@ -152,17 +189,147 @@ Both scripts are idempotent — safe to re-run at any time. They:
 2. Runs `npm ci` from `app/` so all workspaces are installed.
 3. Copies `terraform/terraform.tfvars.example` to `terraform/terraform.tfvars`
    if the latter doesn't exist yet.
-4. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
+4. **`setup.sh` only** (not yet ported to `setup.ps1`): offers to bootstrap the
+   tfvars S3 bucket (`terraform/bootstrap/`), controlled by the
+   `GSD_TFVARS_BACKEND` environment variable:
+   - `GSD_TFVARS_BACKEND=s3` — bootstraps the bucket non-interactively.
+   - `GSD_TFVARS_BACKEND=local` — skips this automatic step, no AWS/Terraform
+     calls from `setup.sh` itself. **This does not make the bucket optional**:
+     the root module's `data "aws_s3_bucket" "tfvars"` (`terraform/main.tf`)
+     reads it unconditionally, regardless of `GSD_TFVARS_BACKEND`, so you must
+     still create a `{project_name}-tfvars` bucket yourself (see
+     [Bootstrap the tfvars bucket](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+     below) before the root `terraform plan`/`apply` will succeed. `local`
+     only means you won't use the `tfvars-sync` CLI to keep `terraform.tfvars`
+     itself in sync with S3.
+   - Unset, interactive shell (a TTY) — prompts
+     `Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]`;
+     anything other than `y`/`Y`/`yes`/`YES` falls back to `local`.
+   - Unset, non-interactive shell (CI, scripted runs) — silently defaults to
+     `local`.
+
+   When `s3` is selected, the script `cd`s into `terraform/bootstrap/`, runs
+   `terraform init` and `terraform apply -auto-approve` there (passing
+   `project_name` and `aws_region` from the values derived in step 3), then
+   records the resulting bucket name at `.gsd/tfvars-bucket` — a file at the
+   repo root, gitignored, used purely as a local marker for the operator. If
+   a local `terraform/terraform.tfvars` already exists, the script uploads it
+   to `s3://<bucket>/terraform.tfvars`, but **only if that key doesn't already
+   exist in the bucket** (checked via `aws s3api head-object`) — so re-running
+   `setup.sh` never clobbers a tfvars file that's already been pushed or
+   edited in S3.
+5. Creates the S3 state bucket (`{project_name}-tf-state`) and DynamoDB lock
    table (`{project_name}-tf-locks`) if they don't already exist. The bucket
    gets versioning, public-access blocking, and AES-256 encryption enabled.
    The script waits for the DynamoDB table to reach `ACTIVE` status before
    continuing. Both names are derived from `project_name` in
-   `terraform.tfvars` (default: `game-servers`). This step requires the
+   `terraform.tfvars` (default: `hyveon`). This step requires the
    `s3:*` permissions in the inline policy above.
-5. Runs `terraform init` inside `terraform/`, passing the bucket and table
+6. Runs `terraform init` inside `terraform/`, passing the bucket and table
    as `-backend-config` flags. If a local `terraform.tfstate` is present
    (migrating from a previous local-backend setup), it automatically
    migrates state to S3 without prompting.
+
+### tfvars storage: local vs S3
+
+`terraform.tfvars` can live purely as a local file — the default, and all
+you need for a single operator on a single machine, with no `tfvars-sync`
+commands to run. Switch to the optional **S3 backend** once any of these
+apply: more than one person (or a CI job) needs to run `terraform
+plan`/`apply`, you want version history/recoverability for tfvars edits
+independent of git, you want `terraform apply` to refuse to run against a
+stale local copy, or you want the desktop app's remote tfvars editing
+(`RemoteTfvarsStore`'s pull/push/diff/lock flow) to be able to read and write
+`terraform.tfvars` without SSH/file-share access to whichever machine last
+ran `terraform apply`. If none of that applies to you, stay on `local` and
+skip ahead to [step 4](#4-configure-your-servers) once you've completed the
+[one-time bucket bootstrap](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+below — `local` mode skips the day-to-day S3 sync workflow, **not** the
+bucket itself: the root module reads it unconditionally, so it must exist
+before the first `terraform apply` no matter which mode you choose.
+
+Which mode `setup.sh` sets up is controlled by the `GSD_TFVARS_BACKEND`
+environment variable (see step 4 above):
+
+- `GSD_TFVARS_BACKEND=s3` — bootstraps the tfvars bucket non-interactively
+  (the steps below) and leaves a `.gsd/tfvars-bucket` marker so later
+  `make`/CLI tooling knows it's in S3 mode.
+- `GSD_TFVARS_BACKEND=local` — skips `setup.sh`'s automatic bucket bootstrap
+  and the `tfvars-sync` day-to-day workflow; `terraform.tfvars` stays a plain
+  local file you edit and `terraform apply` directly. The bucket itself is
+  **not** skipped: it still must exist (see
+  [Bootstrap the tfvars bucket](#bootstrap-the-tfvars-bucket-required-before-the-first-terraform-apply)
+  below) before the root `terraform plan`/`apply` will succeed.
+- Unset — `setup.sh` prompts interactively on a TTY
+  (`Store terraform.tfvars in a versioned S3 bucket (terraform/bootstrap)? [y/N]`),
+  or silently falls back to `local` in a non-interactive shell (CI).
+
+> **IAM warning:** the S3 backend needs bucket access on top of the core
+> deploy policy. Confirm the `GameServerTfvarsBucket` statement from
+> [step 1](#1-create-and-authorise-an-iam-user) is attached to whatever
+> IAM user/role runs `setup.sh`/`terraform apply`/`terraform/bootstrap`
+> *before* you opt into `GSD_TFVARS_BACKEND=s3` — without it, bootstrapping
+> the bucket and every subsequent `pull`/`push`/`plan`/`apply` against it
+> will fail with an S3 `AccessDenied` error.
+
+For the full day-to-day S3 workflow — the `tfvars-sync` CLI, the generated
+`make tfvars-pull`/`push`/`diff` targets, migrating an existing parent repo
+between `local` and `s3`, and a troubleshooting table — see the dedicated
+[S3 tfvars storage guide](/guides/s3-tfvars). The rest of this section
+covers only the one-time bootstrap step.
+
+### Bootstrap the tfvars bucket (required before the first `terraform apply`)
+
+`terraform/bootstrap/` is a separate, standalone Terraform module that
+provisions a **second, distinct S3 bucket** whose only job is to hold your
+`terraform.tfvars` outside of source control. This is unrelated to the `{project_name}-tf-state` bucket `setup.sh`
+creates for the Terraform backend. The root module's `data "aws_s3_bucket"
+"tfvars"` (in `terraform/main.tf`) reads this bucket, so it **must already
+exist before you run `terraform apply` in the root `terraform/` directory** —
+skipping this step makes the root `terraform plan`/`terraform apply` fail at
+plan time with a "bucket not found" error.
+
+**On Linux/macOS, `./setup.sh` can do this for you** — see step 4 above
+(`GSD_TFVARS_BACKEND=s3`, or accept the interactive prompt). It runs the same
+`terraform init`/`terraform apply` shown below, records the bucket name at
+`.gsd/tfvars-bucket`, and uploads your local `terraform.tfvars` if the bucket
+doesn't already have one. Use the manual steps below if you're on
+`setup.ps1` (not yet supported there), opted for `GSD_TFVARS_BACKEND=local`
+and changed your mind, or just want to run it standalone — either way, get
+this done once, before the main `terraform init`/`terraform apply` steps
+below, to have a durable, versioned place to keep `tfvars` outside your
+parent repo. If you'd rather pre-create the bucket some other way (e.g.
+manually or via a different tool), that works too, as long as the name
+matches `tfvars_bucket_name` (see below).
+
+```bash
+cd terraform/bootstrap
+terraform init
+terraform apply
+```
+
+The bucket it creates (default name `{project_name}-tfvars`) has:
+
+- **Versioning enabled** — every write to `terraform.tfvars` is recoverable.
+- **AES-256 server-side encryption** and a **public-access block** (all four
+  block-public settings on).
+- A **lifecycle rule** that expires noncurrent object versions after 90 days,
+  so old revisions don't accumulate forever.
+
+> **This module's own state stays local and is never committed.** It can't
+> use the S3 backend it's bootstrapping (chicken-and-egg), so `terraform
+> apply` writes a local `terraform.tfstate` under `terraform/bootstrap/` —
+> already covered by `.gitignore` (`terraform/**/*.tfstate`). Keep a personal
+> backup of that file; without it, a future `terraform apply` in this
+> directory won't recognize the bucket it already created.
+
+If you accept the default bucket name, no further action is needed — the
+root config's `tfvars_bucket_name` variable defaults to the same
+`{project_name}-tfvars` convention. If you pass a custom
+`-var="tfvars_bucket_name=..."` (or `project_name`) when applying this
+module, set the **same** value for `tfvars_bucket_name` in
+`terraform/terraform.tfvars` (see step 4 below) so the root module's
+`data "aws_s3_bucket" "tfvars"` resolves to the bucket you actually created.
 
 ## 4. Configure your servers
 
@@ -170,7 +337,7 @@ Open `terraform/terraform.tfvars` in your editor and fill in:
 
 ```hcl
 aws_region       = "us-east-1"
-project_name     = "game-servers"
+project_name     = "hyveon"
 hosted_zone_name = "yourdomain.com"    # must already exist in Route 53
 
 # Watchdog knobs (defaults shown)

@@ -63,7 +63,7 @@ terraform plan
 terraform apply
 terraform destroy
 
-# Cost allocation: all resources tagged Project=game-servers-poc. Activate the
+# Cost allocation: all resources tagged Project=hyveon. Activate the
 # "Project" tag in AWS Billing → Cost allocation tags for Cost Explorer breakdowns.
 
 # First-time environment bootstrap (installs terraform + aws CLI if missing,
@@ -73,33 +73,33 @@ terraform destroy
 
 ESLint (flat config) lives at `app/eslint.config.js` using `@eslint/js` + `typescript-eslint` recommended presets, plus `eslint-plugin-react` and `eslint-plugin-react-hooks` recommended for the web package. Run `npm run app:lint` (or `npm run app:lint:fix`) from the repo root.
 
-Terraform linting uses [tflint](https://github.com/terraform-linters/tflint) with its `recommended` preset and the AWS ruleset plugin. Config lives at `terraform/.tflint.hcl`. Run `tflint --init` once to install the plugin, then `tflint` from `terraform/`. `terraform fmt -check -recursive` and `terraform validate` cover formatting and syntax.
+Terraform linting uses [tflint](https://github.com/terraform-linters/tflint) with its `recommended` preset and the AWS ruleset plugin. Config lives at `terraform/.tflint.hcl`, with `call_module_type = "all"` so tflint descends into the local `./aws` module. Run `tflint --init` once to install the plugin, then `tflint` from `terraform/`. `terraform fmt -check -recursive` and `terraform validate` cover formatting and syntax.
 
 ## Architecture
 
 Three loosely-coupled pieces share code via `@hyveon/shared`:
 
-1. **Terraform (`terraform/`)** provisions all AWS infrastructure, including four Node.js Lambdas (interactions, followup, update-dns, watchdog), a DynamoDB table, and two Secrets Manager secrets for Discord credentials.
-2. **Management app (`app/packages/desktop-main` + `app/packages/web`)** — Nest.js (on `@nestjs/platform-express`) backend reads `terraform/terraform.tfstate` directly at runtime to discover cluster/subnet/SG IDs + the Discord store locations, then drives AWS via the AWS SDK v3. React/Vite frontend talks to the Nest API. Services use **Nest's built-in DI** (`@Injectable()`) and **Winston** for structured logging. Feature modules under `app/packages/desktop-main/src/modules/` (`AwsModule`, `DiscordModule`) group related providers; HTTP handlers live in `app/packages/desktop-main/src/controllers/` as `@Controller`-decorated classes wired up through `AppModule`.
+1. **Terraform (`terraform/`)** provisions all AWS infrastructure, including four Node.js Lambdas (interactions, followup, update-dns, watchdog), a DynamoDB table, and two Secrets Manager secrets for Discord credentials. The root `terraform/` directory is a thin composer (backend/provider config + `module "cloud"`); every AWS resource actually lives in the `terraform/aws/` module.
+2. **Management app (`app/packages/desktop-main` + `app/packages/web`)** — Nest.js (on `@nestjs/platform-express`) backend reads `terraform/terraform.tfstate` directly at runtime to discover cluster/subnet/SG IDs + the Discord store locations, then drives the active cloud via the cloud-agnostic contracts in `@hyveon/shared/cloud.js`. React/Vite frontend talks to the Nest API. Services use **Nest's built-in DI** (`@Injectable()`) and **Winston** for structured logging. Feature modules under `app/packages/desktop-main/src/modules/` (`AwsModule`, `DiscordModule`, `CloudProviderModule`) group related providers; HTTP handlers live in `app/packages/desktop-main/src/controllers/` as `@Controller`-decorated classes wired up through `AppModule`. `CloudProviderModule` (`app/packages/desktop-main/src/modules/cloud-provider.module.ts`) binds four injection tokens — `CLOUD_PROVIDER`, `SECRETS_STORE`, `REMOTE_FILE_STORE`, `DISCORD_RECEIVER` (declared in `cloud-provider.tokens.ts`) — to concrete implementations via `useFactory` providers keyed off `ConfigService.getActiveCloud()`; today every token resolves to a `@hyveon/cloud-aws` class, but consumers (`EcsService`, `DiscordConfigService`, etc.) inject the token and depend only on the cloud-agnostic interface, never the concrete class, so `AwsModule` no longer wires `AwsCloudProvider`/`AwsSecretsStore` directly — it just imports and re-exports `CloudProviderModule`.
 3. **Lambdas (`app/packages/lambda/*`)** — four TypeScript Lambda packages. All bundle via esbuild to a single CJS file and are zipped by Terraform's `archive_file` data source. The Discord interaction path (`interactions` + `followup`) is described below; `update-dns` and `watchdog` are ports of the original `update_dns.py` / `watchdog.py` — same behaviour, TypeScript runtime.
 
 There is **no persistent ECS Service**. Servers run only when the user clicks Start (or invokes `/server-start`) — the app/followup-Lambda calls `ecs.run_task()` / `ecs.stop_task()` against per-game task definitions named `{game}-server`. This is the core cost-saving design choice; don't introduce a long-running Service.
 
 ### The `game_servers` map is the single source of truth
 
-`variables.tf:game_servers` is a `map(object({...}))`. Adding/removing an entry cascades through **every** Terraform resource via `for_each`:
+`terraform/aws/variables.tf:game_servers` is a `map(object({...}))`. Adding/removing an entry cascades through **every** Terraform resource via `for_each`:
 
 - `aws_ecs_task_definition.game` — one task def per game
 - `aws_efs_access_point.game` — isolated save directory per game
 - `aws_cloudwatch_log_group.game` — `/ecs/{game}-server`
 - `aws_security_group.game_servers` — dynamic ingress rules flattened from all games' ports (deduplicated in `locals.all_game_ports`)
-- Lambda env vars `GAME_NAMES` in `route53.tf` and `watchdog.tf`
+- Lambda env vars `GAME_NAMES` in `terraform/aws/route53.tf` and `terraform/aws/watchdog.tf`
 
 When adding a game, only edit `terraform.tfvars`. Don't hand-write new resources.
 
 ### DNS is Lambda-managed, not Terraform-managed
 
-`route53.tf` creates the zone data source and the updater Lambda, but **no `aws_route53_record` resources**. An EventBridge rule on `ECS Task State Change` fires `@hyveon/lambda-update-dns`, which UPSERTs a record for `{game}.{hosted_zone_name}` on `RUNNING` and DELETEs on `STOPPED`. Terraform would fight the Lambda — keep DNS records out of Terraform.
+`terraform/aws/route53.tf` creates the zone data source and the updater Lambda, but **no `aws_route53_record` resources**. An EventBridge rule on `ECS Task State Change` fires `@hyveon/lambda-update-dns`, which UPSERTs a record for `{game}.{hosted_zone_name}` on `RUNNING` and DELETEs on `STOPPED`. Terraform would fight the Lambda — keep DNS records out of Terraform.
 
 ### Watchdog state lives in ECS task tags
 
@@ -115,7 +115,7 @@ Every `/api/*` route is gated behind a bearer token via `ApiTokenGuard` in `app/
 
 ### Discord bot is fully serverless (Lambda + DynamoDB + Secrets Manager)
 
-There is **no discord.js dependency, no long-running bot process, and no `DiscordBotService`**. The bot is split across two Lambdas provisioned by Terraform (`interactions.tf`, `followup.tf`):
+There is **no discord.js dependency, no long-running bot process, and no `DiscordBotService`**. The bot is split across two Lambdas provisioned by Terraform (`terraform/aws/interactions.tf`, `terraform/aws/followup.tf`):
 
 - **`@hyveon/lambda-interactions`** — verifies Ed25519 signature, PONGs pings, handles autocomplete synchronously, and defers slash commands to `@hyveon/lambda-followup` (Discord's 3-second budget doesn't leave room for ECS calls).
 - **`@hyveon/lambda-followup`** — does the ECS work (`RunTask` / `StopTask` / `DescribeTasks`) and PATCHes the original interaction message. For start commands it writes a pending-interaction row to DynamoDB so `@hyveon/lambda-update-dns` can patch again with the resolved IP once the task reaches RUNNING.
@@ -161,12 +161,13 @@ When working in a specific area, read the relevant doc rather than relying on wh
 
 ## Checklist for Terraform variable changes
 
-Any time you add or remove Terraform variables, update **all four** of these in the same commit — failing to touch any one of them is a common oversight:
+Any time you add or remove Terraform variables, update **all five** of these in the same commit — failing to touch any one of them is a common oversight:
 
-1. `terraform/variables.tf` — the variable declaration itself.
-2. `terraform/terraform.tfvars.example` — a commented-out example entry with a short explanation so operators know how to use it.
-3. `docs/docs/components/terraform.md` — the Variables table row.
-4. `docs/docs/setup.md` — any relevant step in the setup guide (especially if the variable affects the Discord bot or a core workflow).
+1. `terraform/variables.tf` — the root variable declaration, AND (unless it's `tags`, which stays root-only) `terraform/aws/variables.tf` — the identical module-input declaration.
+2. `terraform/main.tf` — pass the new variable through the `module "cloud"` block (`<name> = var.<name>`).
+3. `terraform/terraform.tfvars.example` — a commented-out example entry with a short explanation so operators know how to use it.
+4. `docs/docs/components/terraform.md` — the Variables table row.
+5. `docs/docs/setup.md` — any relevant step in the setup guide (especially if the variable affects the Discord bot or a core workflow).
 
 ## Code & Test Conventions
 

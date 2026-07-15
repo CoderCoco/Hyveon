@@ -96,6 +96,23 @@ The script prompts for project name, AWS region, hosted zone, and
 `terraform.tfvars`, `.env`, and `.gitignore`. Existing files are skipped
 unless you pass `--force`.
 
+`init-parent.ts` dispatches on subcommands, with `bootstrap` (the flow
+above) implied when none is given:
+
+```bash
+init-parent.ts [--force] [--s3-tfvars] [--yes]            Interactive bootstrap (default)
+init-parent.ts migrate --to-s3 | --to-local [--yes]        Migrate an existing parent repo's tfvars backend
+```
+
+`--s3-tfvars` pre-answers the "bootstrap an S3-backed tfvars store now?"
+prompt with yes and writes `.gsd/tfvars-bucket` up front, so `make setup`
+provisions the S3 backend on its first run instead of asking interactively.
+`--yes` skips confirmation prompts generally (see [`scripts/README.md`](https://github.com/CoderCoco/Hyveon/blob/main/scripts/README.md#flags)
+for the exact per-subcommand semantics). Already have a scaffolded parent
+repo and want to switch its tfvars backend after the fact instead? See
+[Migrating an existing parent repo's tfvars backend](#migrating-an-existing-parent-repos-tfvars-backend)
+below.
+
 After it finishes:
 
 ```bash
@@ -108,20 +125,144 @@ make apply
 ## What the wrapper Makefile does
 
 The generated wrapper is a thin layer over the submodule's own Makefile.
-Five targets, no surprises:
+Eight targets, no surprises:
 
 | Target | What it does |
 |---|---|
-| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `Hyveon/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. |
-| `make plan` | Copies `terraform.tfvars` into `Hyveon/terraform/terraform.tfvars`, then runs `make -C Hyveon tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. |
-| `make apply` | Same as `plan`, but delegates to `tf-apply`. The submodule's `tf-apply` recipe prints a post-deploy checklist with the Discord interactions URL when it finishes. |
+| `make setup` | One-time bootstrap. Runs `git submodule update --init --recursive`, executes `Hyveon/setup.sh` (installs Node/Terraform/AWS CLI on Debian/Ubuntu, npm-installs all workspaces, builds Lambda bundles, runs `terraform init` and bootstraps the S3 backend), then records the sha256 of `setup.sh` in `.make/setup.stamp`. If `setup.sh` bootstrapped a versioned S3 tfvars backend, `setup` also pulls `terraform.tfvars` down afterwards; on a first bootstrap against an empty bucket the pull can't find anything yet, so it prints a warning suggesting `make tfvars-push` to seed the bucket instead of failing `make setup`. |
+| `make plan` | Copies `terraform.tfvars` into `Hyveon/terraform/terraform.tfvars`, then runs `make -C Hyveon tf-plan` — which itself rebuilds the Lambda bundles before `terraform plan`. When an S3 tfvars backend is detected, it auto-pulls the latest tfvars first so a stale local copy can't silently drive the plan; set `NO_PULL=1` to skip the pull for one invocation. |
+| `make apply` | Same as `plan`, but delegates to `tf-apply`. The submodule's `tf-apply` recipe prints a post-deploy checklist with the Discord interactions URL when it finishes. When an S3 tfvars backend is detected, it first asserts the local tfvars are still in sync with S3 (via the `tfvars-sync` CLI's `check` subcommand), refusing to apply against drifted vars; set `FORCE_APPLY=1` to skip the check for one invocation. |
 | `make update` | Bumps the submodule to the tip of `main` (`git submodule update --remote --merge`). If the new `setup.sh` differs from the recorded sha, clears `.terraform/` and re-runs `setup.sh` automatically; otherwise leaves it alone. Reminds you to commit the new submodule pointer. |
 | `make dev` | Pulls live tfstate into `.make/tfstate.json` (so ConfigService can read it via `TF_STATE_PATH`), wipes stale TS build info under the submodule's `app/packages/*/`, then runs `make -C Hyveon dev`, exporting `API_TOKEN` and `TF_STATE_PATH` to the child make. |
+| `make tfvars-pull` | Pulls `terraform.tfvars` from the configured S3 backend (requires one to be detected — see below). Refuses to run if the local file has uncommitted git changes, so a pull can never silently discard edits you haven't committed. |
+| `make tfvars-push` | Pushes the local `terraform.tfvars` to the configured S3 backend (requires one to be detected). |
+| `make tfvars-diff` | Prints a unified diff between the local and remote `terraform.tfvars` (requires a backend to be detected). |
 
 The `tfvars` copy is **always fresh** on plan/apply — the recipe `cp`s
 unconditionally, not just when the file is older than the destination. This
 prevents stale variables from sneaking into a deploy when you've edited the
 parent's `terraform.tfvars` between runs.
+
+## S3 tfvars backend detection
+
+See [S3 tfvars storage](/guides/s3-tfvars) for the full guide to bootstrapping,
+day-to-day syncing, migrating an existing parent repo onto (or off) this
+backend, and troubleshooting sync conflicts. The rest of this section covers
+how the generated Makefile detects which backend is active.
+
+The three `tfvars-*` targets, and the automatic gating baked into
+`setup`/`plan`/`apply` above, all key off the same `TFVARS_BACKEND`
+resolution in the generated Makefile:
+
+- `GSD_TFVARS_BACKEND=s3` forces S3 mode, even if the marker file below is
+  missing.
+- `GSD_TFVARS_BACKEND=local` forces local-file mode, even if a marker file
+  is present.
+- Otherwise: S3 if either marker file exists — the **parent-root**
+  `.gsd/tfvars-bucket` (written by `bootstrap --s3-tfvars` or
+  `migrate --to-s3`) or the **submodule-local**
+  `Hyveon/.gsd/tfvars-bucket` (written by `setup.sh`'s
+  `bootstrap_tfvars_backend()`) — local otherwise.
+
+`GSD_TFVARS_BUCKET`, if set, wins over both marker files' contents when the
+wrapper needs to display or pass along the bucket name. Otherwise it reads
+the parent-root marker first, falling back to the submodule-local marker if
+the parent-root one doesn't exist — see [Parent-root marker takes
+precedence](#parent-root-marker-takes-precedence) below for why.
+
+`make tfvars-pull`, `make tfvars-push`, and `make tfvars-diff` fail fast
+with a pointer to `GSD_TFVARS_BACKEND`/`setup.sh` when no backend is
+detected — they're operator-driven, so they never silently no-op.
+
+The gates inside `setup`/`plan`/`apply` behave differently: in **local
+mode** (no marker file and `GSD_TFVARS_BACKEND` isn't `s3`) they're silent
+no-ops, so `make setup`, `make plan`, and `make apply` behave exactly as
+they did before S3 tfvars sync existed. Nothing changes for a single-file,
+no-remote-backend deployment.
+
+## Migrating an existing parent repo's tfvars backend
+
+Started out on a local `terraform.tfvars` (or bootstrapped an S3 backend and
+want to drop it) and want to switch after the fact, without re-running the
+whole interactive scaffolder? `init-parent.ts migrate` rewires an
+already-scaffolded parent repo (one where `bootstrap` has already run and a
+`Makefile` exists) in place. Run it the same way as `bootstrap`, but from an
+existing parent repo checkout:
+
+```bash
+npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts migrate --to-s3
+# or
+npx --prefix Hyveon/scripts tsx Hyveon/scripts/init-parent.ts migrate --to-local
+```
+
+Exactly one of `--to-s3` / `--to-local` is required. Both directions prompt
+for confirmation before touching anything — pass `--yes` to skip the prompt
+(e.g. for scripting/CI).
+
+**`migrate --to-s3`** — moves a local-only parent repo onto a versioned S3
+backend:
+
+1. Reads `project_name` out of the parent repo's existing `terraform.tfvars`
+   and derives the bucket name `${project_name}-tfvars` — the same naming
+   `bootstrap --s3-tfvars` uses.
+2. Writes the `.gsd/tfvars-bucket` marker at the parent repo root.
+3. Rewrites the `Makefile` with the S3-aware targets (identical output to a
+   fresh `bootstrap` render — the Makefile is always S3-aware; only the
+   marker's presence flips `TFVARS_BACKEND` to `s3`).
+4. Runs `make setup` with `GSD_TFVARS_BACKEND=s3` so `terraform/bootstrap/`
+   provisions the bucket.
+
+`terraform.tfvars` itself is never read for anything beyond `project_name`,
+nor written by the migration — pull the now-remote copy down explicitly with
+`make tfvars-pull` if you want confirmation it round-tripped through S3 (or
+push it up with `make tfvars-push` if the bucket comes back empty).
+
+**`migrate --to-local`** — the reverse: drops an S3 backend and reverts to
+reading `terraform.tfvars` straight off disk:
+
+1. Resolves the target bucket the same way the generated Makefile's
+   `TFVARS_BUCKET` does — `GSD_TFVARS_BUCKET` env var wins if set, otherwise
+   the parent-root `.gsd/tfvars-bucket` marker, otherwise the submodule-local
+   one written by `setup.sh`. Exits `1` with no changes if none resolve
+   (already local, nothing to migrate).
+2. Pulls `terraform.tfvars` down from S3 first if it's missing locally — a
+   parent repo that migrated to S3 a while ago may have no local copy at
+   all.
+3. Diffs the local file against the remote object byte-for-byte (the same
+   comparison `make tfvars-diff` / `tfvars-sync.ts diff` uses) and **aborts,
+   leaving every file untouched**, if they've drifted — reconcile with
+   `make tfvars-pull` or `make tfvars-push` first, then re-run the
+   migration. If `s3://<bucket>/terraform.tfvars` doesn't exist at all (the
+   bucket was created but never seeded), this comparison is skipped
+   entirely — there's nothing remote to reconcile against, so migration
+   proceeds straight to deleting the markers in step 4.
+4. On a clean match (or when the remote object was never seeded), deletes
+   both the parent-root and submodule-local `.gsd/tfvars-bucket` markers and
+   the `terraform.tfvars.lock` sidecar. `terraform.tfvars` itself is left in
+   place — it's already the correct source of truth for local mode once the
+   markers are gone.
+
+`migrate --to-local` **never deletes the S3 bucket** — it only removes the
+markers that make the parent repo look at it. Tear the bucket down yourself
+once you're done with it:
+
+```bash
+terraform -chdir=Hyveon/terraform/bootstrap destroy
+```
+
+### Parent-root marker takes precedence
+
+Both migration directions, the generated Makefile's `TFVARS_BACKEND`/
+`TFVARS_BUCKET` resolution, and `setup.sh`'s post-bootstrap pull all agree on
+the same precedence when both marker files could theoretically exist: the
+**parent-root** marker (`<parent>/.gsd/tfvars-bucket`, written by
+`bootstrap --s3-tfvars` or `migrate --to-s3` before `setup.sh` ever runs)
+always wins over the **submodule-local** marker (`<parent>/Hyveon/.gsd/tfvars-bucket`,
+written by `setup.sh`'s own `bootstrap_tfvars_backend()`). An explicit
+parent-root marker reflects a deliberate operator choice, so it takes
+priority even before `setup.sh` gets a chance to write its own submodule-local
+marker. `GSD_TFVARS_BACKEND=s3|local` overrides both markers entirely when
+set.
 
 ## Submodule update with idempotent setup.sh re-run
 

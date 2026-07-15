@@ -11,8 +11,8 @@
 
 data "archive_file" "followup" {
   type        = "zip"
-  source_file = "${path.module}/../app/packages/lambda/followup/dist/handler.cjs"
-  output_path = "${path.module}/../app/packages/lambda/followup/dist/bundle.zip"
+  source_file = "${path.module}/../../app/packages/lambda/followup/dist/handler.cjs"
+  output_path = "${path.module}/../../app/packages/lambda/followup/dist/bundle.zip"
 }
 
 resource "aws_iam_role" "followup_lambda" {
@@ -61,8 +61,8 @@ resource "aws_iam_role_policy" "followup_lambda" {
         Resource = "*"
       },
       {
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
         Resource = aws_dynamodb_table.discord.arn
       },
     ]

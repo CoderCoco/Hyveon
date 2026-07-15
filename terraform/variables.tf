@@ -1,3 +1,14 @@
+variable "active_cloud" {
+  description = "Cloud provider backing this deployment. Only \"aws\" is currently supported."
+  type        = string
+  default     = "aws"
+
+  validation {
+    condition     = var.active_cloud == "aws"
+    error_message = "active_cloud must be \"aws\" — no other cloud providers are supported yet."
+  }
+}
+
 variable "aws_region" {
   description = "AWS region to deploy into"
   type        = string
@@ -7,7 +18,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name used for resource naming"
   type        = string
-  default     = "game-servers"
+  default     = "hyveon"
 }
 
 variable "vpc_cidr" {
@@ -23,18 +34,18 @@ variable "vpc_cidr" {
 variable "game_servers" {
   description = "Map of game name → container config"
   type = map(object({
-    image       = string
-    cpu         = number  # Fargate CPU units (1024 = 1 vCPU)
-    memory      = number  # MiB
-    ports       = list(object({ container = number, protocol = string }))
-    environment = optional(list(object({ name = string, value = string })), [])
-    volumes     = list(object({ name = string, container_path = string }))
-    https           = optional(bool, false)   # If true, traffic is routed through ALB with TLS termination
-    connect_message = optional(string)        # Discord connect hint; supports {host}, {ip}, {port}, {game} placeholders
-    file_seeds  = optional(list(object({
-      path           = string           # In-container path, e.g. "/palworld/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"
-      content        = optional(string) # UTF-8 text content
-      content_base64 = optional(string) # Base64-encoded binary content (for non-UTF-8 files such as mods)
+    image           = string
+    cpu             = number # Fargate CPU units (1024 = 1 vCPU)
+    memory          = number # MiB
+    ports           = list(object({ container = number, protocol = string }))
+    environment     = optional(list(object({ name = string, value = string })), [])
+    volumes         = list(object({ name = string, container_path = string }))
+    https           = optional(bool, false) # If true, traffic is routed through ALB with TLS termination
+    connect_message = optional(string)      # Discord connect hint; supports {host}, {ip}, {port}, {game} placeholders
+    file_seeds = optional(list(object({
+      path           = string                   # In-container path, e.g. "/palworld/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"
+      content        = optional(string)         # UTF-8 text content
+      content_base64 = optional(string)         # Base64-encoded binary content (for non-UTF-8 files such as mods)
       mode           = optional(string, "0644") # chmod octal string
     })), [])
   }))
@@ -152,13 +163,21 @@ variable "discord_public_key" {
   sensitive   = true
 }
 
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+variable "tfvars_bucket_name" {
+  description = "Name of the versioned S3 bucket created by the bootstrap module to hold terraform.tfvars. Defaults to \"$${project_name}-tfvars\" when null."
+  type        = string
+  default     = null
+}
+
 # ── Tags ─────────────────────────────────────────────────────────────────────
 
 variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Project     = "game-servers-poc"
+    Project     = "hyveon"
     Environment = "poc"
     ManagedBy   = "terraform"
   }

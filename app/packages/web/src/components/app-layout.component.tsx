@@ -12,6 +12,7 @@ import {
   Bell,
   MessageSquare,
   Settings,
+  Gamepad2,
   RefreshCw,
   Menu,
   X,
@@ -33,6 +34,7 @@ const monitoringItems: NavItem[] = [
 ];
 
 const configItems: NavItem[] = [
+  { to: '/games', icon: Gamepad2, label: 'Games' },
   { to: '/discord', icon: MessageSquare, label: 'Discord' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
@@ -65,7 +67,7 @@ function NavSections({
         <ul aria-labelledby={`${prefix}-nav-monitoring`} className="space-y-1 list-none">
           {monitoringItems.map((item) => (
             <li key={item.to + item.label}>
-              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+              <NavLink item={item} active={currentPath === item.to || currentPath.startsWith(`${item.to}/`)} onNavigate={onNavigate} />
             </li>
           ))}
         </ul>
@@ -79,7 +81,7 @@ function NavSections({
         <ul aria-labelledby={`${prefix}-nav-configuration`} className="space-y-1 list-none">
           {configItems.map((item) => (
             <li key={item.to + item.label}>
-              <NavLink item={item} active={currentPath === item.to} onNavigate={onNavigate} />
+              <NavLink item={item} active={currentPath === item.to || currentPath.startsWith(`${item.to}/`)} onNavigate={onNavigate} />
             </li>
           ))}
         </ul>

@@ -45,6 +45,12 @@ export default defineConfig({
       'packages/desktop-preload/**/*.test.{ts,tsx}',
       // Top-level test helpers (e.g. fake-terraform.mjs) live outside packages/.
       'test/**/*.test.{ts,tsx}',
+      // The tfvars-sync helper lives in the top-level @hyveon/scripts workspace
+      // (outside packages/), so it needs its own explicit include entry.
+      '../scripts/tfvars-sync.test.ts',
+      // Same rationale — the init-parent bootstrap/migrate CLI spec lives
+      // alongside tfvars-sync.test.ts, outside packages/.
+      '../scripts/init-parent.cli.test.ts',
     ],
     // Default environment for server-side and shared tests is Node.
     // React component tests under @hyveon/web override this via

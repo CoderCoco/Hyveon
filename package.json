@@ -14,10 +14,13 @@
     "node": ">=22.12.0"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.43",
     "electron-builder": "^25.0.0",
-    "electron-vite": "^5.0.0"
+    "electron-vite": "^5.0.0",
+    "patch-package": "^8.0.1"
   },
   "scripts": {
+    "postinstall": "patch-package",
     "app:dev": "npm run dev            -w game-server-manager",
     "app:build": "npm run build          -w game-server-manager",
     "app:start": "npm run start          -w game-server-manager",
@@ -30,8 +33,12 @@
     "app:test:e2e": "npm run build -w @hyveon/shared && npm run build -w @hyveon/cloud-aws && npm run test:e2e -w @hyveon/web",
     "app:test:integration": "npm run build -w @hyveon/desktop-main && npm run test:integration -w @hyveon/web",
     "scripts:init-parent": "npm run init-parent  -w @hyveon/scripts",
+    "scripts:tfvars-sync": "npm run tfvars-sync  -w @hyveon/scripts",
     "desktop:dev": "electron-vite dev",
     "desktop:build": "electron-vite build",
     "desktop:package": "npm run desktop:build && electron-builder --config electron-builder.yml"
+  },
+  "allowScripts": {
+    "@swc/core@1.15.43": true
   }
 }

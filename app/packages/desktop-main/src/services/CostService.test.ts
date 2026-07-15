@@ -1,10 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import {
-  CostExplorerClient,
-  GetCostAndUsageCommand,
-} from '@aws-sdk/client-cost-explorer';
+import type { CloudProvider, CostBreakdown, DateRange } from '@hyveon/shared';
 
 vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -12,16 +8,28 @@ vi.mock('../logger.js', () => ({
 
 import { CostService } from './CostService.js';
 
-/** Typed stand-in for the AWS Cost Explorer SDK client. */
-const ceMock = mockClient(CostExplorerClient);
+/** `getActualCosts` mock for the injected `CloudProvider` stub. */
+const getActualCostsMock = vi.fn<(range: DateRange) => Promise<CostBreakdown>>();
+
+/** Builds a minimal `CloudProvider`-shaped stub — only `getActualCosts` is exercised by `CostService`. */
+function makeCloudProvider(): CloudProvider {
+  return {
+    startWorkload: vi.fn(),
+    stopWorkload: vi.fn(),
+    getWorkloadStatus: vi.fn(),
+    streamWorkloadLogs: vi.fn(),
+    getCostEstimate: vi.fn(),
+    getActualCosts: getActualCostsMock,
+  };
+}
 
 describe('CostService', () => {
-  /** Fresh service instance per test to avoid cached SDK clients leaking. */
+  /** Fresh service instance per test, backed by the `CloudProvider` stub. */
   let service: CostService;
 
   beforeEach(() => {
-    ceMock.reset();
-    service = new CostService();
+    getActualCostsMock.mockReset();
+    service = new CostService(makeCloudProvider());
   });
 
   describe('estimateForSpec', () => {
@@ -53,11 +61,10 @@ describe('CostService', () => {
 
   describe('getActualCosts', () => {
     it('should aggregate daily costs and return a total', async () => {
-      ceMock.on(GetCostAndUsageCommand).resolves({
-        ResultsByTime: [
-          { TimePeriod: { Start: '2026-04-10', End: '2026-04-11' }, Total: { UnblendedCost: { Amount: '1.2345', Unit: 'USD' } } },
-          { TimePeriod: { Start: '2026-04-11', End: '2026-04-12' }, Total: { UnblendedCost: { Amount: '2.5000', Unit: 'USD' } } },
-        ],
+      getActualCostsMock.mockResolvedValue({
+        total: 3.73,
+        currency: 'USD',
+        breakdown: { '2026-04-10': 1.2345, '2026-04-11': 2.5 },
       });
 
       const result = await service.getActualCosts(2);
@@ -67,28 +74,21 @@ describe('CostService', () => {
         { date: '2026-04-10', cost: 1.2345 },
         { date: '2026-04-11', cost: 2.5 },
       ]);
-      // 1.2345 + 2.5 = 3.7345 -> rounded to 2 decimals = 3.73
       expect(result.total).toBeCloseTo(3.73, 2);
       expect(result.error).toBeUndefined();
     });
 
-    it('should filter by ECS and Fargate services', async () => {
-      ceMock.on(GetCostAndUsageCommand).resolves({ ResultsByTime: [] });
+    it('should pass a start/end range spanning the requested number of days to the provider', async () => {
+      getActualCostsMock.mockResolvedValue({ total: 0, currency: 'USD', breakdown: {} });
       await service.getActualCosts(7);
-      const calls = ceMock.commandCalls(GetCostAndUsageCommand);
-      expect(calls).toHaveLength(1);
-      const input = calls[0]!.args[0].input;
-      expect(input.Filter?.Dimensions?.Key).toBe('SERVICE');
-      expect(input.Filter?.Dimensions?.Values).toEqual([
-        'Amazon Elastic Container Service',
-        'AWS Fargate',
-      ]);
-      expect(input.Granularity).toBe('DAILY');
-      expect(input.Metrics).toEqual(['UnblendedCost']);
+      expect(getActualCostsMock).toHaveBeenCalledTimes(1);
+      const range = getActualCostsMock.mock.calls[0]![0];
+      const diffDays = Math.round((range.end.getTime() - range.start.getTime()) / (24 * 60 * 60 * 1000));
+      expect(diffDays).toBe(7);
     });
 
-    it('should return an error shape when Cost Explorer throws', async () => {
-      ceMock.on(GetCostAndUsageCommand).rejects(new Error('AccessDenied'));
+    it('should return an error shape when the provider throws', async () => {
+      getActualCostsMock.mockRejectedValue(new Error('AccessDenied'));
       const result = await service.getActualCosts(7);
       expect(result.total).toBe(0);
       expect(result.daily).toEqual([]);
@@ -97,8 +97,10 @@ describe('CostService', () => {
     });
 
     it('should handle a missing cost amount gracefully', async () => {
-      ceMock.on(GetCostAndUsageCommand).resolves({
-        ResultsByTime: [{ TimePeriod: { Start: '2026-04-10', End: '2026-04-11' }, Total: {} }],
+      getActualCostsMock.mockResolvedValue({
+        total: 0,
+        currency: 'USD',
+        breakdown: { '2026-04-10': 0 },
       });
       const result = await service.getActualCosts(1);
       expect(result.daily).toEqual([{ date: '2026-04-10', cost: 0 }]);
@@ -106,7 +108,7 @@ describe('CostService', () => {
     });
 
     it('should default to 7 days when called with no argument', async () => {
-      ceMock.on(GetCostAndUsageCommand).resolves({ ResultsByTime: [] });
+      getActualCostsMock.mockResolvedValue({ total: 0, currency: 'USD', breakdown: {} });
       const result = await service.getActualCosts();
       expect(result.days).toBe(7);
     });

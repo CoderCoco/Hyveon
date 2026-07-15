@@ -200,8 +200,9 @@ export function LogsPage() {
       try {
         const res = await api.games();
         if (cancelled) return;
-        setGames(res.games);
-        if (res.games.length > 0) setSelectedGame((cur) => cur || res.games[0]!);
+        const names = res.games.map((g) => g.name);
+        setGames(names);
+        if (names.length > 0) setSelectedGame((cur) => cur || names[0]!);
       } catch {
         if (!cancelled) setError('Could not load games.');
       }

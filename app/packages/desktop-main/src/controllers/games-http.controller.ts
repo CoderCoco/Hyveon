@@ -1,6 +1,9 @@
 import { Controller, Get, Param, Post } from '@nestjs/common';
+import type { GameListEntry } from '@hyveon/shared';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
+import { TfvarsService } from '../services/TfvarsService.js';
+import { mergeGameLists } from '../services/mergeGameLists.js';
 
 /**
  * HTTP shim that exposes the game-server operations as plain REST endpoints
@@ -10,36 +13,46 @@ import { EcsService } from '../services/EcsService.js';
  * main-process host uses the IPC {@link GamesController} (`@MessagePattern`)
  * handlers instead.
  *
- * Both controllers delegate to the same {@link ConfigService} and
- * {@link EcsService} providers — there is no duplicated logic.
+ * Both controllers delegate to the same {@link ConfigService},
+ * {@link EcsService}, {@link TfvarsService}, and {@link mergeGameLists}
+ * providers — there is no duplicated logic.
  */
 @Controller()
 export class GamesHttpController {
   constructor(
     private readonly config: ConfigService,
     private readonly ecs: EcsService,
+    private readonly tfvars: TfvarsService,
   ) {}
 
   /**
-   * Lists game keys from the Terraform `game_servers` map. Invalidates the
-   * tfstate cache first so a fresh `terraform apply` shows up without having
-   * to restart the server.
+   * Lists games by merging the declared view (`terraform.tfvars`
+   * `game_servers` map, via {@link TfvarsService}) with the deployed view
+   * (`terraform.tfstate` `game_names` output, via {@link ConfigService}) —
+   * see {@link mergeGameLists}. Invalidates both caches first so a fresh
+   * `terraform apply` / tfvars edit shows up without having to restart the
+   * server.
    */
   @Get('games')
-  listGames(): { games: string[] } {
+  async listGames(): Promise<{ games: GameListEntry[] }> {
     this.config.invalidateCache();
+    this.tfvars.invalidateCache();
     const outputs = this.config.getTfOutputs();
-    return { games: outputs?.game_names ?? [] };
+    const declared = await this.tfvars.getGameServers();
+    const deployed = outputs?.game_names ?? [];
+    return { games: mergeGameLists(declared, deployed) };
   }
 
   /**
    * Returns the current ECS status of every game in parallel. Also
-   * invalidates the tfstate cache — this is the endpoint the dashboard polls,
-   * so it's the natural place to pick up newly-added games.
+   * invalidates the tfstate cache and the `TfvarsService` cache — this is
+   * the endpoint the dashboard polls, so it's the natural place to pick up
+   * newly-added games.
    */
   @Get('status')
   async listStatus() {
     this.config.invalidateCache();
+    this.tfvars.invalidateCache();
     const outputs = this.config.getTfOutputs();
     if (!outputs) return [];
     return Promise.all(outputs.game_names.map((g) => this.ecs.getStatus(g)));

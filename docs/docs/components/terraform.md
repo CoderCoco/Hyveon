@@ -9,28 +9,129 @@ All AWS infrastructure lives under `terraform/`. State is stored in an S3
 bucket with DynamoDB locking, bootstrapped automatically by `setup.sh` — see
 step 3 of the [setup guide](/setup) for details.
 
+The root `terraform/` directory is a thin composer: the `terraform`/`provider`
+blocks, a `module "cloud"` (source `./aws`) that carries every AWS resource,
+and passthrough `outputs.tf`/`variables.tf`. All AWS-specific HCL lives in the
+`terraform/aws/` module — that's where you'll find the actual resources.
+
+Composition is keyed on `var.active_cloud`: the `module "cloud"` block carries
+`count = var.active_cloud == "aws" ? 1 : 0`, so root outputs read from
+`module.cloud[0]`. Only `"aws"` is supported in v1 — the variable's
+`validation` block rejects anything else — but the count makes room for a
+future `gcp`/`azure` module to sit alongside `./aws` without restructuring
+the composer.
+
 ## Files
 
 | File | What it provisions |
 |---|---|
-| `main.tf` | VPC, Internet Gateway, two public subnets across AZs, route table, IAM execution role, EFS filesystem + mount targets + **per-game access points**, ECS cluster, **one Fargate task definition per game**, CloudWatch log groups, game-server + file-manager + EFS security groups. |
-| `alb.tf` | Conditional on any game having `https = true`: ACM certificate (DNS-validated), ALB + target groups per HTTPS game, HTTPS listener + HTTP→HTTPS redirect, Route 53 ALIAS records. |
-| `route53.tf` | Route 53 zone **data source** (zone must exist); the `update-dns` Lambda with its IAM, EventBridge rule on `ECS Task State Change`. |
-| `watchdog.tf` | `watchdog` Lambda with its IAM, EventBridge schedule at `rate(${watchdog_interval_minutes} minute(s))`. |
-| `efs-seeder.tf` | Conditional on any game having `file_seeds`: shared seeder SG, per-game IAM role + policy, CloudWatch log group, Lambda (VPC + EFS mount), and `aws_lambda_invocation` that re-triggers only when seed content changes. |
-| `interactions.tf` | `interactions` Lambda with IAM + Function URL (`auth_type = NONE`, CORS for `https://discord.com`). Exposes `interactions_invoke_url`. |
-| `followup.tf` | `followup` Lambda with IAM (`ecs:RunTask`, `StopTask`, `DescribeTasks`, `iam:PassRole`, `dynamodb:GetItem`/`PutItem`, `ec2:DescribeNetworkInterfaces`). Async-invoked by interactions. |
-| `discord_store.tf` | DynamoDB table (pk+sk, TTL on `expiresAt`), two Secrets Manager secrets (`${project_name}/discord/bot-token`, `/discord/public-key`) with `recovery_window_in_days = 0` and `lifecycle.ignore_changes` on seeded secret values. Optional `CONFIG#discord` DynamoDB item seeded from tfvars. Optional `BASE#discord` item holding the Terraform-managed base allowlist/admins (see `base_allowed_guilds` / `base_admin_*` variables). When `discord_bot_token`, `discord_application_id`, and at least one `base_allowed_guilds` entry are set, a `null_resource` runs `curl` to register slash commands in each base guild during apply; re-runs on token rotation or command-descriptor changes. |
-| `variables.tf` | Every configurable input. See the table below. |
-| `outputs.tf` | Every value the management app (and humans) consume. |
+| `main.tf` | Root composer: `terraform`/`backend "s3"` block, both `provider "aws"` blocks (default + `us_east_1` alias for CloudFront ACM certs), and the `module "cloud"` block — conditionally counted on `var.active_cloud` — wiring all 16 inputs through to `./aws`. |
+| `variables.tf` | Every configurable input (passed straight through to the module), plus `active_cloud` which selects the composed cloud module and isn't forwarded to `./aws`. See the table below. |
+| `outputs.tf` | Re-exports every `module.cloud[0].*` output by the same name — `ConfigService.getTfOutputs()` reads these from root-level `terraform.tfstate`, where module outputs don't appear. |
+| `moved.tf` | A module-level `moved` block mapping `module.cloud` → `module.cloud[0]` (added when the module gained `count`), plus one `moved` block per resource living in `terraform/aws/`, mapping its pre-split root address to `module.cloud.<type>.<name>` so existing deployments `plan` cleanly instead of proposing a destroy/recreate. |
 | `terraform.tfvars.example` | Starting point for your `terraform.tfvars`. |
+| `aws/main.tf` | VPC, Internet Gateway, two public subnets across AZs, route table, IAM execution role, EFS filesystem + mount targets + **per-game access points**, ECS cluster, **one Fargate task definition per game**, CloudWatch log groups, game-server + file-manager + EFS security groups. |
+| `aws/versions.tf` | Module-local `required_providers` (aws, archive), including the `aws.us_east_1` `configuration_aliases` entry the root passes in. |
+| `aws/variables.tf` | Module input declarations — every root variable except `tags` (which only the root's `default_tags` needs). |
+| `aws/outputs.tf` | Every value the management app (and humans) consume, including the four outputs that used to be stray blocks in `interactions.tf`, `discord-domain.tf`, `route53.tf`, and `watchdog.tf`. |
+| `aws/alb.tf` | Conditional on any game having `https = true`: ACM certificate (DNS-validated), ALB + target groups per HTTPS game, HTTPS listener + HTTP→HTTPS redirect, Route 53 ALIAS records. |
+| `aws/route53.tf` | Route 53 zone **data source** (zone must exist); the `update-dns` Lambda with its IAM, EventBridge rule on `ECS Task State Change`. |
+| `aws/watchdog.tf` | `watchdog` Lambda with its IAM, EventBridge schedule at `rate(${watchdog_interval_minutes} minute(s))`. |
+| `aws/efs-seeder.tf` | Conditional on any game having `file_seeds`: shared seeder SG, per-game IAM role + policy, CloudWatch log group, Lambda (VPC + EFS mount), and `aws_lambda_invocation` that re-triggers only when seed content changes. |
+| `aws/interactions.tf` | `interactions` Lambda with IAM + Function URL (`auth_type = NONE`, CORS for `https://discord.com`). Exposes `interactions_invoke_url`. |
+| `aws/followup.tf` | `followup` Lambda with IAM (`ecs:RunTask`, `StopTask`, `DescribeTasks`, `iam:PassRole`, `dynamodb:GetItem`/`PutItem`, `ec2:DescribeNetworkInterfaces`). Async-invoked by interactions. |
+| `aws/discord_store.tf` | DynamoDB table (pk+sk, TTL on `expiresAt`), two Secrets Manager secrets (`${project_name}/discord/bot-token`, `/discord/public-key`) with `recovery_window_in_days = 0` and `lifecycle.ignore_changes` on seeded secret values. Optional `CONFIG#discord` DynamoDB item seeded from tfvars. Optional `BASE#discord` item holding the Terraform-managed base allowlist/admins (see `base_allowed_guilds` / `base_admin_*` variables). When `discord_bot_token`, `discord_application_id`, and at least one `base_allowed_guilds` entry are set, a `null_resource` runs `curl` to register slash commands in each base guild during apply; re-runs on token rotation or command-descriptor changes. |
+
+## Bootstrap module (`terraform/bootstrap/`)
+
+Root `main.tf` reads the tfvars bucket via `data "aws_s3_bucket" "tfvars"`
+(keyed on `var.tfvars_bucket_name`), so that bucket must already exist before
+the root module is ever applied. `terraform/bootstrap/` is a small,
+standalone module — with no dependency on `terraform/aws/` or the root
+composer — whose only job is to create it. It provisions:
+
+- `aws_s3_bucket.tfvars` — named `coalesce(var.tfvars_bucket_name, "${var.project_name}-tfvars")`.
+- `aws_s3_bucket_versioning.tfvars` — versioning `Enabled`, which doubles as
+  the history/locking mechanism for `terraform.tfvars` (no separate DynamoDB
+  lock table for this bucket).
+- `aws_s3_bucket_server_side_encryption_configuration.tfvars` — AES256 SSE by default.
+- `aws_s3_bucket_public_access_block.tfvars` — blocks all public ACLs/policies.
+- `aws_s3_bucket_lifecycle_configuration.tfvars` — expires noncurrent versions
+  after 90 days.
+
+Outputs (`terraform/bootstrap/outputs.tf`): `tfvars_bucket_name` and
+`tfvars_bucket_arn`.
+
+**Apply-before-main ordering:** run `terraform init` and `terraform apply`
+inside `terraform/bootstrap/` first — before the first `terraform apply` in
+the root `terraform/` module. If the bucket doesn't exist yet, the root's
+`data "aws_s3_bucket" "tfvars"` source fails at plan time. The bootstrap
+module has no remote backend of its own (it creates the bucket other things
+eventually read from, so storing its own state there would be
+chicken-and-egg); its state stays local and is gitignored.
+
+### Bucket layout
+
+The bucket holds exactly one object: the key `terraform.tfvars` (overridable
+via `tfvars-sync.ts --key`, e.g. if a parent repo wants to store the file
+under a different name). There is no per-environment prefixing or additional
+objects — one bucket maps to one `terraform.tfvars`. S3 **versioning**
+(`aws_s3_bucket_versioning.tfvars`, `Enabled`) keeps every prior revision of
+that object under its own `versionId`, which doubles as the change history
+and the substrate for the conflict-detection scheme below — there is no
+separate DynamoDB lock table for this bucket the way the Terraform state
+backend uses one. The **lifecycle rule**
+(`aws_s3_bucket_lifecycle_configuration.tfvars`) expires noncurrent versions
+after 90 days, so history isn't kept forever, but recent revisions remain
+recoverable via `aws s3api list-object-versions` / `get-object --version-id`
+if a bad push needs to be rolled back.
+
+### Optimistic locking (version/etag conflict semantics)
+
+Nothing in this bucket takes a blocking lock. Instead, `scripts/tfvars-sync.ts`
+(the CLI the parent-repo Makefile's `tfvars-pull` / `tfvars-push` / `tfvars-diff`
+targets wrap — see `renderMakefile()` in `scripts/init-parent.ts`) coordinates
+concurrent edits with **optimistic locking** against the object's S3 version
+id and etag:
+
+- **`pull`** downloads the object and writes a sidecar lock file
+  `terraform.tfvars.lock` next to it, recording the `versionId`, `etag`,
+  size, and `lastModified` observed at pull time (plus a local `pulledAt`
+  timestamp). This lock file is machine-local and gitignored — see
+  `renderGitignore()`'s `*.tfvars.lock` entry — it is never committed.
+- **`push`** refuses to upload unless the local lock's `versionId` still
+  matches the object's *current* `versionId` (checked via `HeadObject`
+  immediately before the write): a missing lock (never pulled) or a
+  stale one (someone else pushed since your last pull) both raise
+  `VersionMismatchError`, and the fix is the same either way — run `pull`
+  again to refresh, resolve any diff, then retry `push`.
+- **The check-then-write race is closed with a conditional `PutObject`.**
+  Between the `HeadObject` check and the actual upload there's a window
+  where a concurrent push could slip in; `push` guards it with `IfMatch:
+  "<locked etag>"` for an existing object (or `IfNoneMatch: '*'` for a
+  brand-new one). If S3 rejects the write with `412 Precondition Failed`
+  because the object changed in that window, `tfvars-sync.ts` surfaces the
+  same `VersionMismatchError` rather than silently overwriting the other
+  side's change.
+- **`BucketNotVersionedError`** is thrown instead if `HeadObject` reports no
+  `VersionId` for an existing object — i.e. the bucket lost (or never had)
+  versioning enabled. The version-based conflict check has nothing to
+  compare against in that case, so `push` refuses outright rather than
+  guessing; versioning must be restored on the bucket before pushing again.
+- **`diff`** and **`check`** are read-only: `diff` byte-compares the local
+  file against the current remote object (used by `migrate --to-local` to
+  confirm it's safe to drop the S3 marker), and `check` compares the local
+  lock's `versionId` against the remote `HeadObject` `versionId` as a fast
+  drift gate — this is what the Makefile's `apply` target runs before every
+  `terraform apply` (skippable with `FORCE_APPLY=1`).
 
 ## Variables
 
 | Name | Type | Default | Purpose |
 |---|---|---|---|
+| `active_cloud` | `string` | `aws` | Selects which cloud module the root composes. Only `"aws"` is supported in v1 — the variable's `validation` block rejects anything else. |
 | `aws_region` | `string` | `us-east-1` | AWS region for all resources. |
-| `project_name` | `string` | `game-servers` | Prefix for named resources and the Secrets Manager paths. |
+| `project_name` | `string` | `hyveon` | Prefix for named resources and the Secrets Manager paths. |
 | `vpc_cidr` | `string` | `10.0.0.0/16` | Parent CIDR; subnets are /24s within it. |
 | `game_servers` | `map(object)` | — | The single source of truth. Per-game: `image`, `cpu`, `memory`, `ports[]`, `environment[]`, `volumes[]` (`name` + `container_path`), `https`, `connect_message` (optional), `file_seeds[]` (optional). Each `volumes` entry creates its own EFS access point rooted at `/${game}/${name}`. `connect_message` controls the Discord connection hint shown when a server reaches RUNNING; supports `{host}`, `{ip}`, `{port}`, and `{game}` placeholders. See `game_servers[].file_seeds` below. |
 | `hosted_zone_name` | `string` | _(required)_ | Existing Route 53 zone looked up as a data source (e.g. `example.com`). |
@@ -45,6 +146,7 @@ step 3 of the [setup guide](/setup) for details.
 | `base_allowed_guilds` | `list(string)` | `[]` | Guild IDs written to the `BASE#discord` row on every apply. The management UI shows these as locked; they cannot be removed via the UI. Update in tfvars + re-apply to change. |
 | `base_admin_user_ids` | `list(string)` | `[]` | Discord user IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
 | `base_admin_role_ids` | `list(string)` | `[]` | Discord role IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
+| `tfvars_bucket_name` | `string` | `null` → `{project_name}-tfvars` | Name of the versioned S3 bucket created by the [bootstrap module](#bootstrap-module-terraformbootstrap) to hold `terraform.tfvars` outside the operator's parent repo. Read via a `data "aws_s3_bucket" "tfvars"` source in root `main.tf`; must resolve to a bucket that already exists (see apply-before-main ordering below). |
 | `tags` | `map(string)` | defaults | Merged into `default_tags` for cost allocation (`Project`). |
 
 ### `game_servers[].file_seeds` (optional)
@@ -71,6 +173,7 @@ When `file_seeds` is non-empty, `efs-seeder.tf` creates a seeder Lambda for the 
 | `ecs_cluster_name`, `ecs_cluster_arn` | watchdog + followup Lambda env + the management app. |
 | `efs_file_system_id`, `efs_access_points` | Reference; each task mounts its own AP. |
 | `game_names` | interactions / followup / update-dns / watchdog Lambdas (env var `GAME_NAMES`). |
+| `applied_game_servers` (sensitive) | Management app drift detection — the full per-game `game_servers` configuration object (image, cpu, memory, ports, env, volumes, `file_seeds`, etc.) as last applied by Terraform, for field-level comparison against the currently declared tfvars config. Only present in `terraform.tfstate` after the next `terraform apply`. |
 | `task_definitions` | Ops (`aws ecs run-task --task-definition palworld-server`). |
 | `hosted_zone_id`, `domain_name`, `dns_records` | update-dns / watchdog Lambda env + DNS checks. |
 | `alb_dns_name`, `acm_certificate_arn` | Null if no HTTPS games; public reference otherwise. |

@@ -7,6 +7,7 @@ import type {
   WatchdogConfig,
   ActualCosts,
   DiscordConfigRedacted,
+  GameListEntry,
 } from '@/api.js';
 import {
   ENV_DATA,
@@ -16,7 +17,7 @@ import {
   CONFIGURED_DISCORD_CONFIG,
   makeActualCosts,
 } from './game-data.js';
-import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage } from '../pages/index.js';
+import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 export type {
@@ -26,6 +27,7 @@ export type {
   WatchdogConfig,
   ActualCosts,
   DiscordConfigRedacted,
+  GameListEntry,
 };
 export {
   ENV_DATA,
@@ -44,7 +46,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage } from '../pages/index.js';
+export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -73,11 +75,19 @@ export interface StubOptions {
    */
   discord?: DiscordConfigRedacted;
   /**
-   * Game names returned by `GET /api/games` (used by the Logs page).
-   * Defaults to the names derived from `statuses`. Override when the Logs
-   * page should expose games that aren't part of `statuses`.
+   * Entries returned by `GET /api/games` (used by the Logs page and the
+   * read-only Games section of the Settings page). Defaults to the names
+   * derived from `statuses`, each wrapped into a `GameListEntry` with
+   * `declared: true, deployed: true` and no `config`.
+   *
+   * Each element may be either a bare game name (shorthand for the default
+   * `declared`/`deployed` wrapping above) or a full `GameListEntry` object,
+   * so a spec can mix declared-only, deployed-only, and fully-declared
+   * entries — including a `config` payload — in a single stub. See issue
+   * #92 for the `{ games: GameListEntry[] }` response shape and issue #93
+   * for the Games settings section that reads `config`.
    */
-  games?: string[];
+  games?: (string | GameListEntry)[];
   /**
    * Initial log lines surfaced via `window.gsd.logs.get(game)` (used by the
    * Logs page). Maps game name → seeded lines. Games not present in the map
@@ -135,7 +145,12 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
     return route.fulfill({ json: s });
   });
 
-  await page.route('**/api/games', (route) => route.fulfill({ json: { games } }));
+  await page.route('**/api/games', (route) => {
+    const entries: GameListEntry[] = games.map((g) =>
+      typeof g === 'string' ? { name: g, declared: true, deployed: true } : g,
+    );
+    return route.fulfill({ json: { games: entries } });
+  });
 
   await page.route('**/api/costs/estimate', (route) => route.fulfill({ json: costs }));
 
@@ -225,6 +240,8 @@ type E2EFixtures = {
   logs: LogsPage;
   /** Page object for the `/settings` route. */
   settings: SettingsPage;
+  /** Page object for the `/games` and `/games/:name` routes. */
+  games: GamesPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
 };
@@ -243,6 +260,9 @@ export const test = base.extend<E2EFixtures>({
   },
   settings: async ({ page }, use) => {
     await use(new SettingsPage(page));
+  },
+  games: async ({ page }, use) => {
+    await use(new GamesPage(page));
   },
   layout: async ({ page }, use) => {
     await use(new AppLayout(page));

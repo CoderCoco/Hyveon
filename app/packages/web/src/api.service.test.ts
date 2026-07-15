@@ -194,8 +194,12 @@ describe('IPC bridge delegation', () => {
   });
 
   it('should return the payload resolved by the bridge', async () => {
-    gsd.games.list.mockResolvedValueOnce({ games: ['minecraft', 'palworld'] });
-    await expect(api.games()).resolves.toEqual({ games: ['minecraft', 'palworld'] });
+    const entries = [
+      { name: 'minecraft', declared: false, deployed: true },
+      { name: 'palworld', declared: false, deployed: false },
+    ];
+    gsd.games.list.mockResolvedValueOnce({ games: entries });
+    await expect(api.games()).resolves.toEqual({ games: entries });
   });
 });
 

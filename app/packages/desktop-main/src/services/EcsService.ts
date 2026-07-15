@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   ECSClient,
   ListTasksCommand,
@@ -15,9 +15,11 @@ import {
   type AwsCloudProviderConfig,
   type AwsCloudProviderLogger,
 } from '@hyveon/cloud-aws';
+import type { CloudProvider } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { Ec2Service } from './Ec2Service.js';
+import { CLOUD_PROVIDER } from '../modules/cloud-provider.tokens.js';
 
 /**
  * Maps `ConfigService`'s Terraform-outputs shape onto the narrow config
@@ -130,8 +132,9 @@ export interface StartResult {
  * Service here — the core cost-saving design is "run a one-off task only
  * when the user clicks Start, stop it when the watchdog or user decides".
  *
- * `getStatus` / `start` / `stop` delegate to {@link AwsCloudProvider}
- * (provided by `AwsModule`) rather than issuing `RunTaskCommand` /
+ * `getStatus` / `start` / `stop` delegate to the {@link CloudProvider}
+ * injected via the `CLOUD_PROVIDER` token (bound by `CloudProviderModule` to
+ * {@link AwsCloudProvider} today) rather than issuing `RunTaskCommand` /
  * `StopTaskCommand` or assembling status themselves — this class is a thin
  * translation layer between the cloud-agnostic `CloudProvider` contract and
  * the app's `GameStatus` / `StartResult` response shapes. The remaining
@@ -148,7 +151,7 @@ export class EcsService {
     // ENI-to-public-IP resolution now happens inside `AwsCloudProvider`
     // itself, so `getStatus` no longer needs to call through to `Ec2Service`.
     _ec2: Ec2Service,
-    private readonly provider: AwsCloudProvider = createAwsCloudProvider(config),
+    @Inject(CLOUD_PROVIDER) private readonly provider: CloudProvider,
   ) {}
 
   private getClient(): ECSClient {

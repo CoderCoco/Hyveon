@@ -23,8 +23,8 @@ data "aws_route53_zone" "main" {
 
 data "archive_file" "dns_updater" {
   type        = "zip"
-  source_file = "${path.module}/../app/packages/lambda/update-dns/dist/handler.cjs"
-  output_path = "${path.module}/../app/packages/lambda/update-dns/dist/bundle.zip"
+  source_file = "${path.module}/../../app/packages/lambda/update-dns/dist/handler.cjs"
+  output_path = "${path.module}/../../app/packages/lambda/update-dns/dist/bundle.zip"
 }
 
 resource "aws_iam_role" "dns_updater_lambda" {
@@ -85,8 +85,8 @@ resource "aws_iam_role_policy" "dns_updater_lambda" {
       },
       {
         # Pending-interaction lookup/delete for Discord followups
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
         Resource = aws_dynamodb_table.discord.arn
       },
     ]
@@ -156,11 +156,4 @@ resource "aws_lambda_permission" "dns_updater_eventbridge" {
   function_name = aws_lambda_function.dns_updater.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ecs_task_change.arn
-}
-
-# ── Outputs ───────────────────────────────────────────────────────────────────
-
-output "dns_records" {
-  description = "DNS hostnames for each game server (active when server is running)"
-  value       = { for game, _ in var.game_servers : game => "${game}.${var.hosted_zone_name}" }
 }

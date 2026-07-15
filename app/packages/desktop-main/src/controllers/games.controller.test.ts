@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { GamesController } from './games.controller.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 import type { EcsService } from '../services/EcsService.js';
+import type { TfvarsService } from '../services/TfvarsService.js';
+import type { GameServer } from '@hyveon/shared';
 
 vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -31,6 +33,31 @@ function makeEcs(): EcsService {
     start: vi.fn().mockResolvedValue({ success: true, message: 'Task launched' }),
     stop: vi.fn().mockResolvedValue({ success: true, message: 'Task stopped' }),
   } as unknown as EcsService;
+}
+
+/** Minimal, valid `GameServer` fixture for a single declared game. */
+function buildGameServer(name: string): GameServer {
+  return {
+    name,
+    image: 'example/image:latest',
+    cpu: 1024,
+    memory: 2048,
+    ports: [{ container: 25565, protocol: 'tcp' }],
+    volumes: [{ name: 'saves', container_path: '/data' }],
+  };
+}
+
+/**
+ * Build a TfvarsService stub with `invalidateCache` and `getGameServers`
+ * pre-wired. Defaults `getGameServers()` to an empty declared list so
+ * existing specs that only care about the deployed (tfstate) view don't have
+ * to know about the declared merge.
+ */
+function makeTfvars(declared: GameServer[] = []): TfvarsService {
+  return {
+    invalidateCache: vi.fn(),
+    getGameServers: vi.fn().mockResolvedValue(declared),
+  } as Partial<TfvarsService> as TfvarsService;
 }
 
 /**
@@ -71,46 +98,80 @@ describe('GamesController', () => {
   });
 
   describe('listGames', () => {
-    it('should invalidate the tfstate cache before reading game names', () => {
+    it('should invalidate the tfstate cache before reading game names', async () => {
       const config = makeConfig();
-      new GamesController(config, makeEcs()).listGames();
+      await new GamesController(config, makeEcs(), makeTfvars()).listGames();
       expect(config.invalidateCache).toHaveBeenCalledOnce();
     });
 
-    it('should return the game names from Terraform outputs', () => {
-      const result = new GamesController(makeConfig(), makeEcs()).listGames();
-      expect(result).toEqual({ games: ['minecraft', 'palworld'] });
+    it('should invalidate the TfvarsService cache before reading game names', async () => {
+      const tfvars = makeTfvars();
+      await new GamesController(makeConfig(), makeEcs(), tfvars).listGames();
+      expect(tfvars.invalidateCache).toHaveBeenCalledOnce();
     });
 
-    it('should return an empty games array when Terraform has not been applied yet', () => {
-      const result = new GamesController(makeConfig(null), makeEcs()).listGames();
+    it('should return the deployed game names from Terraform outputs when nothing is declared in tfvars', async () => {
+      const result = await new GamesController(makeConfig(), makeEcs(), makeTfvars()).listGames();
+      expect(result).toEqual({
+        games: [
+          { name: 'minecraft', declared: false, deployed: true },
+          { name: 'palworld', declared: false, deployed: true },
+        ],
+      });
+    });
+
+    it('should return an empty games array when Terraform has not been applied yet and nothing is declared', async () => {
+      const result = await new GamesController(makeConfig(null), makeEcs(), makeTfvars()).listGames();
       expect(result).toEqual({ games: [] });
+    });
+
+    it('should return a game that exists only in tfvars (declared but not yet applied)', async () => {
+      const ark = buildGameServer('ark');
+      const result = await new GamesController(makeConfig(null), makeEcs(), makeTfvars([ark])).listGames();
+      expect(result).toEqual({ games: [{ name: 'ark', declared: true, deployed: false, config: ark }] });
+    });
+
+    it('should merge declared tfvars games with deployed tfstate games', async () => {
+      const palworld = buildGameServer('palworld');
+      const result = await new GamesController(makeConfig(), makeEcs(), makeTfvars([palworld])).listGames();
+      expect(result).toEqual({
+        games: [
+          { name: 'palworld', declared: true, deployed: true, config: palworld },
+          { name: 'minecraft', declared: false, deployed: true },
+        ],
+      });
     });
   });
 
   describe('listStatus', () => {
     it('should invalidate cache before querying ECS', async () => {
       const config = makeConfig();
-      await new GamesController(config, makeEcs()).listStatus();
+      await new GamesController(config, makeEcs(), makeTfvars()).listStatus();
       expect(config.invalidateCache).toHaveBeenCalledOnce();
+    });
+
+    it('should invalidate the TfvarsService cache before querying ECS', async () => {
+      const tfvars = makeTfvars();
+      await new GamesController(makeConfig(), makeEcs(), tfvars).listStatus();
+      expect(tfvars.invalidateCache).toHaveBeenCalledOnce();
     });
 
     it('should query ECS status for every game in the Terraform outputs', async () => {
       const ecs = makeEcs();
-      await new GamesController(makeConfig(), ecs).listStatus();
+      await new GamesController(makeConfig(), ecs, makeTfvars()).listStatus();
       expect(ecs.getStatus).toHaveBeenCalledWith('minecraft');
       expect(ecs.getStatus).toHaveBeenCalledWith('palworld');
     });
 
     it('should return an empty array when tfstate is absent', async () => {
-      const result = await new GamesController(makeConfig(null), makeEcs()).listStatus();
+      const result = await new GamesController(makeConfig(null), makeEcs(), makeTfvars()).listStatus();
       expect(result).toEqual([]);
     });
 
     it('should return status entries in the same order as game_names', async () => {
       const ecs = makeEcs();
       vi.mocked(ecs.getStatus).mockImplementation(async (g) => ({ game: g, state: 'stopped' as const }));
-      const result = await new GamesController(makeConfig(), ecs).listStatus();
+      const result = await new GamesController(makeConfig(), ecs, makeTfvars()).listStatus();
       expect(result.map((s) => s.game)).toEqual(['minecraft', 'palworld']);
     });
   });
@@ -120,7 +181,7 @@ describe('GamesController', () => {
       const config = makeConfig();
       const ecs = makeEcs();
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      await new GamesController(config, ecs).getStatus('minecraft');
+      await new GamesController(config, ecs, makeTfvars()).getStatus('minecraft');
       expect(config.invalidateCache).not.toHaveBeenCalled();
       expect(ecs.getStatus).toHaveBeenCalledWith('minecraft');
     });
@@ -129,7 +190,7 @@ describe('GamesController', () => {
       const ecs = makeEcs();
       vi.mocked(ecs.getStatus).mockResolvedValue({ game: 'minecraft', state: 'running' });
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      const result = await new GamesController(makeConfig(), ecs).getStatus('minecraft');
+      const result = await new GamesController(makeConfig(), ecs, makeTfvars()).getStatus('minecraft');
       expect(result).toEqual({ game: 'minecraft', state: 'running' });
     });
   });
@@ -138,7 +199,7 @@ describe('GamesController', () => {
     it('should delegate to EcsService.start with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      await new GamesController(makeConfig(), ecs).start('palworld');
+      await new GamesController(makeConfig(), ecs, makeTfvars()).start('palworld');
       expect(ecs.start).toHaveBeenCalledWith('palworld');
     });
 
@@ -146,7 +207,7 @@ describe('GamesController', () => {
       const ecs = makeEcs();
       vi.mocked(ecs.start).mockResolvedValue({ success: true, message: 'running', taskArn: 'arn:task' });
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      const result = await new GamesController(makeConfig(), ecs).start('minecraft');
+      const result = await new GamesController(makeConfig(), ecs, makeTfvars()).start('minecraft');
       expect(result).toMatchObject({ success: true, taskArn: 'arn:task' });
     });
   });
@@ -155,7 +216,7 @@ describe('GamesController', () => {
     it('should delegate to EcsService.stop with the game name received via the IPC payload', async () => {
       const ecs = makeEcs();
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      await new GamesController(makeConfig(), ecs).stop('minecraft');
+      await new GamesController(makeConfig(), ecs, makeTfvars()).stop('minecraft');
       expect(ecs.stop).toHaveBeenCalledWith('minecraft');
     });
 
@@ -163,7 +224,7 @@ describe('GamesController', () => {
       const ecs = makeEcs();
       vi.mocked(ecs.stop).mockResolvedValue({ success: true, message: 'stopped' });
       // Simulates ElectronIPCTransport: @Payload() delivers the game name as the sole argument.
-      const result = await new GamesController(makeConfig(), ecs).stop('minecraft');
+      const result = await new GamesController(makeConfig(), ecs, makeTfvars()).stop('minecraft');
       expect(result).toMatchObject({ success: true, message: 'stopped' });
     });
   });

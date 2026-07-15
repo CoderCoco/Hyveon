@@ -19,7 +19,13 @@ test.describe('ConfigService — tfstate fixture', () => {
 
   test('should return game names from tfstate fixture', async ({ ipc, serverMocks: _reset }) => {
     const body = await ipc.dispatch(GamesController, 'listGames');
-    expect(body.games).toEqual(['minecraft', 'valheim']);
+    // No terraform.tfvars is present in the test environment, so every game
+    // in the merged list is deployed-only (declared: false, deployed: true).
+    expect(body.games.map((g) => g.name).sort()).toEqual(['minecraft', 'valheim']);
+    body.games.forEach((g) => {
+      expect(g.declared).toBe(false);
+      expect(g.deployed).toBe(true);
+    });
   });
 
   test('should return status entries for all games in tfstate fixture', async ({ ipc, serverMocks: _reset }) => {

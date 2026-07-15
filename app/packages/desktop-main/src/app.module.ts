@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 import { Module } from '@nestjs/common';
 import { AwsModule } from './modules/aws.module.js';
 import { DiscordModule } from './modules/discord.module.js';
+import { TfvarsModule } from './modules/tfvars.module.js';
 import { GamesController } from './controllers/games.controller.js';
 import { GamesHttpController } from './controllers/games-http.controller.js';
 import { ConfigController } from './controllers/config.controller.js';
@@ -19,16 +20,19 @@ import { EnvController } from './controllers/env.controller.js';
 import { EnvHttpController } from './controllers/env-http.controller.js';
 import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
+import { DriftController } from './controllers/drift.controller.js';
+import { DriftHttpController } from './controllers/drift-http.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
+import { DriftService } from './services/DriftService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
 
 /**
- * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`) to
- * the IPC controllers.
+ * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`,
+ * `TfvarsModule`) to the IPC controllers.
  */
 @Module({
-  imports: [AwsModule, DiscordModule],
+  imports: [AwsModule, DiscordModule, TfvarsModule],
   controllers: [
     GamesController,
     GamesHttpController,
@@ -45,6 +49,8 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     EnvHttpController,
     DiagnosticsController,
     DiagnosticsHttpController,
+    DriftController,
+    DriftHttpController,
   ],
   providers: [
     {
@@ -59,6 +65,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
       },
     },
     DiagnosticsService,
+    DriftService,
     SafeStorageService,
     ElectronStoreService,
   ],

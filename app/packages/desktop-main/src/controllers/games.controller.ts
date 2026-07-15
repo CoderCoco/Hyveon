@@ -1,7 +1,10 @@
 import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
+import type { GameListEntry } from '@hyveon/shared';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
+import { TfvarsService } from '../services/TfvarsService.js';
+import { mergeGameLists } from '../services/mergeGameLists.js';
 
 /**
  * IPC-only game-server controller. Handles Electron main-process messages via
@@ -9,40 +12,51 @@ import { EcsService } from '../services/EcsService.js';
  *
  * The HTTP surface (`/api/games`, `/api/status`, `/api/start/:game`,
  * `/api/stop/:game`) is covered entirely by {@link GamesHttpController}.
- * Both controllers delegate to the same {@link ConfigService} and
- * {@link EcsService} providers — there is no duplicated logic.
+ * Both controllers delegate to the same {@link ConfigService},
+ * {@link EcsService}, and {@link TfvarsService} providers — there is no
+ * duplicated logic.
  */
 @Controller()
 export class GamesController {
   constructor(
     private readonly config: ConfigService,
     private readonly ecs: EcsService,
+    private readonly tfvars: TfvarsService,
   ) {}
 
   /**
-   * Lists game keys from the Terraform `game_servers` map. Invalidates the
-   * tfstate cache first so a fresh `terraform apply` shows up without having
-   * to restart the server.
+   * Lists games merged from the declared view (`terraform.tfvars`
+   * `game_servers` map, via {@link TfvarsService}) and the deployed view
+   * (`terraform.tfstate` `game_names` output, via {@link ConfigService}) —
+   * see {@link mergeGameLists}. This surfaces games that are declared but not
+   * yet applied (`declared: true, deployed: false`) alongside live games, so
+   * the renderer can distinguish the two states. Invalidates the tfstate
+   * cache and the `TfvarsService` cache first so a fresh `terraform apply` /
+   * tfvars edit shows up without having to restart the server.
    *
    * Reachable via the Electron IPC transport (`games.list`).
    */
   @MessagePattern('games.list')
-  listGames(): { games: string[] } {
+  async listGames(): Promise<{ games: GameListEntry[] }> {
     this.config.invalidateCache();
+    this.tfvars.invalidateCache();
+    const declared = await this.tfvars.getGameServers();
     const outputs = this.config.getTfOutputs();
-    return { games: outputs?.game_names ?? [] };
+    return { games: mergeGameLists(declared, outputs?.game_names ?? []) };
   }
 
   /**
    * Returns the current ECS status of every game in parallel. Also
-   * invalidates the tfstate cache — this is the natural place to pick up
-   * newly-added games when called from the Electron renderer.
+   * invalidates the tfstate cache and the `TfvarsService` cache — this is
+   * the natural place to pick up newly-added games when called from the
+   * Electron renderer.
    *
    * Reachable via the Electron IPC transport (`games.status`).
    */
   @MessagePattern('games.status')
   async listStatus() {
     this.config.invalidateCache();
+    this.tfvars.invalidateCache();
     const outputs = this.config.getTfOutputs();
     if (!outputs) return [];
     return Promise.all(outputs.game_names.map((g) => this.ecs.getStatus(g)));

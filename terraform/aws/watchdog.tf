@@ -14,8 +14,8 @@
 
 data "archive_file" "watchdog" {
   type        = "zip"
-  source_file = "${path.module}/../app/packages/lambda/watchdog/dist/handler.cjs"
-  output_path = "${path.module}/../app/packages/lambda/watchdog/dist/bundle.zip"
+  source_file = "${path.module}/../../app/packages/lambda/watchdog/dist/handler.cjs"
+  output_path = "${path.module}/../../app/packages/lambda/watchdog/dist/bundle.zip"
 }
 
 resource "aws_iam_role" "watchdog_lambda" {
@@ -142,9 +142,4 @@ resource "aws_lambda_permission" "watchdog_eventbridge" {
   function_name = aws_lambda_function.watchdog.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.watchdog_schedule.arn
-}
-
-output "watchdog_function_name" {
-  description = "Watchdog Lambda function name"
-  value       = aws_lambda_function.watchdog.function_name
 }
