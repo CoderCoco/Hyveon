@@ -97,6 +97,119 @@ export interface GameListEntry {
   config?: GameServer;
 }
 
+/**
+ * A single structural or business-rule validation failure for a proposed
+ * `game_servers` entry.
+ *
+ * Mirrors `GameServerValidationIssue` in
+ * `@hyveon/shared/src/gameServerValidator.ts` — that file is the source of
+ * truth; keep this copy in sync with it.
+ */
+export interface GameServerValidationIssue {
+  path: string;
+  message: string;
+}
+
+/**
+ * Successful create/update/delete. `game` is the affected entry's
+ * post-write config (omitted for a delete); `games` is the full, freshly
+ * merged games list so callers can refresh their view without a second
+ * round trip.
+ *
+ * Mirrors `GameWriteSuccess` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameWriteSuccess {
+  ok: true;
+  game?: GameServer;
+  games: GameListEntry[];
+}
+
+/**
+ * The write was rejected because the caller's `expectedVersionId` didn't
+ * match the current tfvars file version — someone else edited
+ * `terraform.tfvars` since the caller last read it. `currentVersionId` lets
+ * the caller re-fetch and retry.
+ *
+ * Mirrors `GameWriteConflict` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameWriteConflict {
+  ok: false;
+  code: 'conflict';
+  expectedVersionId?: string;
+  currentVersionId?: string;
+  message: string;
+}
+
+/**
+ * The proposed `game_servers` entry failed {@link GameServerValidationIssue}-shaped
+ * structural or business-rule validation.
+ *
+ * Mirrors `GameWriteValidationFailure` in `@hyveon/shared/src/gamesWrite.ts`
+ * — that file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameWriteValidationFailure {
+  ok: false;
+  code: 'validation';
+  issues: GameServerValidationIssue[];
+}
+
+/**
+ * The named game does not exist (e.g. update/delete targeting an
+ * undeclared game).
+ *
+ * Mirrors `GameWriteNotFound` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameWriteNotFound {
+  ok: false;
+  code: 'not_found';
+  message: string;
+}
+
+/**
+ * Catch-all failure for errors that aren't a conflict, validation failure,
+ * or not-found (e.g. filesystem I/O).
+ *
+ * Mirrors `GameWriteFailure` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface GameWriteFailure {
+  ok: false;
+  code: 'error';
+  message: string;
+}
+
+/**
+ * Discriminated union returned by the `games.create` / `games.update` /
+ * `games.delete` handlers. Discriminate on `ok` first, then `code` for the
+ * failure branches.
+ *
+ * Mirrors `GameWriteResult` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export type GameWriteResult =
+  | GameWriteSuccess
+  | GameWriteConflict
+  | GameWriteValidationFailure
+  | GameWriteNotFound
+  | GameWriteFailure;
+
+/**
+ * Request payload for `games.create`. `expectedVersionId`, when supplied,
+ * is checked against the current tfvars file version and a
+ * {@link GameWriteConflict} is returned on mismatch.
+ *
+ * Mirrors `CreateGamePayload` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface CreateGamePayload {
+  name: string;
+  config: Omit<GameServer, 'name'>;
+  expectedVersionId?: string;
+}
+
 /** Status of the FileBrowser helper task per game, returned by `GET /api/files/:game`. */
 export interface FileMgrStatus {
   game: string;
@@ -195,6 +308,8 @@ export const api = {
   filesMgrStatus: async (game: string): Promise<FileMgrStatus> => gsd().files.list(game),
   filesMgrStart: async (game: string): Promise<ActionResult> => gsd().files.start(game),
   filesMgrStop: async (game: string): Promise<ActionResult> => gsd().files.stop(game),
+  createGame: async (payload: CreateGamePayload): Promise<GameWriteResult> =>
+    gsd().games.create(payload) as Promise<GameWriteResult>,
 
   discordConfig: async (): Promise<DiscordConfigRedacted> =>
     gsd().discord.getConfig() as Promise<DiscordConfigRedacted>,
