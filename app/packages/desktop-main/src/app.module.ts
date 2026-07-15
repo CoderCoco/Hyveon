@@ -24,6 +24,7 @@ import { DriftController } from './controllers/drift.controller.js';
 import { DriftHttpController } from './controllers/drift-http.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { DriftService } from './services/DriftService.js';
+import { GamesWriteService } from './services/GamesWriteService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
 
@@ -66,6 +67,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     },
     DiagnosticsService,
     DriftService,
+    GamesWriteService,
     SafeStorageService,
     ElectronStoreService,
   ],
