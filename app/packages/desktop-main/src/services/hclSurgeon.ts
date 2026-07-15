@@ -37,7 +37,7 @@
  */
 export type HclSurgeonErrorReason = 'invalid-name' | 'duplicate-name' | 'structural';
 
-/** Thrown when the requested map/entry can't be located or the source HCL is malformed (unterminated bracket/string/heredoc). See {@link HclSurgeonErrorReason} for the `reason` this carries. */
+/** Thrown for any failure this module detects — invalid/duplicate entry names as well as structural issues (map/entry not found, malformed source HCL). See {@link HclSurgeonErrorReason} for the specific `reason` this carries. */
 export class HclSurgeonError extends Error {
   /** Why this error was thrown — see {@link HclSurgeonErrorReason}. Defaults to `'structural'` for call sites that don't have a more specific reason to report. */
   readonly reason: HclSurgeonErrorReason;
