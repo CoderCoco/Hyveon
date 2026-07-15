@@ -55,8 +55,12 @@ export class GamesWriteService {
    *    with the full issue list.
    *  - `OptimisticLockError` (stale `expectedVersionId`) → `{ code: 'conflict' }`
    *    with both etags.
-   *  - `HclSurgeonError` (name already exists in `game_servers`) →
+   *  - `HclSurgeonError` with `reason: 'invalid-name'` or `'duplicate-name'`
+   *    (the proposed name is malformed, or already exists in `game_servers`) →
    *    `{ code: 'validation' }` with a single `path: 'name'` issue.
+   *  - `HclSurgeonError` with `reason: 'structural'` (e.g. the `game_servers`
+   *    map itself can't be located in the source HCL) → the catch-all
+   *    `{ code: 'error' }`, since it isn't a name problem at all.
    */
   async createGame(payload: CreateGamePayload): Promise<GameWriteResult> {
     const siblings = await this.tfvars.getGameServers();
@@ -72,7 +76,7 @@ export class GamesWriteService {
       if (err instanceof OptimisticLockError) {
         return this.conflictResult(err);
       }
-      if (err instanceof HclSurgeonError) {
+      if (err instanceof HclSurgeonError && (err.reason === 'invalid-name' || err.reason === 'duplicate-name')) {
         return { ok: false, code: 'validation', issues: [{ path: 'name', message: err.message }] };
       }
       return this.errorResult(err);
@@ -185,8 +189,15 @@ export class GamesWriteService {
     };
   }
 
-  /** Builds the catch-all `GameWriteFailure` for any error that isn't a conflict/validation/not-found (e.g. filesystem I/O). */
+  /**
+   * Builds the catch-all `GameWriteFailure` for any error that isn't a
+   * conflict/validation/not-found (e.g. filesystem I/O). Logs the original
+   * error server-side but returns a stable, generic message to the caller —
+   * the raw error can contain filesystem paths or other infra details that
+   * shouldn't be forwarded verbatim as an HTTP 500 body.
+   */
   private errorResult(err: unknown): GameWriteResult {
-    return { ok: false, code: 'error', message: err instanceof Error ? err.message : String(err) };
+    logger.error('Game server write failed', { err });
+    return { ok: false, code: 'error', message: 'An unexpected error occurred while writing the game server configuration' };
   }
 }
