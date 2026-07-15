@@ -1,8 +1,9 @@
 import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
-import type { GameListEntry } from '@hyveon/shared';
+import type { CreateGamePayload, DeleteGamePayload, GameListEntry, GameWriteResult, UpdateGamePayload } from '@hyveon/shared';
 import { ConfigService } from '../services/ConfigService.js';
 import { EcsService } from '../services/EcsService.js';
+import { GamesWriteService } from '../services/GamesWriteService.js';
 import { TfvarsService } from '../services/TfvarsService.js';
 import { mergeGameLists } from '../services/mergeGameLists.js';
 
@@ -22,6 +23,7 @@ export class GamesController {
     private readonly config: ConfigService,
     private readonly ecs: EcsService,
     private readonly tfvars: TfvarsService,
+    private readonly gamesWrite: GamesWriteService,
   ) {}
 
   /**
@@ -93,5 +95,46 @@ export class GamesController {
   @MessagePattern('games.stop')
   stop(@Payload() game: string) {
     return this.ecs.stop(game);
+  }
+
+  /**
+   * Adds a brand-new `game_servers` entry. Delegates entirely to
+   * {@link GamesWriteService.createGame} and returns its `GameWriteResult`
+   * verbatim — never throws, since `ipcMain.handle` strips custom error
+   * properties during serialization and the renderer needs the full
+   * discriminated union (including `code` and `issues`/etags) to react
+   * correctly.
+   *
+   * Reachable via the Electron IPC transport (`games.create`).
+   */
+  @MessagePattern('games.create')
+  createGame(@Payload() payload: CreateGamePayload): Promise<GameWriteResult> {
+    return this.gamesWrite.createGame(payload);
+  }
+
+  /**
+   * Replaces an existing `game_servers` entry's value in place. Delegates
+   * entirely to {@link GamesWriteService.updateGame} and returns its
+   * `GameWriteResult` verbatim — never throws, for the same
+   * serialization-safety reason as {@link createGame}.
+   *
+   * Reachable via the Electron IPC transport (`games.update`).
+   */
+  @MessagePattern('games.update')
+  updateGame(@Payload() payload: UpdateGamePayload): Promise<GameWriteResult> {
+    return this.gamesWrite.updateGame(payload);
+  }
+
+  /**
+   * Removes a `game_servers` entry. Delegates entirely to
+   * {@link GamesWriteService.deleteGame} and returns its `GameWriteResult`
+   * verbatim — never throws, for the same serialization-safety reason as
+   * {@link createGame}.
+   *
+   * Reachable via the Electron IPC transport (`games.delete`).
+   */
+  @MessagePattern('games.delete')
+  deleteGame(@Payload() payload: DeleteGamePayload): Promise<GameWriteResult> {
+    return this.gamesWrite.deleteGame(payload);
   }
 }

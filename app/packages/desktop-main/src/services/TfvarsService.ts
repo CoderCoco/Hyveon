@@ -404,11 +404,15 @@ export class TfvarsService {
     if (!HCL_IDENTIFIER_PATTERN.test(name)) {
       throw new HclSurgeonError(
         `Entry name "${name}" is not a valid HCL identifier — must match ${HCL_IDENTIFIER_PATTERN}.`,
+        'invalid-name',
       );
     }
 
     if (locateEntry(hcl, 'game_servers', name)) {
-      throw new HclSurgeonError(`Entry "${name}" already exists in "game_servers" — use updateGameServer() instead.`);
+      throw new HclSurgeonError(
+        `Entry "${name}" already exists in "game_servers" — use updateGameServer() instead.`,
+        'duplicate-name',
+      );
     }
 
     const mapBody = locateMapBody(hcl, 'game_servers');

@@ -24,8 +24,29 @@
  * `GameServer` object) are out of scope here and belong in `TfvarsService`.
  */
 
-/** Thrown when the requested map/entry can't be located or the source HCL is malformed (unterminated bracket/string/heredoc). */
-export class HclSurgeonError extends Error {}
+/**
+ * Categorizes why a {@link HclSurgeonError} was thrown, so callers (e.g.
+ * `GamesWriteService.createGame()`) can distinguish a name-specific failure
+ * from a structural one instead of collapsing every `HclSurgeonError` into
+ * the same result shape:
+ *  - `'invalid-name'` — the proposed entry key isn't a valid bare HCL
+ *    identifier.
+ *  - `'duplicate-name'` — the proposed entry key already exists in the map.
+ *  - `'structural'` — everything else: the map/entry couldn't be located, or
+ *    the source HCL itself is malformed (unterminated bracket/string/heredoc).
+ */
+export type HclSurgeonErrorReason = 'invalid-name' | 'duplicate-name' | 'structural';
+
+/** Thrown for any failure this module detects — invalid/duplicate entry names as well as structural issues (map/entry not found, malformed source HCL). See {@link HclSurgeonErrorReason} for the specific `reason` this carries. */
+export class HclSurgeonError extends Error {
+  /** Why this error was thrown — see {@link HclSurgeonErrorReason}. Defaults to `'structural'` for call sites that don't have a more specific reason to report. */
+  readonly reason: HclSurgeonErrorReason;
+
+  constructor(message: string, reason: HclSurgeonErrorReason = 'structural') {
+    super(message);
+    this.reason = reason;
+  }
+}
 
 /**
  * Byte span of a single `entryKey = <value>` assignment inside a map's
