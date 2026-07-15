@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './errors.js';
 export * from './tfvars.js';
 export * from './gameServerValidator.js';
 export * from './drift.js';
