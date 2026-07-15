@@ -10,13 +10,8 @@
       "Edit(terraform/terraform.tfstate)",
       "Edit(terraform/terraform.tfstate.backup)",
       "Edit(terraform/terraform.tfvars)",
-      "Write(terraform/terraform.tfstate)",
-      "Write(terraform/terraform.tfstate.backup)",
-      "Write(terraform/terraform.tfvars)",
       "Edit(.env)",
-      "Edit(.env.*)",
-      "Write(.env)",
-      "Write(.env.*)"
+      "Edit(.env.*)"
     ]
   },
   "hooks": {
