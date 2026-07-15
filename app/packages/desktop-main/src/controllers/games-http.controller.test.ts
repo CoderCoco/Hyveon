@@ -67,7 +67,7 @@ function makeGamesWrite(): GamesWriteService {
     createGame: vi.fn(),
     updateGame: vi.fn(),
     deleteGame: vi.fn(),
-  } as unknown as GamesWriteService;
+  } as Partial<GamesWriteService> as GamesWriteService;
 }
 
 /** Build a successful `GameWriteResult` for use in write-endpoint tests. */
