@@ -15,6 +15,17 @@ import { HclSurgeonError, locateEntry, cutEntry, replaceEntry } from './hclSurge
 import type { HclEntrySpan } from './hclSurgeon.js';
 
 /**
+ * A literal `$` spliced into the fixture template literals below via
+ * `${DOLLAR}{...}` instead of the escape sequence `\${...}`. CodeQL's
+ * js/useless-regexp-character-escape query misfires on `\$` inside a
+ * template literal (it's meaningful there — it suppresses interpolation —
+ * even though the same escape would be a no-op in a plain string or
+ * outside a regex character class), so this sidesteps the false positive
+ * while producing byte-identical fixture text.
+ */
+const DOLLAR = '$';
+
+/**
  * A representative `.tfvars`-shaped fixture: a top-level `other_var` before
  * the map, a `game_servers = { ... }` map with three entries (one preceded
  * by a line comment, one whose value contains a brace-laden indented
@@ -41,7 +52,7 @@ game_servers = {
 
   minecraft = {
     image = "minecraft/image:latest"
-    msg   = "cost is \${100} literally"
+    msg   = "cost is ${DOLLAR}{100} literally"
   }
 }
 
@@ -127,7 +138,7 @@ game_servers = {
   it('should skip over nested braces inside a ${...} interpolation without miscounting', () => {
     const hcl = `game_servers = {
   foo = {
-    msg = "value \${func({a = 1, b = [1, 2, 3]})}"
+    msg = "value ${DOLLAR}{func({a = 1, b = [1, 2, 3]})}"
     after = "still inside foo"
   }
 
