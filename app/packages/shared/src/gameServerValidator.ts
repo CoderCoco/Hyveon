@@ -126,6 +126,38 @@ const FARGATE_CPU_MEMORY_TABLE: Readonly<
   16384: { min: 32768, max: 122880, step: 8192 },
 };
 
+/**
+ * Every Fargate CPU unit accepted by {@link FARGATE_CPU_MEMORY_TABLE}, ascending
+ * (e.g. `256, 512, 1024, ...`). Intended for populating a "cpu" dropdown in a
+ * game-creation form so the UI never drifts from the validator's own table.
+ */
+export function getFargateCpuOptions(): number[] {
+  return Object.keys(FARGATE_CPU_MEMORY_TABLE)
+    .map(Number)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Every valid Fargate memory (MiB) value for a given `cpu` tier, expanded
+ * from {@link FARGATE_CPU_MEMORY_TABLE} — the discrete `values` list as-is
+ * for `cpu=256`, or every step from `min` to `max` (inclusive) for the
+ * ranged tiers. Returns `[]` if `cpu` isn't one of {@link getFargateCpuOptions}.
+ */
+export function getFargateMemoryOptions(cpu: number): number[] {
+  const range = FARGATE_CPU_MEMORY_TABLE[cpu];
+  if (!range) {
+    return [];
+  }
+  if ('values' in range) {
+    return [...range.values];
+  }
+  const options: number[] = [];
+  for (let memory = range.min; memory <= range.max; memory += range.step) {
+    options.push(memory);
+  }
+  return options;
+}
+
 /** Human-readable description of the valid memory values/range for a given Fargate `cpu` tier. */
 function describeFargateMemoryOptions(cpu: number): string {
   const range = FARGATE_CPU_MEMORY_TABLE[cpu];
