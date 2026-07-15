@@ -125,7 +125,10 @@ describe('GamesWriteService', () => {
       tfvars.addGameServer = vi
         .fn()
         .mockRejectedValue(
-          new HclSurgeonError('Entry "ark" already exists in "game_servers" — use updateGameServer() instead.'),
+          new HclSurgeonError(
+            'Entry "ark" already exists in "game_servers" — use updateGameServer() instead.',
+            'duplicate-name',
+          ),
         );
       const service = new GamesWriteService(makeConfig(), tfvars);
 
@@ -140,12 +143,36 @@ describe('GamesWriteService', () => {
 
     it('should return a catch-all error result when the write raises an unexpected error', async () => {
       const tfvars = makeTfvars();
-      tfvars.addGameServer = vi.fn().mockRejectedValue(new Error('disk full'));
+      const originalError = new Error('disk full');
+      tfvars.addGameServer = vi.fn().mockRejectedValue(originalError);
       const service = new GamesWriteService(makeConfig(), tfvars);
+      const loggerErrorSpy = vi.spyOn(logger, 'error');
 
       const result = await service.createGame({ name: 'ark', config: buildConfig() });
 
-      expect(result).toEqual({ ok: false, code: 'error', message: 'disk full' });
+      expect(result).toEqual({
+        ok: false,
+        code: 'error',
+        message: 'An unexpected error occurred while writing the game server configuration',
+      });
+      expect(loggerErrorSpy).toHaveBeenCalledWith('Game server write failed', { err: originalError });
+    });
+
+    it('should return a catch-all error result (not a name-validation issue) when addGameServer() throws a structural HclSurgeonError', async () => {
+      const tfvars = makeTfvars();
+      const structuralError = new HclSurgeonError('"game_servers" map not found in tfvars source.');
+      tfvars.addGameServer = vi.fn().mockRejectedValue(structuralError);
+      const service = new GamesWriteService(makeConfig(), tfvars);
+      const loggerErrorSpy = vi.spyOn(logger, 'error');
+
+      const result = await service.createGame({ name: 'ark', config: buildConfig() });
+
+      expect(result).toEqual({
+        ok: false,
+        code: 'error',
+        message: 'An unexpected error occurred while writing the game server configuration',
+      });
+      expect(loggerErrorSpy).toHaveBeenCalledWith('Game server write failed', { err: structuralError });
     });
   });
 
