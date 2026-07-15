@@ -14,6 +14,7 @@
 
 import {
   validateGameServer,
+  checkConnectMessagePlaceholders,
   type GameServerValidationIssue,
 } from '@hyveon/shared/gameServerValidator';
 import type { GameServer } from '../../api.service.js';
@@ -176,62 +177,21 @@ function checkImage(image: string): GameServerValidationIssue[] {
 }
 
 /**
- * Placeholder tokens allowed inside `connect_message`. Mirrors
- * `ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS` in
- * `@hyveon/shared/gameServerValidator` — kept in sync manually since this
- * check (see {@link checkConnectMessagePlaceholders}) has to run independently
- * of that module's own copy (see its doc comment for why).
- */
-const ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS: ReadonlySet<string> = new Set(['host', 'ip', 'port', 'game']);
-
-/** Matches every `{token}` occurrence in a string, capturing the token itself. Mirrors the shared validator's pattern of the same name. */
-const PLACEHOLDER_TOKEN_PATTERN = /\{([^{}]*)\}/g;
-
-/**
- * Validates `connect_message` placeholders on its own, independent of
- * {@link validateGameServer}'s structural schema parse. That parse — and
- * with it `validateGameServer`'s own copy of this same rule — fails
- * structurally whenever `cpu`/`memory` are still `null` or `volumes` is still
- * empty, which is exactly the case on the Identity step before the operator
- * has reached Resources/Storage. Without running this check unconditionally,
- * an invalid placeholder like `{password}` went unflagged until Review,
- * where a structural parse failure disables Submit but surfaces no message
- * anywhere (#99 review finding). This only reads `connect_message`, so it's
- * safe to run before the rest of the draft is fillable.
- */
-function checkConnectMessagePlaceholders(connectMessage: string): GameServerValidationIssue[] {
-  if (!connectMessage) {
-    return [];
-  }
-
-  const issues: GameServerValidationIssue[] = [];
-  for (const match of connectMessage.matchAll(PLACEHOLDER_TOKEN_PATTERN)) {
-    const token = match[1] ?? '';
-    if (!ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS.has(token)) {
-      issues.push({
-        path: 'connect_message',
-        message: `Unknown placeholder "{${token}}" in connect_message; allowed placeholders are {host}, {ip}, {port}, {game}.`,
-      });
-    }
-  }
-  return issues;
-}
-
-/**
  * Validates the entire draft: `name` (via {@link checkName}), `image` (via
- * {@link checkImage}), `connect_message` placeholders (via
- * {@link checkConnectMessagePlaceholders}, run unconditionally — see its doc
- * comment) plus every structural/business rule {@link validateGameServer}
- * enforces (Fargate cpu/memory pairing, absolute volume/file_seed paths, its
- * own connect_message placeholder check, and port collisions — both within
- * the draft's own `ports` list and against `existingGames`). Returns every
- * issue found, unfiltered by step, deduped by `path`+`message` — this only
- * matters because `validateGameServer`'s failure result isn't limited to
- * structural parse failures: a structurally complete draft can still fail on
- * a pure business-rule violation, and in that case `validateGameServer`'s own
- * connect_message placeholder check already ran, so appending our own copy
- * unconditionally on `!result.success` would otherwise double up identical
- * issues.
+ * {@link checkImage}), `connect_message` placeholders (via the shared
+ * {@link checkConnectMessagePlaceholders}, imported from
+ * `@hyveon/shared/gameServerValidator` and run unconditionally here) plus
+ * every structural/business rule {@link validateGameServer} enforces
+ * (Fargate cpu/memory pairing, absolute volume/file_seed paths, its own
+ * internal call to the same connect_message placeholder check, and port
+ * collisions — both within the draft's own `ports` list and against
+ * `existingGames`). Returns every issue found, unfiltered by step, deduped
+ * by `path`+`message` — this only matters because `validateGameServer`'s
+ * failure result isn't limited to structural parse failures: a structurally
+ * complete draft can still fail on a pure business-rule violation, and in
+ * that case `validateGameServer`'s own connect_message placeholder check
+ * already ran, so appending our own call unconditionally on
+ * `!result.success` would otherwise double up identical issues.
  */
 export function validateWizardDraft(draft: WizardDraft, existingGames: GameServer[]): GameServerValidationIssue[] {
   const issues = [...checkName(draft.name, existingGames), ...checkImage(draft.image)];
@@ -243,8 +203,8 @@ export function validateWizardDraft(draft: WizardDraft, existingGames: GameServe
     // validateGameServer only runs its own connect_message placeholder check
     // once the full entry parses structurally, so a structural failure here
     // (e.g. cpu/memory still null) means that check may never have run. Run
-    // our own copy so an invalid placeholder is still caught on the Identity
-    // step; duplicates against an already-run copy are removed below.
+    // the same shared check so an invalid placeholder is still caught on the
+    // Identity step; duplicates against an already-run copy are removed below.
     issues.push(...checkConnectMessagePlaceholders(draft.connect_message));
   }
 
@@ -255,9 +215,10 @@ export function validateWizardDraft(draft: WizardDraft, existingGames: GameServe
  * Removes duplicate issues (same `path` and `message`) while preserving
  * first-seen order. Needed because {@link validateWizardDraft} can surface
  * the same `connect_message` placeholder issue twice: once from
- * `validateGameServer`'s own check (when the structural parse succeeded) and
- * once from this module's independent {@link checkConnectMessagePlaceholders}
- * copy (run unconditionally on any failure, structural or not).
+ * `validateGameServer`'s own internal call to the shared
+ * {@link checkConnectMessagePlaceholders} (when the structural parse
+ * succeeded) and once from the unconditional call above (run on any
+ * failure, structural or not).
  */
 function dedupeIssues(issues: GameServerValidationIssue[]): GameServerValidationIssue[] {
   const seen = new Set<string>();

@@ -225,19 +225,27 @@ function checkAbsolutePaths(entry: GameServerEntryInput): GameServerValidationIs
 }
 
 /** Placeholder tokens allowed inside `connect_message`, matching the Terraform variable's doc comment. */
-const ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS: ReadonlySet<string> = new Set(['host', 'ip', 'port', 'game']);
+export const ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS: ReadonlySet<string> = new Set(['host', 'ip', 'port', 'game']);
 
 /** Matches every `{token}` occurrence in a string, capturing the token itself. */
-const PLACEHOLDER_TOKEN_PATTERN = /\{([^{}]*)\}/g;
+export const PLACEHOLDER_TOKEN_PATTERN = /\{([^{}]*)\}/g;
 
-/** Rejects any `{token}` in `connect_message` outside `{host}`/`{ip}`/`{port}`/`{game}`. */
-function checkConnectMessagePlaceholders(entry: GameServerEntryInput): GameServerValidationIssue[] {
-  if (!entry.connect_message) {
+/**
+ * Rejects any `{token}` in `connectMessage` outside `{host}`/`{ip}`/`{port}`/`{game}`.
+ * Exported (and taking a bare string rather than a full {@link GameServerEntryInput})
+ * so callers that need to run this rule independently of the rest of
+ * {@link validateGameServer} — e.g. the add-game wizard's per-step validation in
+ * `@hyveon/web`, which must surface a bad placeholder before `cpu`/`memory`/`volumes`
+ * are filled in and so can't wait for a full structural parse to succeed — reuse this
+ * exact rule and message instead of hand-duplicating it.
+ */
+export function checkConnectMessagePlaceholders(connectMessage: string | undefined): GameServerValidationIssue[] {
+  if (!connectMessage) {
     return [];
   }
 
   const issues: GameServerValidationIssue[] = [];
-  for (const match of entry.connect_message.matchAll(PLACEHOLDER_TOKEN_PATTERN)) {
+  for (const match of connectMessage.matchAll(PLACEHOLDER_TOKEN_PATTERN)) {
     const token = match[1] ?? '';
     if (!ALLOWED_CONNECT_MESSAGE_PLACEHOLDERS.has(token)) {
       issues.push({
@@ -332,7 +340,7 @@ export function validateGameServer(
   } else {
     issues.push(...checkFargateCpuMemoryPairing(parsed.data));
     issues.push(...checkAbsolutePaths(parsed.data));
-    issues.push(...checkConnectMessagePlaceholders(parsed.data));
+    issues.push(...checkConnectMessagePlaceholders(parsed.data.connect_message));
   }
 
   // Port-collision detection only needs `ports` to be structurally valid, so
