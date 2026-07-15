@@ -28,7 +28,7 @@
  *   via {@link ReviewStep}'s `submitError` prop.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Loader2 } from 'lucide-react';
@@ -119,6 +119,13 @@ export function AddGameWizard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [serverIssues, setServerIssues] = useState<GameServerValidationIssue[] | null>(null);
 
+  // Mirrors `open` synchronously (not via effect) so an in-flight
+  // `handleSubmit` can tell — the instant its promise settles — whether the
+  // dialog was closed (Escape/overlay click, which Radix permits even while
+  // `submitting`) while it was awaiting the server. Without this, a late
+  // result would mutate the freshly-reset draft with stale step/error state.
+  const openRef = useRef(open);
+
   const step = WIZARD_STEPS[stepIndex];
 
   // Refreshes the existing-games list (used for name/port collision checks)
@@ -152,6 +159,7 @@ export function AddGameWizard() {
 
   /** Handles the dialog's own open/close, resetting the draft on close. */
   function handleOpenChange(next: boolean) {
+    openRef.current = next;
     setOpen(next);
     if (!next) resetWizard();
   }
@@ -198,6 +206,12 @@ export function AddGameWizard() {
       const payload = draftToPayload(draft);
       const result = await api.createGame(payload);
 
+      // The dialog may have been closed (Escape/overlay click) while this
+      // request was in flight — Radix allows that even with `submitting`
+      // true. `resetWizard()` already ran via `handleOpenChange`, so this
+      // stale result must not overwrite the freshly-reset draft.
+      if (!openRef.current) return;
+
       if (result.ok) {
         toast.success(`${payload.name} created`);
         handleOpenChange(false);
@@ -221,10 +235,11 @@ export function AddGameWizard() {
           break;
       }
     } catch (err) {
+      if (!openRef.current) return;
       setSubmitError(err instanceof Error ? err.message : 'Failed to create game.');
       setStepIndex(WIZARD_STEPS.length - 1);
     } finally {
-      setSubmitting(false);
+      if (openRef.current) setSubmitting(false);
     }
   }
 
