@@ -36,9 +36,17 @@ export interface NetworkingStepProps {
   onChange: (ports: WizardDraftPort[]) => void;
 }
 
-/** Finds the issue (if any) whose path is exactly `ports[index]`, i.e. a row-level (not field-level) error. */
+/**
+ * Finds the first issue (if any) that belongs to this row — either a
+ * row-level path (`ports[index]`) or a field-level path nested under it
+ * (`ports[index].container`, `ports[index].protocol`, ...). Field-level
+ * issues are how zod reports e.g. a blank container-port ("Expected number,
+ * received null"), so both forms must be matched or the row highlights with
+ * no visible message.
+ */
 function rowError(issues: GameServerValidationIssue[], index: number): GameServerValidationIssue | undefined {
-  return issues.find((issue) => issue.path === `ports[${index}]`);
+  const prefix = `ports[${index}]`;
+  return issues.find((issue) => issue.path === prefix || issue.path.startsWith(`${prefix}.`));
 }
 
 /**

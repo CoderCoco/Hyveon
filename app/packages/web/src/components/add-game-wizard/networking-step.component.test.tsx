@@ -89,4 +89,21 @@ describe('NetworkingStep', () => {
     expect(secondRow.className).toContain('border-[var(--color-red)]');
     expect(screen.getByRole('alert')).toHaveTextContent('Port 25566/udp collides with ports[0].');
   });
+
+  it('should highlight the row and surface the message when the error path is a field-level ports[N].field', () => {
+    render(
+      <NetworkingStep
+        ports={makePorts()}
+        issues={[{ path: 'ports[0].container', message: 'Expected number, received null' }]}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const firstRow = screen.getByTestId('port-row-0');
+    const secondRow = screen.getByTestId('port-row-1');
+
+    expect(firstRow.className).toContain('border-[var(--color-red)]');
+    expect(secondRow.className).not.toContain('border-[var(--color-red)]');
+    expect(screen.getByRole('alert')).toHaveTextContent('Expected number, received null');
+  });
 });
