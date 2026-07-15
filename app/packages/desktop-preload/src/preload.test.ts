@@ -137,6 +137,39 @@ describe('preload dispatcher', () => {
 
       expect(ipcInvoke).toHaveBeenCalledWith('env.get');
     });
+
+    it('should forward games.create with a single payload object to ipcRenderer.invoke', async () => {
+      const writeResult = { ok: true, games: [] };
+      ipcInvoke.mockResolvedValue(writeResult);
+      const games = bridge['games'] as { create: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'minecraft', config: { image: 'itzg/minecraft-server', cpu: 512, memory: 1024, ports: [], volumes: [] } };
+      const result = await games.create(payload);
+
+      expect(ipcInvoke).toHaveBeenCalledWith('games.create', payload);
+      expect(result).toEqual(writeResult);
+    });
+
+    it('should forward games.update with a single payload object to ipcRenderer.invoke', async () => {
+      const writeResult = { ok: true, games: [] };
+      ipcInvoke.mockResolvedValue(writeResult);
+      const games = bridge['games'] as { update: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'minecraft', config: { image: 'itzg/minecraft-server', cpu: 512, memory: 1024, ports: [], volumes: [] } };
+      const result = await games.update(payload);
+
+      expect(ipcInvoke).toHaveBeenCalledWith('games.update', payload);
+      expect(result).toEqual(writeResult);
+    });
+
+    it('should forward games.delete with a single payload object to ipcRenderer.invoke', async () => {
+      const writeResult = { ok: true, games: [] };
+      ipcInvoke.mockResolvedValue(writeResult);
+      const games = bridge['games'] as { delete: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'minecraft' };
+      const result = await games.delete(payload);
+
+      expect(ipcInvoke).toHaveBeenCalledWith('games.delete', payload);
+      expect(result).toEqual(writeResult);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -222,6 +255,48 @@ describe('preload dispatcher', () => {
 
       await expect(games.list()).rejects.toThrow('mock-error');
       expect(ipcInvoke).not.toHaveBeenCalled();
+    });
+
+    it('should call the registered games.create mock with the single payload object instead of ipcRenderer.invoke', async () => {
+      const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+      const mockHandler = vi.fn().mockResolvedValue({ ok: true, games: [] });
+      testApi.mock('games.create', mockHandler);
+
+      const games = bridge['games'] as { create: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'valheim', config: { image: 'lloesche/valheim-server', cpu: 1024, memory: 2048, ports: [], volumes: [] } };
+      const result = await games.create(payload);
+
+      expect(mockHandler).toHaveBeenCalledWith(payload);
+      expect(ipcInvoke).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: true, games: [] });
+    });
+
+    it('should call the registered games.update mock with the single payload object instead of ipcRenderer.invoke', async () => {
+      const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+      const mockHandler = vi.fn().mockResolvedValue({ ok: true, games: [] });
+      testApi.mock('games.update', mockHandler);
+
+      const games = bridge['games'] as { update: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'valheim', config: { image: 'lloesche/valheim-server', cpu: 1024, memory: 2048, ports: [], volumes: [] } };
+      const result = await games.update(payload);
+
+      expect(mockHandler).toHaveBeenCalledWith(payload);
+      expect(ipcInvoke).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: true, games: [] });
+    });
+
+    it('should call the registered games.delete mock with the single payload object instead of ipcRenderer.invoke', async () => {
+      const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+      const mockHandler = vi.fn().mockResolvedValue({ ok: true, games: [] });
+      testApi.mock('games.delete', mockHandler);
+
+      const games = bridge['games'] as { delete: (payload: unknown) => Promise<unknown> };
+      const payload = { name: 'valheim' };
+      const result = await games.delete(payload);
+
+      expect(mockHandler).toHaveBeenCalledWith(payload);
+      expect(ipcInvoke).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: true, games: [] });
     });
   });
 

@@ -17,7 +17,14 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-import type { GsdApi, GsdTestApi, LogChunk } from './gsd-api.js';
+import type {
+  CreateGamePayload,
+  DeleteGamePayload,
+  GsdApi,
+  GsdTestApi,
+  LogChunk,
+  UpdateGamePayload,
+} from './gsd-api.js';
 
 /**
  * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
@@ -155,6 +162,12 @@ const api: GsdApi = {
     getStatus: (game: string) => invoke('games.getStatus', game),
     start: (game: string) => invoke('games.start', game),
     stop: (game: string) => invoke('games.stop', game),
+    // Transport note: `nestjs-electron-ipc-transport` only delivers the first
+    // argument to `@Payload`, so each write op passes a single payload object
+    // rather than separate positional arguments.
+    create: (payload: CreateGamePayload) => invoke('games.create', payload),
+    update: (payload: UpdateGamePayload) => invoke('games.update', payload),
+    delete: (payload: DeleteGamePayload) => invoke('games.delete', payload),
   },
 
   costs: {
