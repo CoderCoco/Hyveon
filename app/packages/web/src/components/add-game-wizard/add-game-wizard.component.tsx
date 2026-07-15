@@ -79,11 +79,12 @@ const STEP_LABELS: Record<WizardStep, string> = {
 function draftToPayload(draft: WizardDraft): CreateGamePayload {
   const name = draft.name.trim();
   const connectMessage = draft.connect_message.trim();
+  const image = draft.image.trim();
 
   return {
     name,
     config: {
-      image: draft.image,
+      image,
       cpu: draft.cpu ?? 0,
       memory: draft.memory ?? 0,
       ports: draft.ports.map((port) => ({ container: port.container ?? 0, protocol: port.protocol })),
