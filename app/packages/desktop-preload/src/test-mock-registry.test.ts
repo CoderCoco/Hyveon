@@ -10,6 +10,9 @@ function makeGamesStub(): GsdGamesApi {
     getStatus: vi.fn().mockResolvedValue({ game: 'minecraft', state: 'stopped' }),
     start: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
     stop: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
+    create: vi.fn().mockResolvedValue({ ok: true, games: [] }),
+    update: vi.fn().mockResolvedValue({ ok: true, games: [] }),
+    delete: vi.fn().mockResolvedValue({ ok: true, games: [] }),
   };
 }
 
