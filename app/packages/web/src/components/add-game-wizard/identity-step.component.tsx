@@ -78,10 +78,11 @@ function Field({
         value={value}
         placeholder={placeholder}
         aria-invalid={error ? 'true' : 'false'}
+        aria-describedby={error ? `${id}-error` : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
       {error && (
-        <p className="text-xs text-[var(--color-red)] flex items-center gap-1">
+        <p id={`${id}-error`} role="alert" className="text-xs text-[var(--color-red)] flex items-center gap-1">
           <AlertCircle className="size-3.5" />
           {error}
         </p>

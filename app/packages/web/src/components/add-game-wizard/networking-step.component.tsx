@@ -98,6 +98,8 @@ export function NetworkingStep({ ports, issues, onChange }: NetworkingStepProps)
                   id={`port-container-${index}`}
                   type="number"
                   value={port.container ?? ''}
+                  aria-invalid={Boolean(issue)}
+                  aria-describedby={issue ? `port-error-${index}` : undefined}
                   onChange={(event) => {
                     const raw = event.target.value;
                     updateRow(index, { container: raw === '' ? null : Number(raw) });
@@ -121,12 +123,18 @@ export function NetworkingStep({ ports, issues, onChange }: NetworkingStepProps)
                 </select>
               </div>
 
-              <Button type="button" variant="outline" size="sm" onClick={() => removeRow(index)}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={`Remove port ${index + 1}`}
+                onClick={() => removeRow(index)}
+              >
                 Remove
               </Button>
 
               {issue && (
-                <p role="alert" className="w-full text-xs text-[var(--color-red)]">
+                <p id={`port-error-${index}`} role="alert" className="w-full text-xs text-[var(--color-red)]">
                   {issue.message}
                 </p>
               )}

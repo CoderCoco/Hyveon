@@ -55,6 +55,8 @@ export function ResourcesStep({ cpu, memory, onChange, issues }: Props) {
           id="wizard-resources-cpu"
           value={cpu ?? ''}
           onChange={(e) => handleCpuChange(e.target.value)}
+          aria-invalid={cpuError ? 'true' : 'false'}
+          aria-describedby={cpuError ? 'wizard-resources-cpu-error' : undefined}
           className="h-9 w-56 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
         >
           <option value="">Select CPU…</option>
@@ -64,7 +66,11 @@ export function ResourcesStep({ cpu, memory, onChange, issues }: Props) {
             </option>
           ))}
         </select>
-        {cpuError && <p className="text-sm text-[var(--color-red)]">{cpuError}</p>}
+        {cpuError && (
+          <p id="wizard-resources-cpu-error" role="alert" className="text-sm text-[var(--color-red)]">
+            {cpuError}
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-1">
@@ -76,6 +82,8 @@ export function ResourcesStep({ cpu, memory, onChange, issues }: Props) {
           value={memory ?? ''}
           onChange={(e) => handleMemoryChange(e.target.value)}
           disabled={cpu === null}
+          aria-invalid={memoryError ? 'true' : 'false'}
+          aria-describedby={memoryError ? 'wizard-resources-memory-error' : undefined}
           className="h-9 w-56 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] disabled:opacity-50"
         >
           <option value="">Select memory…</option>
@@ -85,7 +93,11 @@ export function ResourcesStep({ cpu, memory, onChange, issues }: Props) {
             </option>
           ))}
         </select>
-        {memoryError && <p className="text-sm text-[var(--color-red)]">{memoryError}</p>}
+        {memoryError && (
+          <p id="wizard-resources-memory-error" role="alert" className="text-sm text-[var(--color-red)]">
+            {memoryError}
+          </p>
+        )}
       </div>
     </div>
   );

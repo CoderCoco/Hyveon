@@ -11,10 +11,11 @@
  * anywhere — e.g. on `/games` — without the caller wiring anything beyond
  * rendering `<AddGameWizard />`.
  *
- * "Next" (or, on the final step, "Submit") is disabled whenever
- * {@link canAdvance} finds outstanding validation issues on the active step,
- * mirroring the same zod schema + business rules the server enforces (see
- * `wizard-form.utils.ts`). On submit, every {@link GameWriteResult} branch is
+ * "Next" (or, on the final step, "Submit") is disabled whenever the active
+ * step has outstanding issues — either from client-side `validateStep`
+ * (mirroring the same zod schema + business rules the server enforces, see
+ * `wizard-form.utils.ts`) or from a server-reported validation failure the
+ * client didn't catch. On submit, every {@link GameWriteResult} branch is
  * handled explicitly:
  *
  * - `ok: true` — success toast, redirect to `/games/:name`, dialog closes and
@@ -51,7 +52,6 @@ import { StorageStep } from './storage-step.component.js';
 import { ReviewStep } from './review-step.component.js';
 import {
   WIZARD_STEPS,
-  canAdvance,
   createEmptyWizardDraft,
   stepForIssuePath,
   validateStep,
@@ -182,7 +182,7 @@ export function AddGameWizard() {
       : serverIssues.filter((issue) => stepForIssuePath(issue.path) === step)
     : liveIssues;
 
-  const advanceDisabled = !canAdvance(step, draft, existingGames);
+  const advanceDisabled = stepIssues.length > 0;
 
   function goNext() {
     setStepIndex((index) => Math.min(index + 1, WIZARD_STEPS.length - 1));
