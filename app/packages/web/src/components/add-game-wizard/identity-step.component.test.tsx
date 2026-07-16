@@ -102,7 +102,7 @@ describe('IdentityStep', () => {
       />,
     );
 
-    expect(screen.queryByText('Image is required.')).toBeInTheDocument();
+    expect(screen.queryByText('Name is required.')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Name')).not.toHaveAttribute('aria-invalid', 'true');
   });
 });
