@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Pencil } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type GameListEntry } from '../api.service.js';
+import { api, type GameListEntry, type GameWriteSuccess } from '../api.service.js';
 import { GameStatusBadges } from '../components/game-status-badges.component.js';
+import { EditGameForm } from '../components/edit-game-form/edit-game-form.component.js';
+import { RemoveGameButton } from '../components/remove-game-button.component.js';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
+import { Button } from '@/components/ui/button.component';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card.component';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.component';
 
@@ -36,10 +39,19 @@ function Field({ label, value }: { label: string; value: string }) {
  *     image, CPU/memory, HTTPS flag, ports, volumes, environment variables
  *     (if any), file seeds (collapsed, if any), and the connect message (if
  *     set).
+ *
+ * Fully-declared entries also get an "Edit" toggle and a {@link
+ * RemoveGameButton} (#100) in the header — both are hidden for ghost entries
+ * since there's no declared configuration to edit or remove. Toggling "Edit"
+ * swaps the read-only cards for a prefilled {@link EditGameForm}; a
+ * successful save (`onSaved`) replaces the in-memory merged games list with
+ * the server's fresh response and switches back to the read-only view, so
+ * the edited fields are visible immediately without a full refetch.
  */
 export function GameDetailPage() {
   const { name } = useParams<{ name: string }>();
   const [games, setGames] = useState<GameListEntry[] | null>(null);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +70,12 @@ export function GameDetailPage() {
 
   const entry = games?.find((g) => g.name === name);
   const config = entry?.config;
+
+  /** Applies a successful `EditGameForm` save and returns to the read-only view. */
+  function handleSaved(result: GameWriteSuccess) {
+    setGames(result.games);
+    setEditing(false);
+  }
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -88,7 +106,22 @@ export function GameDetailPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="capitalize">{entry.name}</CardTitle>
-              <GameStatusBadges declared={entry.declared} deployed={entry.deployed} />
+              <div className="flex items-center gap-2">
+                <GameStatusBadges declared={entry.declared} deployed={entry.deployed} />
+                {config && (editing ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                ) : (
+                  <>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+                      <Pencil />
+                      Edit
+                    </Button>
+                    <RemoveGameButton game={entry.name} />
+                  </>
+                ))}
+              </div>
             </CardHeader>
             {!config && (
               <CardContent>
@@ -103,7 +136,9 @@ export function GameDetailPage() {
             )}
           </Card>
 
-          {config && (
+          {config && editing && <EditGameForm game={config} onSaved={handleSaved} />}
+
+          {config && !editing && (
             <>
               {/* Container overview */}
               <Card>
