@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const apiMock = vi.hoisted(() => ({
   status: vi.fn(),
   costsEstimate: vi.fn(),
   games: vi.fn(),
+  createGame: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
 
@@ -102,5 +104,42 @@ describe('GamesPage', () => {
     renderPage(<GamesPage />, { initialEntries: ['/games'] });
 
     expect(await screen.findByText('No games declared or deployed yet.')).toBeInTheDocument();
+  });
+
+  it('should always render the header "Add game" button, regardless of whether games exist', async () => {
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    expect(await screen.findByText('minecraft')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Add game' })).toHaveLength(1);
+  });
+
+  it('should render an additional empty-state "Add game" CTA only when no games are declared or deployed', async () => {
+    apiMock.games.mockResolvedValue({ games: [] });
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    await screen.findByText('No games declared or deployed yet.');
+    expect(screen.getAllByRole('button', { name: 'Add game' })).toHaveLength(2);
+  });
+
+  it('should open the AddGameWizard dialog when the header "Add game" button is clicked', async () => {
+    const user = userEvent.setup();
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    await screen.findByText('minecraft');
+    await user.click(screen.getByRole('button', { name: 'Add game' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Add a game server' })).toBeInTheDocument();
+  });
+
+  it('should open the AddGameWizard dialog when the empty-state "Add game" CTA is clicked', async () => {
+    apiMock.games.mockResolvedValue({ games: [] });
+    const user = userEvent.setup();
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    await screen.findByText('No games declared or deployed yet.');
+    const [, emptyStateCta] = screen.getAllByRole('button', { name: 'Add game' });
+    await user.click(emptyStateCta);
+
+    expect(await screen.findByRole('dialog', { name: 'Add a game server' })).toBeInTheDocument();
   });
 });

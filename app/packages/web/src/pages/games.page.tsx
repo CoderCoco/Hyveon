@@ -5,6 +5,7 @@ import { GameStatusBadges } from '../components/game-status-badges.component.js'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card.component';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.component';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
+import { AddGameWizard } from '@/components/add-game-wizard/add-game-wizard.component';
 
 /** Renders a game's declared ports as a comma-separated `container/protocol` list, or an em dash when undeclared. */
 function formatPorts(entry: GameListEntry): string {
@@ -26,6 +27,12 @@ function formatPorts(entry: GameListEntry): string {
  *
  * Each row links to `/games/:name` for the deeper read-only detail view
  * (issue #93's follow-up), still to be implemented.
+ *
+ * The self-contained {@link AddGameWizard} (#99) is mounted twice: as a
+ * persistent header action next to the heading, and as an empty-state CTA
+ * shown only while `games` is empty. Both mounts are independent — each owns
+ * its own dialog open/close state — so either entry point opens its own copy
+ * of the same wizard flow.
  */
 export function GamesPage() {
   const [games, setGames] = useState<GameListEntry[]>([]);
@@ -56,7 +63,10 @@ export function GamesPage() {
     <div className="max-w-6xl mx-auto">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-2xl font-semibold">Games</h2>
-        <PollingIndicator />
+        <div className="flex items-center gap-4">
+          <PollingIndicator />
+          <AddGameWizard />
+        </div>
       </div>
 
       <Card>
@@ -74,7 +84,10 @@ export function GamesPage() {
             </div>
           ) : games.length === 0 ? (
             <div className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">
-              No games declared or deployed yet.
+              <p>No games declared or deployed yet.</p>
+              <div className="mt-4 flex justify-center">
+                <AddGameWizard />
+              </div>
             </div>
           ) : (
             <Table>

@@ -11,6 +11,7 @@
     "test:integration": "playwright test --config playwright.integration.config.ts"
   },
   "dependencies": {
+    "@hyveon/shared": "*",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",

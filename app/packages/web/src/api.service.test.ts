@@ -15,6 +15,7 @@ function makeGsdMock() {
       getStatus: vi.fn().mockResolvedValue({ game: 'minecraft', state: 'stopped' }),
       start: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
       stop: vi.fn().mockResolvedValue({ success: true, message: 'ok' }),
+      create: vi.fn().mockResolvedValue({ ok: true, games: [] }),
     },
     costs: {
       estimate: vi.fn().mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 }),
@@ -138,6 +139,21 @@ describe('IPC bridge delegation', () => {
   it('should delegate api.filesMgrStop() to window.gsd.files.stop() with the game id', async () => {
     await api.filesMgrStop('minecraft');
     expect(gsd.files.stop).toHaveBeenCalledWith('minecraft');
+  });
+
+  it('should delegate api.createGame() to window.gsd.games.create() with the exact payload', async () => {
+    const payload = {
+      name: 'minecraft',
+      config: {
+        image: 'itzg/minecraft-server',
+        cpu: 1024,
+        memory: 2048,
+        ports: [{ container: 25565, protocol: 'tcp' }],
+        volumes: [{ name: 'data', container_path: '/data' }],
+      },
+    };
+    await api.createGame(payload);
+    expect(gsd.games.create).toHaveBeenCalledWith(payload);
   });
 
   it('should delegate api.discordConfig() to window.gsd.discord.getConfig()', async () => {

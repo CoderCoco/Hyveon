@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateGameServer } from './gameServerValidator.js';
+import { validateGameServer, getFargateCpuOptions, getFargateMemoryOptions } from './gameServerValidator.js';
 import type { GameServer } from './tfvars.js';
 
 /** Build a minimal, fully-valid proposed entry; override any fields per test. */
@@ -139,6 +139,30 @@ describe('validateGameServer', () => {
       if (!result.success) {
         expect(result.issues.some((i) => i.path === 'cpu')).toBe(true);
       }
+    });
+  });
+
+  describe('getFargateCpuOptions', () => {
+    it('should return every supported Fargate CPU unit, ascending', () => {
+      expect(getFargateCpuOptions()).toEqual([256, 512, 1024, 2048, 4096, 8192, 16384]);
+    });
+  });
+
+  describe('getFargateMemoryOptions', () => {
+    it('should return the exact discrete memory values for cpu=256', () => {
+      expect(getFargateMemoryOptions(256)).toEqual([512, 1024, 2048]);
+    });
+
+    it('should return the exact stepped memory range for cpu=512', () => {
+      expect(getFargateMemoryOptions(512)).toEqual([1024, 2048, 3072, 4096]);
+    });
+
+    it('should return the exact stepped memory range for cpu=8192', () => {
+      expect(getFargateMemoryOptions(8192)).toEqual([16384, 20480, 24576, 28672, 32768, 36864, 40960, 45056, 49152, 53248, 57344, 61440]);
+    });
+
+    it('should return an empty array for an unsupported cpu', () => {
+      expect(getFargateMemoryOptions(100)).toEqual([]);
     });
   });
 
