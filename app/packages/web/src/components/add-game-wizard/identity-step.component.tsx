@@ -12,6 +12,14 @@ export interface IdentityStepProps {
   issues: GameServerValidationIssue[];
   /** Called with a partial patch of the changed field whenever the operator edits a field. */
   onChange: (patch: Partial<Pick<WizardDraft, 'name' | 'image' | 'connect_message'>>) => void;
+  /**
+   * Renders the Name field as read-only. `name` is the `game_servers` map
+   * key — the add wizard lets the operator choose it, but the edit form
+   * (#100) reuses this step to edit an already-declared game and must not
+   * let the operator rename it in place (that's a delete+recreate, not an
+   * update). Defaults to `false` so the add wizard's behaviour is unchanged.
+   */
+  nameDisabled?: boolean;
 }
 
 /**
@@ -20,8 +28,11 @@ export interface IdentityStepProps {
  * writes a `connect_message` shown to Discord users after `/server-start`.
  * Purely presentational — the parent wizard owns the draft state and passes
  * down validation issues computed via `validateIdentityStep` (see wizard-form.utils.ts).
+ *
+ * Also reused, flattened alongside the other step components, by the edit
+ * form (#100) — see the `nameDisabled` prop.
  */
-export function IdentityStep({ draft, issues, onChange }: IdentityStepProps) {
+export function IdentityStep({ draft, issues, onChange, nameDisabled = false }: IdentityStepProps) {
   const errorFor = (path: string) => issues.find((issue) => issue.path === path)?.message;
 
   return (
@@ -32,6 +43,7 @@ export function IdentityStep({ draft, issues, onChange }: IdentityStepProps) {
         value={draft.name}
         placeholder="minecraft"
         error={errorFor('name')}
+        disabled={nameDisabled}
         onChange={(value) => onChange({ name: value })}
       />
       <Field
@@ -61,6 +73,7 @@ function Field({
   value,
   placeholder,
   error,
+  disabled,
   onChange,
 }: {
   id: string;
@@ -68,6 +81,7 @@ function Field({
   value: string;
   placeholder: string;
   error?: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -79,6 +93,7 @@ function Field({
         placeholder={placeholder}
         aria-invalid={error ? 'true' : 'false'}
         aria-describedby={error ? `${id}-error` : undefined}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       />
       {error && (
