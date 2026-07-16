@@ -38,7 +38,7 @@ describe('NetworkingStep', () => {
     const onChange = vi.fn();
     render(<NetworkingStep ports={makePorts()} issues={[]} onChange={onChange} />);
 
-    const removeButtons = screen.getAllByRole('button', { name: 'Remove' });
+    const removeButtons = screen.getAllByRole('button', { name: /Remove port/ });
     await user.click(removeButtons[0]);
 
     expect(onChange).toHaveBeenCalledWith([{ container: 25566, protocol: 'udp' }]);
