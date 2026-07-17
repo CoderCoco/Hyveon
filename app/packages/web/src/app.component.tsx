@@ -7,6 +7,7 @@ import { LogsPage } from './pages/logs.page.js';
 import { SettingsPage } from './pages/settings.page.js';
 import { GamesPage } from './pages/games.page.js';
 import { GameDetailPage } from './pages/game-detail.page.js';
+import { AuditPage } from './pages/audit.page.js';
 import { PollingProvider } from './polling/polling-provider.component.js';
 import { GameStatusProvider } from './polling/game-status-provider.component.js';
 import { Toaster } from './components/ui/sonner.component.js';
@@ -20,6 +21,7 @@ import { Toaster } from './components/ui/sonner.component.js';
  *   - `/settings` → Watchdog + general settings
  *   - `/games` → Games list (read-only settings)
  *   - `/games/:name` → Per-game settings detail (read-only)
+ *   - `/audit` → Audit log
  */
 export default function App() {
   return (
@@ -36,6 +38,7 @@ export default function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/games" element={<GamesPage />} />
               <Route path="/games/:name" element={<GameDetailPage />} />
+              <Route path="/audit" element={<AuditPage />} />
             </Routes>
           </AppLayout>
         </BrowserRouter>
