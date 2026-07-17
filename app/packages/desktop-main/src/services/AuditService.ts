@@ -52,7 +52,7 @@ function clampLimit(limit?: number): number {
   if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
     return DEFAULT_LIMIT;
   }
-  return Math.min(Math.floor(limit), MAX_LIMIT);
+  return Math.max(1, Math.min(Math.floor(limit), MAX_LIMIT));
 }
 
 /**
@@ -95,19 +95,19 @@ export class AuditService {
       return;
     }
 
-    const now = new Date();
-    const entry: AuditEntry = {
-      sk: buildAuditSk(now),
-      timestamp: now.toISOString(),
-      actor: os.userInfo().username,
-      action: params.action,
-      game: params.game,
-      before: params.before,
-      after: params.after,
-      ...(params.versionId !== undefined ? { versionId: params.versionId } : {}),
-    };
-
     try {
+      const now = new Date();
+      const entry: AuditEntry = {
+        sk: buildAuditSk(now),
+        timestamp: now.toISOString(),
+        actor: os.userInfo().username,
+        action: params.action,
+        game: params.game,
+        before: params.before,
+        after: params.after,
+        ...(params.versionId !== undefined ? { versionId: params.versionId } : {}),
+      };
+
       await this.store.putEntry(entry);
     } catch (err) {
       logger.warn('AuditService.record: failed to write audit log entry', {
