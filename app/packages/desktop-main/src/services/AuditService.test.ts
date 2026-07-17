@@ -149,5 +149,14 @@ describe('AuditService', () => {
 
       expect(listEntriesMock).toHaveBeenCalledWith(25, undefined);
     });
+
+    it('should return an empty page without calling store.listEntries when audit_table_name is not configured', async () => {
+      const service = makeService(null);
+
+      const result = await service.list();
+
+      expect(result).toEqual({ entries: [] });
+      expect(listEntriesMock).not.toHaveBeenCalled();
+    });
   });
 });

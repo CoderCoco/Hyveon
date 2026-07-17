@@ -121,8 +121,20 @@ export class AuditService {
   /**
    * Lists audit entries newest-first, delegating to `store.listEntries`
    * after clamping `opts.limit` via {@link clampLimit}.
+   *
+   * Mirrors {@link record}'s missing-table guard: when `audit_table_name`
+   * isn't in the Terraform outputs yet (table not deployed), a winston
+   * warning is logged and an empty page is returned rather than letting
+   * `store.listEntries` throw — the always-visible audit page should render
+   * its empty state on pre-audit-table deployments, not an error state.
    */
   async list(opts: ListAuditEntriesOpts = {}): Promise<AuditPageResult> {
+    const tableName = this.config.getTfOutputs()?.audit_table_name;
+    if (!tableName) {
+      logger.warn('AuditService.list: audit_table_name not configured, returning empty audit log page');
+      return { entries: [] };
+    }
+
     return this.store.listEntries(clampLimit(opts.limit), opts.before);
   }
 }
