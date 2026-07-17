@@ -136,7 +136,7 @@ export function GameDetailPage() {
             )}
           </Card>
 
-          {config && editing && <EditGameForm game={config} onSaved={handleSaved} />}
+          {config && editing && <EditGameForm key={config.name} game={config} onSaved={handleSaved} />}
 
           {config && !editing && (
             <>
