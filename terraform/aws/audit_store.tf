@@ -26,7 +26,7 @@ resource "aws_dynamodb_table" "audit" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = true
   }
 
   tags = { Name = var.audit_table_name != "" ? var.audit_table_name : "${var.project_name}-audit" }
