@@ -14,14 +14,24 @@
  *     matching `GameWriteResult` failure variant (see the per-method docs
  *     below for the exact mapping).
  *  4. On success, invalidate both the `TfvarsService` and `ConfigService`
- *     caches, emit a structured audit log entry, and return the updated game
+ *     caches, emit a structured audit log entry (both the winston log line
+ *     and a persisted `AuditService.record()` call carrying the before/after
+ *     game config and the write's `versionId`), and return the updated game
  *     plus a freshly `mergeGameLists()`d games list so callers can refresh
  *     their view without a second round trip.
  */
 import { Injectable } from '@nestjs/common';
-import type { CreateGamePayload, DeleteGamePayload, GameServer, GameWriteResult, UpdateGamePayload } from '@hyveon/shared';
+import type {
+  AuditAction,
+  CreateGamePayload,
+  DeleteGamePayload,
+  GameServer,
+  GameWriteResult,
+  UpdateGamePayload,
+} from '@hyveon/shared';
 import { OptimisticLockError, validateGameServer } from '@hyveon/shared';
 import { logger } from '../logger.js';
+import { AuditService } from './AuditService.js';
 import { ConfigService } from './ConfigService.js';
 import { TfvarsService } from './TfvarsService.js';
 import { HclSurgeonError } from './hclSurgeon.js';
@@ -29,6 +39,13 @@ import { mergeGameLists } from './mergeGameLists.js';
 
 /** The three write operations this service performs — used to tag the audit log entry. */
 type GameWriteAction = 'create' | 'update' | 'delete';
+
+/** Maps a {@link GameWriteAction} to the {@link AuditAction} recorded via `AuditService.record()`. */
+const AUDIT_ACTION_BY_WRITE_ACTION: Record<GameWriteAction, AuditAction> = {
+  create: 'add',
+  update: 'edit',
+  delete: 'remove',
+};
 
 /**
  * Validates and writes `game_servers` create/update/delete requests — see
@@ -42,6 +59,7 @@ export class GamesWriteService {
   constructor(
     private readonly config: ConfigService,
     private readonly tfvars: TfvarsService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -70,8 +88,9 @@ export class GamesWriteService {
     }
 
     const { name, ...config } = validation.data;
+    let write: { etag: string; versionId?: string };
     try {
-      await this.tfvars.addGameServer(name, config, payload.expectedVersionId);
+      write = await this.tfvars.addGameServer(name, config, payload.expectedVersionId);
     } catch (err) {
       if (err instanceof OptimisticLockError) {
         return this.conflictResult(err);
@@ -82,7 +101,7 @@ export class GamesWriteService {
       return this.errorResult(err);
     }
 
-    return this.successResult('create', name, validation.data);
+    return this.successResult('create', name, validation.data, { before: null, after: validation.data, versionId: write.versionId });
   }
 
   /**
@@ -107,9 +126,12 @@ export class GamesWriteService {
       return { ok: false, code: 'validation', issues: validation.issues };
     }
 
+    const before = siblings.find((sibling) => sibling.name === payload.name) ?? null;
+
     const { name, ...config } = validation.data;
+    let write: { etag: string; versionId?: string };
     try {
-      await this.tfvars.updateGameServer(name, config, payload.expectedVersionId);
+      write = await this.tfvars.updateGameServer(name, config, payload.expectedVersionId);
     } catch (err) {
       if (err instanceof OptimisticLockError) {
         return this.conflictResult(err);
@@ -120,7 +142,7 @@ export class GamesWriteService {
       return this.errorResult(err);
     }
 
-    return this.successResult('update', name, validation.data);
+    return this.successResult('update', name, validation.data, { before, after: validation.data, versionId: write.versionId });
   }
 
   /**
@@ -135,8 +157,12 @@ export class GamesWriteService {
    *    `{ code: 'not_found' }`.
    */
   async deleteGame(payload: DeleteGamePayload): Promise<GameWriteResult> {
+    const siblings = await this.tfvars.getGameServers();
+    const before = siblings.find((sibling) => sibling.name === payload.name) ?? null;
+
+    let write: { etag: string; versionId?: string };
     try {
-      await this.tfvars.removeGameServer(payload.name, payload.expectedVersionId);
+      write = await this.tfvars.removeGameServer(payload.name, payload.expectedVersionId);
     } catch (err) {
       if (err instanceof OptimisticLockError) {
         return this.conflictResult(err);
@@ -147,21 +173,29 @@ export class GamesWriteService {
       return this.errorResult(err);
     }
 
-    return this.successResult('delete', payload.name);
+    return this.successResult('delete', payload.name, undefined, { before, after: null, versionId: write.versionId });
   }
 
   /**
    * Shared success path for all three operations: invalidates both the
    * `TfvarsService` and `ConfigService` caches so the next read reflects the
-   * write, emits a structured audit log entry (action, game name, and
-   * whether the write went to the S3 tfvars backend or the local file — see
-   * `ConfigService.getTfvarsBucket()`), and builds the refreshed
+   * write, emits the existing structured winston log line (action, game
+   * name, and whether the write went to the S3 tfvars backend or the local
+   * file — see `ConfigService.getTfvarsBucket()`), persists an
+   * `AuditService.record()` entry carrying `audit.before`/`audit.after`/
+   * `audit.versionId` under the mapped {@link AuditAction} (via
+   * {@link AUDIT_ACTION_BY_WRITE_ACTION}), and builds the refreshed
    * `mergeGameLists()` list. `game` is omitted for `'delete'`, matching
    * `GameWriteSuccess.game`'s "omitted for a delete" contract — `name` is
-   * passed separately so the audit entry still records which game was
+   * passed separately so both log lines still record which game was
    * affected even when there's no `game` object to pull it from.
    */
-  private async successResult(action: GameWriteAction, name: string, game?: GameServer): Promise<GameWriteResult> {
+  private async successResult(
+    action: GameWriteAction,
+    name: string,
+    game: GameServer | undefined,
+    audit: { before: GameServer | null; after: GameServer | null; versionId?: string },
+  ): Promise<GameWriteResult> {
     this.tfvars.invalidateCache();
     this.config.invalidateCache();
 
@@ -169,6 +203,14 @@ export class GamesWriteService {
       action,
       game: name,
       mode: this.config.getTfvarsBucket() ? 's3' : 'local',
+    });
+
+    await this.audit.record({
+      action: AUDIT_ACTION_BY_WRITE_ACTION[action],
+      game: name,
+      before: audit.before,
+      after: audit.after,
+      versionId: audit.versionId,
     });
 
     const declared = await this.tfvars.getGameServers();
