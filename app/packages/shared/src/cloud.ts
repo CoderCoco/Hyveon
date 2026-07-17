@@ -120,9 +120,14 @@ export interface RemoteFileStore {
    *   only succeeds when the current stored etag matches this value (optimistic
    *   concurrency guard).
    * @returns An object containing the provider-assigned etag for the newly
-   *   stored version.
+   *   stored version, plus an optional `versionId` when the underlying store
+   *   supports object versioning (e.g. a versioned S3 bucket) and returns one.
    */
-  put(path: string, body: Uint8Array, opts?: { ifMatch?: string }): Promise<{ etag: string }>;
+  put(
+    path: string,
+    body: Uint8Array,
+    opts?: { ifMatch?: string },
+  ): Promise<{ etag: string; versionId?: string }>;
 
   /**
    * Lists all available versions of a file in reverse-chronological order.
