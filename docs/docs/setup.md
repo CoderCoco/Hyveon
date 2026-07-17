@@ -558,8 +558,9 @@ CONFIG + PENDING rows), and two Secrets Manager secrets — all created by
 > **A second DynamoDB table, `audit_table_name`, is created unconditionally**
 > in the same `terraform apply` — it is not part of the Discord bot and
 > doesn't require any of the setup below. It records structured audit log
-> entries (who did what and when) for actions across the management app and
-> the Discord bot, e.g. server start/stop and credential edits. See
+> entries (who did what and when) for game-server configuration changes
+> (add/edit/remove) made via the management app's UI. It does not record
+> Discord bot actions, server start/stop, or credential edits. See
 > [`audit_table_name`](/components/terraform#variables) to override its name.
 
 1. **Create a Discord application** at

@@ -146,7 +146,7 @@ id and etag:
 | `base_allowed_guilds` | `list(string)` | `[]` | Guild IDs written to the `BASE#discord` row on every apply. The management UI shows these as locked; they cannot be removed via the UI. Update in tfvars + re-apply to change. |
 | `base_admin_user_ids` | `list(string)` | `[]` | Discord user IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
 | `base_admin_role_ids` | `list(string)` | `[]` | Discord role IDs with permanent server-wide admin rights. Same Terraform-managed floor as above. |
-| `audit_table_name` | `string` | `""` → `{project_name}-audit` | Name of the DynamoDB audit log table (`aws/audit_store.tf`) recording who did what and when across the management app and the Discord bot. Empty defaults to `${project_name}-audit`. |
+| `audit_table_name` | `string` | `""` → `{project_name}-audit` | Name of the DynamoDB audit log table (`aws/audit_store.tf`) recording who did what and when for game-server configuration changes (add/edit/remove) made via the management app's UI. Does not cover Discord bot actions, server start/stop, or credential edits. Empty defaults to `${project_name}-audit`. |
 | `tfvars_bucket_name` | `string` | `null` → `{project_name}-tfvars` | Name of the versioned S3 bucket created by the [bootstrap module](#bootstrap-module-terraformbootstrap) to hold `terraform.tfvars` outside the operator's parent repo. Read via a `data "aws_s3_bucket" "tfvars"` source in root `main.tf`; must resolve to a bucket that already exists (see apply-before-main ordering below). |
 | `tags` | `map(string)` | defaults | Merged into `default_tags` for cost allocation (`Project`). |
 
