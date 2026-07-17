@@ -27,6 +27,7 @@ import { DriftService } from './services/DriftService.js';
 import { GamesWriteService } from './services/GamesWriteService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
+import { AuditService } from './services/AuditService.js';
 
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`,
@@ -70,6 +71,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     GamesWriteService,
     SafeStorageService,
     ElectronStoreService,
+    AuditService,
   ],
 })
 export class AppModule {}
