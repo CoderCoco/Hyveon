@@ -6,6 +6,7 @@ import { api, type ActualCosts } from '../api.service.js';
 import { GameCard } from '../components/game-card.component.js';
 import { KpiStrip } from '../components/kpi-strip.component.js';
 import { FileManagerModal } from '../components/file-manager-modal.component.js';
+import { PendingChangesBanner } from '../components/pending-changes-banner.component.js';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
 import { Input } from '@/components/ui/input.component';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card.component';
@@ -40,6 +41,9 @@ export function DashboardPage() {
   return (
     <>
       <div className="max-w-7xl mx-auto">
+        {/* Pending Terraform changes banner (issue #101) */}
+        <PendingChangesBanner />
+
         {/* KPI strip */}
         <KpiStrip statuses={statuses} estimates={estimates} actualCosts={actualCosts} />
 
