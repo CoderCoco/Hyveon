@@ -37,10 +37,12 @@ function renderBanner() {
 describe('PendingChangesBanner', () => {
   beforeEach(() => {
     apiMock.drift.mockReset();
+    sessionStorage.clear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    sessionStorage.clear();
   });
 
   it('should render nothing when the drift report has no entries', async () => {
@@ -115,6 +117,69 @@ describe('PendingChangesBanner', () => {
       expect(screen.getByRole('status')).toBeInTheDocument();
     });
     expect(screen.getByRole('status')).toHaveTextContent('5 changes pending');
+  });
+
+  it('should keep the dismissal after the component unmounts and remounts (e.g. Dashboard <-> Games navigation)', async () => {
+    apiMock.drift.mockResolvedValue(mixedReport());
+
+    const { unmount } = renderBanner();
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss pending changes banner' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    // Simulate navigating away and back — the component unmounts and a
+    // fresh instance mounts, but the dismissal should still be honored
+    // because it's persisted in sessionStorage rather than component state.
+    unmount();
+    renderBanner();
+
+    await waitFor(() => {
+      expect(apiMock.drift).toHaveBeenCalledTimes(2);
+    });
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('should clear the stored dismissal once a poll returns a clean (empty) report', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.drift.mockResolvedValue(mixedReport());
+
+    const { unmount } = renderBanner();
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss pending changes banner' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    // Next poll comes back clean — the stored dismissal should be cleared,
+    // not merely superseded, so the same report recurring later isn't
+    // silently swallowed by a stale dismissal signature.
+    apiMock.drift.mockResolvedValue(emptyReport());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    await waitFor(() => {
+      expect(apiMock.drift).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    // Unmount/remount (new component instance, as on navigation) and have
+    // the identical mixed report recur — it should reappear because the
+    // dismissal was cleared, not persisted through the empty report.
+    unmount();
+    apiMock.drift.mockResolvedValue(mixedReport());
+    renderBanner();
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    });
   });
 
   it('should stay hidden when the drift poll fails', async () => {

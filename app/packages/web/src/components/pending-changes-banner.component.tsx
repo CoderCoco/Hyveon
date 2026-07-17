@@ -1,10 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, X } from 'lucide-react';
 import { api, type DriftEntry, type DriftKind } from '../api.service.js';
 
 /** How often the banner re-polls `GET /api/drift` for the current pending-change report. */
 const POLL_INTERVAL_MS = 30_000;
+
+/**
+ * `sessionStorage` key used to persist the dismissed report's signature so
+ * the dismissal survives Dashboard \<-\> Games navigation (which unmounts and
+ * remounts this component) without leaking across browser sessions.
+ */
+const DISMISSED_SIGNATURE_STORAGE_KEY = 'hyveon.pendingChangesBanner.dismissedSignature';
+
+/** Reads the persisted dismissed signature, tolerating unavailable/blocked storage. */
+function readDismissedSignature(): string | null {
+  try {
+    return sessionStorage.getItem(DISMISSED_SIGNATURE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persists (or clears, when `signature` is `null`) the dismissed signature. */
+function writeDismissedSignature(signature: string | null): void {
+  try {
+    if (signature === null) {
+      sessionStorage.removeItem(DISMISSED_SIGNATURE_STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(DISMISSED_SIGNATURE_STORAGE_KEY, signature);
+    }
+  } catch {
+    // sessionStorage unavailable (e.g. privacy mode) — dismissal just won't persist.
+  }
+}
 
 /** Per-category count of pending drift entries, keyed by {@link DriftKind}. */
 type DriftCounts = Record<DriftKind, number>;
@@ -42,21 +71,42 @@ function signatureFor(entries: DriftEntry[]): string {
  * - Dismissing hides the banner for the current report only — the
  *   dismissal is keyed by a signature of the report's entries, so the next
  *   poll that returns a *different* report reinstates the banner even
- *   though the previous one was dismissed. Dismissal is in-memory only
- *   (component state), so it lasts for the current session and clears on
- *   reload.
+ *   though the previous one was dismissed. The dismissal is persisted in
+ *   `sessionStorage` (not component state), so it survives Dashboard
+ *   \<-\> Games navigation — which unmounts and remounts this component — while
+ *   still clearing on tab close/reload. A poll that returns a clean (empty)
+ *   report clears the stored dismissal outright, so a later recurrence of
+ *   the same signature isn't silently swallowed.
  */
 export function PendingChangesBanner() {
   const [entries, setEntries] = useState<DriftEntry[] | null>(null);
-  const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
+  const [dismissedSignature, setDismissedSignature] = useState<string | null>(() =>
+    readDismissedSignature(),
+  );
+
+  /**
+   * Monotonically increasing id for the in-flight `api.drift()` request.
+   * `setInterval` can fire a new poll while a previous one is still
+   * pending; comparing against this ref before calling `setEntries`
+   * ensures an older response that resolves late can never clobber a
+   * newer one (stale counts / a resurrected dismissed banner).
+   */
+  const latestRequestIdRef = useRef(0);
 
   const fetchDrift = useCallback(async (isCancelled: () => boolean) => {
+    const requestId = ++latestRequestIdRef.current;
     try {
       const report = await api.drift();
-      if (isCancelled()) return;
+      if (isCancelled() || requestId !== latestRequestIdRef.current) return;
       setEntries(report.entries);
+      if (report.entries.length === 0) {
+        // Clean report — clear any stored dismissal so a later recurrence
+        // of an identical signature isn't mistaken for one already seen.
+        writeDismissedSignature(null);
+        setDismissedSignature(null);
+      }
     } catch {
-      if (isCancelled()) return;
+      if (isCancelled() || requestId !== latestRequestIdRef.current) return;
       setEntries(null);
     }
   }, []);
@@ -105,7 +155,10 @@ export function PendingChangesBanner() {
         </Link>
         <button
           type="button"
-          onClick={() => setDismissedSignature(signature)}
+          onClick={() => {
+            writeDismissedSignature(signature);
+            setDismissedSignature(signature);
+          }}
           aria-label="Dismiss pending changes banner"
           className="inline-flex items-center justify-center rounded-md p-1 hover:bg-[var(--color-orange)]/20"
         >
