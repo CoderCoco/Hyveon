@@ -18,6 +18,7 @@
     "alb_dns_name":                   { "value": null,                  "type": "string" },
     "acm_certificate_arn":            { "value": null,                  "type": "string" },
     "discord_table_name":             { "value": "test-discord-table",  "type": "string" },
+    "audit_table_name":               { "value": "test-audit-table",    "type": "string" },
     "discord_bot_token_secret_arn":   { "value": "arn:aws:secretsmanager:us-east-1:123456789012:secret/test/discord/bot-token",   "type": "string" },
     "discord_public_key_secret_arn":  { "value": "arn:aws:secretsmanager:us-east-1:123456789012:secret/test/discord/public-key",  "type": "string" },
     "interactions_invoke_url":        { "value": null,                  "type": "string" }
