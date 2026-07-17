@@ -138,6 +138,15 @@ describe('preload dispatcher', () => {
       expect(ipcInvoke).toHaveBeenCalledWith('env.get');
     });
 
+    it('should forward drift.get to ipcRenderer.invoke when no mock is registered', async () => {
+      ipcInvoke.mockResolvedValue({ entries: [{ game: 'minecraft', kind: 'pending_create' }] });
+      const drift = bridge['drift'] as { get: () => Promise<unknown> };
+      const result = await drift.get();
+
+      expect(ipcInvoke).toHaveBeenCalledWith('drift.get');
+      expect(result).toEqual({ entries: [{ game: 'minecraft', kind: 'pending_create' }] });
+    });
+
     it('should forward games.create with a single payload object to ipcRenderer.invoke', async () => {
       const writeResult = { ok: true, games: [] };
       ipcInvoke.mockResolvedValue(writeResult);

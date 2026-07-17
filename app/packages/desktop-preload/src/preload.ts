@@ -218,6 +218,10 @@ const api: GsdApi = {
     }) => invoke('config.update', body),
   },
 
+  drift: {
+    get: () => invoke('drift.get'),
+  },
+
   diagnostics: {
     tail: () => invoke('diagnostics.tail'),
     path: () => invoke('diagnostics.path'),
