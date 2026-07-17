@@ -1,6 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { AuditAction, AuditEntry, AuditLogStore, AuditPageResult, GameServer } from '@hyveon/shared';
+import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
 
 /**
  * The single DynamoDB partition every audit entry lives under (`pk = AUDIT`).
@@ -29,10 +30,10 @@ export class AwsAuditLogStore implements AuditLogStore {
    *   arguments, mirroring `AwsSecretsStore`/`AwsRemoteFileStore`'s
    *   zero-arg-constructible pattern. When omitted (or when it returns no
    *   `tableName`), every method throws a clear "table not configured"
-   *   error rather than sending a malformed request. `region` falls back to
-   *   `AWS_REGION_` (Lambda's reserved-name workaround, see CLAUDE.md), then
-   *   `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1` when
-   *   omitted.
+   *   error rather than sending a malformed request. When `region` is
+   *   omitted, it falls back to {@link resolveDefaultAwsRegion} — never read
+   *   from `process.env` directly here, per CLAUDE.md's "no raw
+   *   `process.env` in business logic" guideline.
    */
   constructor(private readonly getConfig?: () => { tableName: string; region?: string }) {}
 
@@ -55,15 +56,12 @@ export class AwsAuditLogStore implements AuditLogStore {
    * Lazily constructs the DynamoDB document client, recreating it whenever
    * the freshly-resolved region differs from the region the cached client
    * was built with — mirrors `AwsSecretsStore.getClient`'s
-   * rebuild-on-region-change pattern.
+   * rebuild-on-region-change pattern. Region defaults come from the
+   * dedicated {@link resolveDefaultAwsRegion} environment accessor rather
+   * than reading `process.env` inline.
    */
   private getClient(): DynamoDBDocumentClient {
-    const region =
-      this.getConfig?.()?.region ??
-      process.env['AWS_REGION_'] ??
-      process.env['AWS_REGION'] ??
-      process.env['AWS_DEFAULT_REGION'] ??
-      'us-east-1';
+    const region = this.getConfig?.()?.region ?? resolveDefaultAwsRegion();
 
     if (!this.client || this.clientRegion !== region) {
       this.client = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
