@@ -37,7 +37,5 @@ jobs:
           tflint_version: latest
 
       - run: tflint --init
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: tflint
