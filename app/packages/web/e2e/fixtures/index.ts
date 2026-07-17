@@ -8,6 +8,7 @@ import type {
   ActualCosts,
   DiscordConfigRedacted,
   GameListEntry,
+  DriftReport,
 } from '@/api.js';
 import {
   ENV_DATA,
@@ -28,6 +29,7 @@ export type {
   ActualCosts,
   DiscordConfigRedacted,
   GameListEntry,
+  DriftReport,
 };
 export {
   ENV_DATA,
@@ -89,6 +91,13 @@ export interface StubOptions {
    */
   games?: (string | GameListEntry)[];
   /**
+   * Drift report returned by `GET /api/drift` (the `drift.get` IPC channel),
+   * consumed by `PendingChangesBanner` (issue #101). Defaults to an empty
+   * report (`{ entries: [] }`) so the banner stays hidden unless a spec
+   * opts in with at least one `DriftEntry`.
+   */
+  drift?: DriftReport;
+  /**
    * Initial log lines surfaced via `window.gsd.logs.get(game)` (used by the
    * Logs page). Maps game name → seeded lines. Games not present in the map
    * receive an empty buffer.
@@ -123,6 +132,7 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
   const startResult: ActionResult = opts.startResult ?? { success: true, message: 'Started' };
   const discord = opts.discord ?? CONFIGURED_DISCORD_CONFIG;
   const games = opts.games ?? statuses.map((s) => s.game);
+  const drift: DriftReport = opts.drift ?? { entries: [] };
   const logLines = opts.logLines ?? {};
   const actualCostsFn: (days: number) => ActualCosts =
     typeof opts.actualCosts === 'function'
@@ -168,6 +178,8 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
     }
     return route.fulfill({ json: config });
   });
+
+  await page.route('**/api/drift', (route) => route.fulfill({ json: drift }));
 
   await page.route('**/api/start/*', (route) => route.fulfill({ json: startResult }));
 

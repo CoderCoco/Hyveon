@@ -122,6 +122,23 @@ export class DashboardPage {
     await this.searchInput().fill(query);
   }
 
+  // ── Pending changes banner (issue #101) ──────────────────────────────
+
+  /** The `PendingChangesBanner` container (`role="status"`), when it's visible. */
+  pendingChangesBanner(): Locator {
+    return this.page.getByRole('status').filter({ hasText: 'tfvars edited' });
+  }
+
+  /** "View pending" link inside the banner, which routes to `/games`. */
+  viewPendingLink(): Locator {
+    return this.pendingChangesBanner().getByRole('link', { name: 'View pending' });
+  }
+
+  /** Dismiss ("X") button inside the banner. */
+  dismissBannerButton(): Locator {
+    return this.page.getByRole('button', { name: 'Dismiss pending changes banner' });
+  }
+
   // ── KPI strip ────────────────────────────────────────────────────────
 
   /** A KPI tile by its label ('Servers running', 'Spend today', etc.). */
