@@ -14,6 +14,9 @@
  */
 export function resolveDefaultAwsRegion(): string {
   return (
-    process.env['AWS_REGION_'] ?? process.env['AWS_REGION'] ?? process.env['AWS_DEFAULT_REGION'] ?? 'us-east-1'
+    process.env['AWS_REGION_']?.trim() ||
+    process.env['AWS_REGION']?.trim() ||
+    process.env['AWS_DEFAULT_REGION']?.trim() ||
+    'us-east-1'
   );
 }
