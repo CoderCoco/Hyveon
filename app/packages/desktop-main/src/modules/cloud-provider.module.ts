@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { AwsSecretsStore, AwsRemoteFileStore, AwsDiscordEventReceiver } from '@hyveon/cloud-aws';
-import type { CloudProvider, SecretsStore, RemoteFileStore, DiscordEventReceiver } from '@hyveon/shared';
+import { AwsSecretsStore, AwsRemoteFileStore, AwsDiscordEventReceiver, AwsAuditLogStore } from '@hyveon/cloud-aws';
+import type { CloudProvider, SecretsStore, RemoteFileStore, DiscordEventReceiver, AuditLogStore } from '@hyveon/shared';
 import { ConfigModule } from './config.module.js';
 import { ConfigService } from '../services/ConfigService.js';
 import { createAwsCloudProvider } from '../services/EcsService.js';
@@ -9,22 +9,24 @@ import {
   SECRETS_STORE,
   REMOTE_FILE_STORE,
   DISCORD_RECEIVER,
+  AUDIT_LOG_STORE,
 } from './cloud-provider.tokens.js';
 
 /**
- * Per-cloud factories for the four cloud-agnostic contracts (`CloudProvider`,
- * `SecretsStore`, `RemoteFileStore`, `DiscordEventReceiver` — all from
- * `@hyveon/shared/cloud.js`). Keyed by the `ActiveCloud` value `ConfigService`
- * reports; each `CloudBindings` entry supplies one factory per token so
- * {@link resolveCloudBindings} (and, in turn, `CloudProviderModule`'s
+ * Per-cloud factories for the five cloud-agnostic contracts (`CloudProvider`,
+ * `SecretsStore`, `RemoteFileStore`, `DiscordEventReceiver`, `AuditLogStore` —
+ * all from `@hyveon/shared/cloud.js`). Keyed by the `ActiveCloud` value
+ * `ConfigService` reports; each `CloudBindings` entry supplies one factory per
+ * token so {@link resolveCloudBindings} (and, in turn, `CloudProviderModule`'s
  * `useFactory` providers) can look up the right implementation without
- * duplicating the cloud switch four times.
+ * duplicating the cloud switch five times.
  */
 export interface CloudBindings {
   cloudProvider: (config: ConfigService) => CloudProvider;
   secretsStore: (config: ConfigService) => SecretsStore;
   remoteFileStore: (config: ConfigService) => RemoteFileStore;
   discordReceiver: (config: ConfigService) => DiscordEventReceiver;
+  auditLogStore: (config: ConfigService) => AuditLogStore;
 }
 
 /**
@@ -44,6 +46,19 @@ export function resolveTfvarsFileStoreConfig(config: ConfigService): { bucket: s
 }
 
 /**
+ * Resolves the `{ tableName, region }` config the AWS `AuditLogStore`'s
+ * `getConfig` callback needs to target the audit DynamoDB table: the table
+ * name comes from `ConfigService.getTfOutputs()?.audit_table_name` (falling
+ * back to `''` when the tfstate hasn't been applied yet, so `AwsAuditLogStore`
+ * surfaces its own "table not configured" error rather than this factory
+ * silently defaulting somewhere), and the region from `getRegion()`. Exported
+ * as a standalone function — see {@link resolveTfvarsFileStoreConfig} for why.
+ */
+export function resolveAuditLogStoreConfig(config: ConfigService): { tableName: string; region: string } {
+  return { tableName: config.getTfOutputs()?.audit_table_name ?? '', region: config.getRegion() };
+}
+
+/**
  * Registry of per-cloud bindings, keyed by `ActiveCloud` (or any future cloud
  * string). Today only `'aws'` is populated; adding a new cloud provider
  * package means adding an entry here rather than touching the module's
@@ -56,6 +71,7 @@ export const CLOUD_BINDINGS: Record<string, CloudBindings> = {
     secretsStore: (config) => new AwsSecretsStore(() => config.getRegion()),
     remoteFileStore: (config) => new AwsRemoteFileStore(() => resolveTfvarsFileStoreConfig(config)),
     discordReceiver: () => new AwsDiscordEventReceiver(),
+    auditLogStore: (config) => new AwsAuditLogStore(() => resolveAuditLogStoreConfig(config)),
   },
 };
 
@@ -75,7 +91,7 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
 }
 
 /**
- * Binds the four cloud-agnostic contracts to concrete implementations for
+ * Binds the five cloud-agnostic contracts to concrete implementations for
  * whichever cloud `ConfigService.getActiveCloud()` reports as active, via
  * {@link resolveCloudBindings} and the {@link CLOUD_BINDINGS} registry. Today
  * that's always `'aws'`, so every token resolves to a `@hyveon/cloud-aws`
@@ -110,7 +126,12 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
       useFactory: (config: ConfigService) => resolveCloudBindings(config).discordReceiver(config),
       inject: [ConfigService],
     },
+    {
+      provide: AUDIT_LOG_STORE,
+      useFactory: (config: ConfigService) => resolveCloudBindings(config).auditLogStore(config),
+      inject: [ConfigService],
+    },
   ],
-  exports: [CLOUD_PROVIDER, SECRETS_STORE, REMOTE_FILE_STORE, DISCORD_RECEIVER],
+  exports: [CLOUD_PROVIDER, SECRETS_STORE, REMOTE_FILE_STORE, DISCORD_RECEIVER, AUDIT_LOG_STORE],
 })
 export class CloudProviderModule {}

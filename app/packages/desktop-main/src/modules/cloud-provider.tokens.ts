@@ -19,3 +19,6 @@ export const REMOTE_FILE_STORE = Symbol('REMOTE_FILE_STORE');
 
 /** Injection token for the `DiscordEventReceiver` implementation bound by `CloudProviderModule`. */
 export const DISCORD_RECEIVER = Symbol('DISCORD_RECEIVER');
+
+/** Injection token for the `AuditLogStore` implementation bound by `CloudProviderModule`. */
+export const AUDIT_LOG_STORE = Symbol('AUDIT_LOG_STORE');
