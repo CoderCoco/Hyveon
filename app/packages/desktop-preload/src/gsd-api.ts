@@ -399,6 +399,50 @@ export interface DeleteGamePayload {
   expectedVersionId?: string;
 }
 
+/**
+ * Category of mismatch between a game's declared (tfvars) and deployed
+ * (tfstate) state.
+ *
+ * Mirrors `DriftKind` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type DriftKind = 'pending_create' | 'pending_delete' | 'config_drift';
+
+/**
+ * Name of a top-level game server config field that can differ between the
+ * declared (tfvars) and deployed (tfstate) configuration for a
+ * `'config_drift'` finding.
+ *
+ * Mirrors `DriftChangedField` in `@hyveon/shared/src/drift.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export type DriftChangedField = 'ports' | 'image' | 'cpu' | 'memory' | 'volumes';
+
+/**
+ * A single per-game drift finding, produced by comparing a game's declared
+ * tfvars configuration against its live tfstate configuration.
+ *
+ * Mirrors `DriftEntry` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface DriftEntry {
+  game: string;
+  kind: DriftKind;
+  changedFields?: DriftChangedField[];
+}
+
+/**
+ * Aggregate drift report returned by the `drift.get` IPC channel. Lists
+ * every game that is out of sync between its declared and deployed
+ * configuration; games that are in sync are omitted entirely.
+ *
+ * Mirrors `DriftReport` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface DriftReport {
+  entries: DriftEntry[];
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace sub-interfaces
 // ---------------------------------------------------------------------------
@@ -514,6 +558,12 @@ export interface GsdConfigApi {
   }) => Promise<WatchdogConfigResult>;
 }
 
+/** Drift detection: compares declared (tfvars) config against deployed (tfstate) state. */
+export interface GsdDriftApi {
+  /** Returns the current drift report — games out of sync between declared and deployed state. */
+  get: () => Promise<DriftReport>;
+}
+
 /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
 export interface GsdDiagnosticsApi {
   /** Returns the last 500 lines from today's local log file. */
@@ -618,6 +668,8 @@ export interface GsdApi {
   env: GsdEnvApi;
   /** Watchdog configuration stored in server_config.json. */
   config: GsdConfigApi;
+  /** Drift detection: compares declared (tfvars) config against deployed (tfstate) state. */
+  drift: GsdDriftApi;
   /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
   diagnostics: GsdDiagnosticsApi;
   /**

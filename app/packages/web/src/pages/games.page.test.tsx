@@ -7,6 +7,7 @@ const apiMock = vi.hoisted(() => ({
   costsEstimate: vi.fn(),
   games: vi.fn(),
   createGame: vi.fn(),
+  drift: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
 
@@ -55,6 +56,7 @@ describe('GamesPage', () => {
     apiMock.status.mockResolvedValue([]);
     apiMock.costsEstimate.mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 });
     apiMock.games.mockResolvedValue({ games: [declaredDeployed, declaredOnly, ghostRow] });
+    apiMock.drift.mockResolvedValue({ entries: [] });
   });
 
   it('should render the Games heading', () => {
@@ -141,5 +143,33 @@ describe('GamesPage', () => {
     await user.click(emptyStateCta);
 
     expect(await screen.findByRole('dialog', { name: 'Add a game server' })).toBeInTheDocument();
+  });
+
+  it('should not render the pending-changes banner when the drift report has no entries', async () => {
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    await screen.findByText('minecraft');
+    // `PollingIndicator` also has `role="status"`, so scope the assertion to
+    // the banner's own copy rather than `role: 'status'` generically.
+    expect(screen.queryByText(/change.*pending/)).not.toBeInTheDocument();
+  });
+
+  it('should render the pending-changes banner above the games table when drift exists', async () => {
+    apiMock.drift.mockResolvedValue({
+      entries: [{ game: 'minecraft', kind: 'pending_create' }],
+    });
+
+    renderPage(<GamesPage />, { initialEntries: ['/games'] });
+
+    const bannerText = await screen.findByText(/change.*pending/);
+    const banner = bannerText.closest('[role="status"]');
+    if (!banner) throw new Error('Expected the pending-changes banner to render with role="status".');
+    expect(banner).toHaveTextContent('1 change pending');
+
+    const table = await screen.findByRole('table');
+    // `compareDocumentPosition` returning `DOCUMENT_POSITION_FOLLOWING` means
+    // `table` comes after `banner` in the DOM — i.e. the banner is mounted
+    // above the games table.
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

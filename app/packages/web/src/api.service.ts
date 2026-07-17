@@ -294,6 +294,50 @@ export interface EnvInfo {
 }
 
 /**
+ * Category of mismatch between a game's declared (tfvars) and deployed
+ * (tfstate) state.
+ *
+ * Mirrors `DriftKind` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type DriftKind = 'pending_create' | 'pending_delete' | 'config_drift';
+
+/**
+ * Name of a top-level game server config field that can differ between the
+ * declared (tfvars) and deployed (tfstate) configuration for a
+ * `'config_drift'` finding.
+ *
+ * Mirrors `DriftChangedField` in `@hyveon/shared/src/drift.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export type DriftChangedField = 'ports' | 'image' | 'cpu' | 'memory' | 'volumes';
+
+/**
+ * A single per-game drift finding, produced by comparing a game's declared
+ * tfvars configuration against its live tfstate configuration.
+ *
+ * Mirrors `DriftEntry` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface DriftEntry {
+  game: string;
+  kind: DriftKind;
+  changedFields?: DriftChangedField[];
+}
+
+/**
+ * Aggregate drift report returned by `GET /api/drift` (the `drift.get` IPC
+ * channel). Lists every game that is out of sync between its declared and
+ * deployed configuration; games that are in sync are omitted entirely.
+ *
+ * Mirrors `DriftReport` in `@hyveon/shared/src/drift.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface DriftReport {
+  entries: DriftEntry[];
+}
+
+/**
  * Returns the `window.gsd` IPC bridge, throwing a descriptive error if it is
  * absent. The bridge is injected by the Electron preload script, so a missing
  * one means the renderer is running outside Electron (e.g. a plain browser).
@@ -373,4 +417,6 @@ export const api = {
 
   diagnosticsTail: async (): Promise<{ lines: string[] }> => gsd().diagnostics.tail(),
   diagnosticsLogPath: async (): Promise<{ path: string }> => gsd().diagnostics.path(),
+
+  drift: async (): Promise<DriftReport> => gsd().drift.get(),
 };

@@ -72,6 +72,9 @@ export function installGsdHttpBridge(): void {
       get: () => call('/api/config'),
       update: (body: unknown) => call('/api/config', withBody('POST', body)),
     },
+    drift: {
+      get: () => call('/api/drift'),
+    },
     diagnostics: {
       tail: () => call('/api/diagnostics/tail'),
       path: () => call('/api/diagnostics/path'),

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { DriftEntry } from '../api.service.js';
 
 const apiMock = vi.hoisted(() => ({
   status: vi.fn(),
@@ -12,6 +13,7 @@ const apiMock = vi.hoisted(() => ({
   filesMgrStatus: vi.fn(),
   filesMgrStart: vi.fn(),
   filesMgrStop: vi.fn(),
+  drift: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
 
@@ -36,6 +38,24 @@ describe('DashboardPage', () => {
     apiMock.status.mockResolvedValue(STATUSES);
     apiMock.costsEstimate.mockResolvedValue(ESTIMATES);
     apiMock.costsActual.mockResolvedValue({ daily: [], total: 0, currency: 'USD', days: 7 });
+    apiMock.drift.mockResolvedValue({ entries: [] });
+  });
+
+  it('should show the pending changes banner when the drift report has entries', async () => {
+    const entries: DriftEntry[] = [{ game: 'minecraft', kind: 'pending_create' }];
+    apiMock.drift.mockResolvedValue({ entries });
+
+    renderPage(<DashboardPage />);
+
+    expect(await screen.findByText(/1 change pending/)).toBeInTheDocument();
+  });
+
+  it('should not show the pending changes banner when the drift report is empty', async () => {
+    renderPage(<DashboardPage />);
+
+    await screen.findByRole('heading', { name: 'minecraft' });
+
+    expect(screen.queryByText(/change pending/)).not.toBeInTheDocument();
   });
 
   it('should render the polling indicator wired to the status poll alongside the search filter', async () => {
