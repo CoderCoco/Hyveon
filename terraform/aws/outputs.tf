@@ -118,3 +118,10 @@ output "watchdog_function_name" {
   description = "Watchdog Lambda function name"
   value       = aws_lambda_function.watchdog.function_name
 }
+
+# ── Audit log outputs ─────────────────────────────────────────────────────────
+
+output "audit_table_name" {
+  description = "DynamoDB table holding audit log entries"
+  value       = aws_dynamodb_table.audit.name
+}

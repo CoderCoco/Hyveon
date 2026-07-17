@@ -87,4 +87,6 @@ module "cloud" {
   discord_application_id = var.discord_application_id
   discord_bot_token      = var.discord_bot_token
   discord_public_key     = var.discord_public_key
+
+  audit_table_name = var.audit_table_name
 }

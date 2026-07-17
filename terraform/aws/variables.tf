@@ -151,3 +151,11 @@ variable "discord_public_key" {
   default     = ""
   sensitive   = true
 }
+
+# ── Audit log ────────────────────────────────────────────────────────────────
+
+variable "audit_table_name" {
+  description = "Name of the DynamoDB audit log table. Defaults to \"$${project_name}-audit\" when empty."
+  type        = string
+  default     = ""
+}

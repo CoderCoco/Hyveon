@@ -116,6 +116,13 @@ output "watchdog_function_name" {
   value       = module.cloud[0].watchdog_function_name
 }
 
+# ── Audit log outputs ─────────────────────────────────────────────────────────
+
+output "audit_table_name" {
+  description = "DynamoDB table holding audit log entries"
+  value       = module.cloud[0].audit_table_name
+}
+
 # ── Bootstrap-created resources ──────────────────────────────────────────────
 
 output "tfvars_bucket_name" {
