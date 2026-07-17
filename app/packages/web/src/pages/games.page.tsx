@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card.c
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.component';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
 import { AddGameWizard } from '@/components/add-game-wizard/add-game-wizard.component';
+import { PendingChangesBanner } from '../components/pending-changes-banner.component.js';
 
 /** Renders a game's declared ports as a comma-separated `container/protocol` list, or an em dash when undeclared. */
 function formatPorts(entry: GameListEntry): string {
@@ -33,6 +34,10 @@ function formatPorts(entry: GameListEntry): string {
  * shown only while `games` is empty. Both mounts are independent — each owns
  * its own dialog open/close state — so either entry point opens its own copy
  * of the same wizard flow.
+ *
+ * {@link PendingChangesBanner} (#101) is mounted above the games table and
+ * self-manages its own visibility — it renders nothing until
+ * `GET /api/drift` reports at least one pending change.
  */
 export function GamesPage() {
   const [games, setGames] = useState<GameListEntry[]>([]);
@@ -68,6 +73,8 @@ export function GamesPage() {
           <AddGameWizard />
         </div>
       </div>
+
+      <PendingChangesBanner />
 
       <Card>
         <CardHeader className="pb-3">
