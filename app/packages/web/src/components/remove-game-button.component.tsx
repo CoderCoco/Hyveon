@@ -59,7 +59,9 @@ export function RemoveGameButton({ game }: Props) {
         navigate('/games');
         return;
       }
-      toast.error(`Failed to remove ${game}`, { description: result.message });
+      const description =
+        result.code === 'validation' ? result.issues.map((i) => i.message).join(' ') : result.message;
+      toast.error(`Failed to remove ${game}`, { description });
     } catch (err) {
       toast.error(`Failed to remove ${game}`, {
         description: err instanceof Error ? err.message : 'An unknown error occurred',
