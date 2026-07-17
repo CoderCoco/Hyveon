@@ -44,7 +44,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog.component';
-import { api, type CreateGamePayload, type GameServer } from '../../api.service.js';
+import { api, type GameServer } from '../../api.service.js';
 import { IdentityStep } from './identity-step.component.js';
 import { ResourcesStep } from './resources-step.component.js';
 import { NetworkingStep } from './networking-step.component.js';
@@ -53,6 +53,7 @@ import { ReviewStep } from './review-step.component.js';
 import {
   WIZARD_STEPS,
   createEmptyWizardDraft,
+  draftToPayload,
   stepForIssuePath,
   validateStep,
   type WizardDraft,
@@ -67,41 +68,6 @@ const STEP_LABELS: Record<WizardStep, string> = {
   storage: 'Storage',
   review: 'Review',
 };
-
-/**
- * Converts a completed {@link WizardDraft} into the `POST /api/games`
- * (`games.create` IPC) payload. Only called once the Review step's "Submit"
- * button is enabled, which requires {@link validateStep} to report zero
- * issues for `review` — so `cpu`/`memory`/port `container` values are
- * guaranteed non-null at this point; the `?? 0` fallbacks only guard the
- * type checker, they're never expected to fire in practice.
- */
-function draftToPayload(draft: WizardDraft): CreateGamePayload {
-  const name = draft.name.trim();
-  const connectMessage = draft.connect_message.trim();
-  const image = draft.image.trim();
-
-  return {
-    name,
-    config: {
-      image,
-      cpu: draft.cpu ?? 0,
-      memory: draft.memory ?? 0,
-      ports: draft.ports.map((port) => ({ container: port.container ?? 0, protocol: port.protocol })),
-      volumes: draft.volumes.map((volume) => ({ name: volume.name, container_path: volume.container_path })),
-      connect_message: connectMessage.length > 0 ? connectMessage : undefined,
-      file_seeds:
-        draft.file_seeds.length > 0
-          ? draft.file_seeds.map((seed) => ({
-              path: seed.path,
-              content: seed.content.length > 0 ? seed.content : undefined,
-              content_base64: seed.content_base64.length > 0 ? seed.content_base64 : undefined,
-              mode: seed.mode.length > 0 ? seed.mode : undefined,
-            }))
-          : undefined,
-    },
-  };
-}
 
 /**
  * Self-contained "Add game" dialog: renders its own trigger button, walks the

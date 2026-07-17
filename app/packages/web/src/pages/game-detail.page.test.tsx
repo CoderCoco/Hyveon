@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Routes, Route } from 'react-router-dom';
 
 const apiMock = vi.hoisted(() => ({
   status: vi.fn(),
   costsEstimate: vi.fn(),
   games: vi.fn(),
+  updateGame: vi.fn(),
+  deleteGame: vi.fn(),
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
+
+/** Stub for `sonner`'s `toast`, pulled in transitively via `RemoveGameButton`. */
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('sonner', () => ({ toast: toastMock }));
 
 import { GameDetailPage } from './game-detail.page.js';
 import { renderPage } from '../test-utils/render-page.utils.js';
@@ -50,6 +57,10 @@ describe('GameDetailPage', () => {
   beforeEach(() => {
     apiMock.status.mockResolvedValue([]);
     apiMock.costsEstimate.mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 });
+    apiMock.updateGame.mockReset();
+    apiMock.deleteGame.mockReset();
+    toastMock.success.mockClear();
+    toastMock.error.mockClear();
   });
 
   describe('a fully-declared game', () => {
@@ -112,6 +123,53 @@ describe('GameDetailPage', () => {
       expect(await screen.findByRole('heading', { name: 'Connect message' })).toBeInTheDocument();
       expect(screen.getByText('Connect at minecraft.example.com')).toBeInTheDocument();
     });
+
+    it('should toggle into the prefilled edit form when Edit is clicked', async () => {
+      const user = userEvent.setup();
+      renderDetailPage('minecraft');
+      await screen.findByRole('heading', { name: 'Container' });
+
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
+
+      expect(await screen.findByLabelText('Image')).toHaveValue('itzg/minecraft-server:latest');
+      expect(screen.getByLabelText('Name')).toBeDisabled();
+      expect(screen.getByLabelText('Name')).toHaveValue('minecraft');
+      expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Container' })).toBeNull();
+    });
+
+    it('should reflect a saved change in the read-only view after onSaved', async () => {
+      const user = userEvent.setup();
+      const updatedGame = {
+        ...DECLARED_GAME,
+        config: { ...DECLARED_GAME.config, image: 'itzg/minecraft-server:2.0' },
+      };
+      apiMock.updateGame.mockResolvedValue({ ok: true, games: [updatedGame, GHOST_GAME] });
+      renderDetailPage('minecraft');
+      await screen.findByRole('heading', { name: 'Container' });
+
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      const imageField = await screen.findByLabelText('Image');
+      await user.clear(imageField);
+      await user.type(imageField, 'itzg/minecraft-server:2.0');
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(apiMock.updateGame).toHaveBeenCalled());
+      expect(await screen.findByRole('heading', { name: 'Container' })).toBeInTheDocument();
+      expect(screen.getByText('itzg/minecraft-server:2.0')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Image')).toBeNull();
+    });
+
+    it('should expose the Remove confirmation dialog', async () => {
+      const user = userEvent.setup();
+      renderDetailPage('minecraft');
+      await screen.findByRole('heading', { name: 'Container' });
+
+      await user.click(screen.getByRole('button', { name: 'Remove game' }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('Remove minecraft?')).toBeInTheDocument();
+    });
   });
 
   describe('a ghost game (deployed but not declared)', () => {
@@ -139,6 +197,14 @@ describe('GameDetailPage', () => {
       expect(screen.queryByRole('heading', { name: 'Container' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Ports' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Volumes' })).toBeNull();
+    });
+
+    it('should hide the Edit and Remove controls', async () => {
+      renderDetailPage('valheim');
+
+      await screen.findByText('Undeclared');
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove game' })).toBeNull();
     });
   });
 

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   createEmptyWizardDraft,
+  draftFromGameServer,
+  draftToPayload,
   stepForIssuePath,
   validateWizardDraft,
   validateIdentityStep,
@@ -240,6 +242,72 @@ describe('validateReviewStep', () => {
 
   it('should pass a clean review step', () => {
     expect(validateReviewStep(makeValidDraft(), [])).toEqual([]);
+  });
+});
+
+describe('draftFromGameServer / draftToPayload round-trip', () => {
+  it('should round-trip a fully-populated GameServer through draftFromGameServer and back through draftToPayload', () => {
+    const game = makeExistingGame({
+      name: 'minecraft',
+      image: 'itzg/minecraft-server',
+      cpu: 1024,
+      memory: 2048,
+      ports: [{ container: 25565, protocol: 'tcp' }],
+      volumes: [{ name: 'data', container_path: '/data' }],
+      connect_message: 'Connect at {ip}:{port}',
+      file_seeds: [{ path: '/data/config.yml', content: 'foo: bar', content_base64: 'Zm9v', mode: '0644' }],
+    });
+
+    const draft = draftFromGameServer(game);
+    const payload = draftToPayload(draft);
+
+    expect(payload).toEqual({
+      name: game.name,
+      config: {
+        image: game.image,
+        cpu: game.cpu,
+        memory: game.memory,
+        ports: game.ports,
+        volumes: game.volumes,
+        connect_message: game.connect_message,
+        file_seeds: game.file_seeds,
+      },
+    });
+  });
+
+  it('should round-trip a minimal GameServer (no connect_message/file_seeds) with those fields left undefined', () => {
+    const game = makeExistingGame({ name: 'valheim' });
+
+    const draft = draftFromGameServer(game);
+    const payload = draftToPayload(draft);
+
+    expect(payload).toEqual({
+      name: game.name,
+      config: {
+        image: game.image,
+        cpu: game.cpu,
+        memory: game.memory,
+        ports: game.ports,
+        volumes: game.volumes,
+        connect_message: undefined,
+        file_seeds: undefined,
+      },
+    });
+  });
+
+  it('should produce a draft with empty-string fallbacks for optional GameServer fields that are unset', () => {
+    const game = makeExistingGame({ name: 'valheim', connect_message: undefined, file_seeds: undefined });
+
+    expect(draftFromGameServer(game)).toEqual({
+      name: game.name,
+      image: game.image,
+      connect_message: '',
+      cpu: game.cpu,
+      memory: game.memory,
+      ports: game.ports,
+      volumes: game.volumes,
+      file_seeds: [],
+    });
   });
 });
 

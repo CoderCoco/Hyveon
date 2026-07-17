@@ -210,6 +210,30 @@ export interface CreateGamePayload {
   expectedVersionId?: string;
 }
 
+/**
+ * Request payload for `games.update`. Same shape as {@link CreateGamePayload}
+ * — `name` identifies the existing game to overwrite with `config`.
+ *
+ * Mirrors `UpdateGamePayload` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface UpdateGamePayload {
+  name: string;
+  config: Omit<GameServer, 'name'>;
+  expectedVersionId?: string;
+}
+
+/**
+ * Request payload for `games.delete`.
+ *
+ * Mirrors `DeleteGamePayload` in `@hyveon/shared/src/gamesWrite.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export interface DeleteGamePayload {
+  name: string;
+  expectedVersionId?: string;
+}
+
 /** Status of the FileBrowser helper task per game, returned by `GET /api/files/:game`. */
 export interface FileMgrStatus {
   game: string;
@@ -310,6 +334,10 @@ export const api = {
   filesMgrStop: async (game: string): Promise<ActionResult> => gsd().files.stop(game),
   createGame: async (payload: CreateGamePayload): Promise<GameWriteResult> =>
     gsd().games.create(payload) as Promise<GameWriteResult>,
+  updateGame: async (payload: UpdateGamePayload): Promise<GameWriteResult> =>
+    gsd().games.update(payload) as Promise<GameWriteResult>,
+  deleteGame: async (payload: DeleteGamePayload): Promise<GameWriteResult> =>
+    gsd().games.delete(payload) as Promise<GameWriteResult>,
 
   discordConfig: async (): Promise<DiscordConfigRedacted> =>
     gsd().discord.getConfig() as Promise<DiscordConfigRedacted>,
