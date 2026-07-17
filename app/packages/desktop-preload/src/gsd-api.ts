@@ -443,6 +443,55 @@ export interface DriftReport {
   entries: DriftEntry[];
 }
 
+/**
+ * The kind of mutation an {@link AuditEntry} records.
+ *
+ * Mirrors `AuditAction` in `@hyveon/shared/src/audit.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type AuditAction = 'add' | 'edit' | 'remove';
+
+/**
+ * A single row in the DynamoDB audit log, recording who changed a game
+ * server's configuration, what changed, and the resulting `terraform.tfvars`
+ * S3 version.
+ *
+ * Mirrors `AuditEntry` in `@hyveon/shared/src/audit.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface AuditEntry {
+  /** Sort key: `<ISO timestamp>#<ULID>`. */
+  sk: string;
+  /** ISO-8601 timestamp of the mutation. */
+  timestamp: string;
+  /** Identifier of the user or system that performed the mutation. */
+  actor: string;
+  /** The kind of mutation performed. */
+  action: AuditAction;
+  /** The `game_servers` map key the mutation applied to. */
+  game: string;
+  /** The game's configuration before the mutation, or `null` for `add`. */
+  before: GameServer | null;
+  /** The game's configuration after the mutation, or `null` for `remove`. */
+  after: GameServer | null;
+  /** S3 object version id of `terraform.tfvars` produced by the write, if known. */
+  versionId?: string;
+}
+
+/**
+ * A page of audit entries, newest-first, plus an optional cursor for
+ * fetching the next page. Returned by the `audit.list` IPC channel.
+ *
+ * Mirrors `AuditPageResult` in `@hyveon/shared/src/audit.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export interface AuditPageResult {
+  /** The page of entries, newest-first. */
+  entries: AuditEntry[];
+  /** Cursor (an {@link AuditEntry.sk} value) to pass as `before` to fetch the next, older page. Absent on the last page. */
+  nextBefore?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace sub-interfaces
 // ---------------------------------------------------------------------------
@@ -572,6 +621,17 @@ export interface GsdDiagnosticsApi {
   path: () => Promise<{ path: string }>;
 }
 
+/** Audit log: paginated history of `game_servers` mutations from DynamoDB. */
+export interface GsdAuditApi {
+  /**
+   * Returns a page of audit entries, newest-first. `opts.limit` caps the
+   * number of entries returned; `opts.before` is a pagination cursor (an
+   * {@link AuditEntry.sk} value) from a previous page's `nextBefore`, used
+   * to fetch the next, older page.
+   */
+  list: (opts?: { limit?: number; before?: string }) => Promise<AuditPageResult>;
+}
+
 // ---------------------------------------------------------------------------
 // Test-only injection surface
 // ---------------------------------------------------------------------------
@@ -672,6 +732,8 @@ export interface GsdApi {
   drift: GsdDriftApi;
   /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
   diagnostics: GsdDiagnosticsApi;
+  /** Audit log: paginated history of `game_servers` mutations from DynamoDB. */
+  audit: GsdAuditApi;
   /**
    * Test-only injection surface; `undefined` in production.
    *

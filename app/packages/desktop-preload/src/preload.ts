@@ -226,6 +226,10 @@ const api: GsdApi = {
     tail: () => invoke('diagnostics.tail'),
     path: () => invoke('diagnostics.path'),
   },
+
+  audit: {
+    list: (opts?: { limit?: number; before?: string }) => invoke('audit.list', opts),
+  },
 };
 
 /**
