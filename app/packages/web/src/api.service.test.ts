@@ -56,6 +56,9 @@ function makeGsdMock() {
       tail: vi.fn().mockResolvedValue({ lines: [] }),
       path: vi.fn().mockResolvedValue({ path: '/var/log/today.log' }),
     },
+    drift: {
+      get: vi.fn().mockResolvedValue({ entries: [] }),
+    },
   };
 }
 
@@ -232,6 +235,13 @@ describe('IPC bridge delegation', () => {
     expect(gsd.diagnostics.path).toHaveBeenCalledOnce();
   });
 
+  it('should resolve api.drift() with the bridge drift.get() result', async () => {
+    const report = { entries: [{ game: 'minecraft', kind: 'pending_create' as const }] };
+    gsd.drift.get.mockResolvedValueOnce(report);
+    await expect(api.drift()).resolves.toEqual(report);
+    expect(gsd.drift.get).toHaveBeenCalledOnce();
+  });
+
   it('should return the payload resolved by the bridge', async () => {
     const entries = [
       { name: 'minecraft', declared: false, deployed: true },
@@ -246,5 +256,10 @@ describe('missing IPC bridge', () => {
   it('should throw a descriptive error when window.gsd is unavailable', async () => {
     vi.stubGlobal('gsd', undefined);
     await expect(api.env()).rejects.toThrow('window.gsd IPC bridge is unavailable');
+  });
+
+  it('should reject api.drift() with a descriptive error when window.gsd is unavailable', async () => {
+    vi.stubGlobal('gsd', undefined);
+    await expect(api.drift()).rejects.toThrow('window.gsd IPC bridge is unavailable');
   });
 });
