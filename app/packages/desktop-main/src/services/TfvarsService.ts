@@ -253,9 +253,17 @@ export class TfvarsService {
    *   the map key rather than an object attribute).
    * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
    *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   * @returns The written file's new `etag` (S3 mode) plus an optional
+   *   `versionId` when the underlying store supports object versioning — see
+   *   {@link writeTfvars}/{@link putRawTfvars}. Local mode returns
+   *   `versionId: undefined` since the filesystem has no equivalent concept.
    */
-  async addGameServer(name: string, config: RawGameServerEntry, expectedVersionId?: string): Promise<void> {
-    await this.writeTfvars(expectedVersionId, (hcl) => this.insertGameServerEntry(hcl, name, config));
+  async addGameServer(
+    name: string,
+    config: RawGameServerEntry,
+    expectedVersionId?: string,
+  ): Promise<{ etag: string; versionId?: string }> {
+    return this.writeTfvars(expectedVersionId, (hcl) => this.insertGameServerEntry(hcl, name, config));
   }
 
   /**
@@ -274,9 +282,17 @@ export class TfvarsService {
    * @param config - The entry's new fields (everything but `name`).
    * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
    *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   * @returns The written file's new `etag` (S3 mode) plus an optional
+   *   `versionId` when the underlying store supports object versioning — see
+   *   {@link writeTfvars}/{@link putRawTfvars}. Local mode returns
+   *   `versionId: undefined` since the filesystem has no equivalent concept.
    */
-  async updateGameServer(name: string, config: RawGameServerEntry, expectedVersionId?: string): Promise<void> {
-    await this.writeTfvars(expectedVersionId, (hcl) => this.replaceGameServerEntry(hcl, name, config));
+  async updateGameServer(
+    name: string,
+    config: RawGameServerEntry,
+    expectedVersionId?: string,
+  ): Promise<{ etag: string; versionId?: string }> {
+    return this.writeTfvars(expectedVersionId, (hcl) => this.replaceGameServerEntry(hcl, name, config));
   }
 
   /**
@@ -290,9 +306,16 @@ export class TfvarsService {
    * @param name - The `game_servers` map key to remove.
    * @param expectedVersionId - The etag last read (e.g. via {@link getRawHcl}),
    *   used as the S3-mode conditional-put guard; omit to write unconditionally.
+   * @returns The written file's new `etag` (S3 mode) plus an optional
+   *   `versionId` when the underlying store supports object versioning — see
+   *   {@link writeTfvars}/{@link putRawTfvars}. Local mode returns
+   *   `versionId: undefined` since the filesystem has no equivalent concept.
    */
-  async removeGameServer(name: string, expectedVersionId?: string): Promise<void> {
-    await this.writeTfvars(expectedVersionId, (hcl) => cutEntry(hcl, 'game_servers', name));
+  async removeGameServer(
+    name: string,
+    expectedVersionId?: string,
+  ): Promise<{ etag: string; versionId?: string }> {
+    return this.writeTfvars(expectedVersionId, (hcl) => cutEntry(hcl, 'game_servers', name));
   }
 
   /**
@@ -333,12 +356,18 @@ export class TfvarsService {
    * meaningful — `expectedVersionId` is checked against the store's
    * current etag at write time, so a conflicting write since `fetchRawTfvars`
    * ran is still caught even though `mutate` itself is synchronous.
+   *
+   * @returns The write's `{ etag, versionId }` — see {@link putRawTfvars}.
    */
-  private async writeTfvars(expectedVersionId: string | undefined, mutate: (hcl: string) => string): Promise<void> {
+  private async writeTfvars(
+    expectedVersionId: string | undefined,
+    mutate: (hcl: string) => string,
+  ): Promise<{ etag: string; versionId?: string }> {
     const { hcl } = await this.fetchRawTfvars();
     const mutatedHcl = mutate(hcl);
-    await this.putRawTfvars(mutatedHcl, expectedVersionId);
+    const result = await this.putRawTfvars(mutatedHcl, expectedVersionId);
     this.invalidateCache();
+    return result;
   }
 
   /**
@@ -355,8 +384,15 @@ export class TfvarsService {
    * directly with no conditional guard, since the local filesystem has no
    * etag/versioning concept to condition on (mirroring
    * {@link fetchRawTfvars}'s local-mode `etag`-less read).
+   *
+   * @returns The underlying `RemoteFileStore.put()`'s `{ etag, versionId }`
+   *   in S3 mode. Local mode has no etag/versioning concept, so `etag` is the
+   *   empty string and `versionId` is `undefined`.
    */
-  private async putRawTfvars(hcl: string, expectedVersionId?: string): Promise<void> {
+  private async putRawTfvars(
+    hcl: string,
+    expectedVersionId?: string,
+  ): Promise<{ etag: string; versionId?: string }> {
     const bucket = this.config.getTfvarsBucket();
     const path = this.config.getTfvarsPath();
 
@@ -364,7 +400,7 @@ export class TfvarsService {
       const key = basename(path);
       const body = new TextEncoder().encode(hcl);
       try {
-        await this.remoteFileStore.put(key, body, expectedVersionId ? { ifMatch: expectedVersionId } : undefined);
+        return await this.remoteFileStore.put(key, body, expectedVersionId ? { ifMatch: expectedVersionId } : undefined);
       } catch (err) {
         if (err instanceof RemoteFileConflictError) {
           const current = await this.remoteFileStore.get(key).catch(() => undefined);
@@ -372,10 +408,10 @@ export class TfvarsService {
         }
         throw err;
       }
-      return;
     }
 
     writeFileSync(path, hcl, 'utf-8');
+    return { etag: '', versionId: undefined };
   }
 
   /**

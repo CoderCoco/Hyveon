@@ -143,7 +143,8 @@ describe('TfvarsService write path', () => {
       mockRead.mockReturnValue(FIXTURE_TFVARS);
 
       const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
-      await service.addGameServer('terraria', NEW_ENTRY_CONFIG);
+      const result = await service.addGameServer('terraria', NEW_ENTRY_CONFIG);
+      expect(result).toEqual({ etag: '', versionId: undefined });
 
       expect(mockWrite).toHaveBeenCalledTimes(1);
       const written = mockWrite.mock.calls[0]![1] as string;
@@ -214,6 +215,24 @@ describe('TfvarsService write path', () => {
     });
   });
 
+  describe('local-mode write return value', () => {
+    it('should resolve with versionId: undefined since the local filesystem has no versioning concept', async () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(FIXTURE_TFVARS);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.updateGameServer('palworld', UPDATED_ENTRY_CONFIG)).resolves.toEqual({
+        etag: '',
+        versionId: undefined,
+      });
+      await expect(service.removeGameServer('valheim')).resolves.toEqual({
+        etag: '',
+        versionId: undefined,
+      });
+    });
+  });
+
   describe('addGameServer name validation', () => {
     it('should reject a name containing HCL metacharacters instead of writing a corrupt file', async () => {
       mockExists.mockReturnValue(true);
@@ -245,7 +264,10 @@ describe('TfvarsService write path', () => {
 
       const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
 
-      await expect(service.addGameServer('my-server_2', NEW_ENTRY_CONFIG)).resolves.toBeUndefined();
+      await expect(service.addGameServer('my-server_2', NEW_ENTRY_CONFIG)).resolves.toEqual({
+        etag: '',
+        versionId: undefined,
+      });
       expect(mockWrite).toHaveBeenCalledTimes(1);
     });
   });
@@ -281,6 +303,20 @@ describe('TfvarsService write path', () => {
       await expect(
         service.removeGameServer('valheim', 'etag-1'),
       ).rejects.toThrow(OptimisticLockError);
+    });
+
+    it('should propagate the store put()\'s versionId through to the caller on a successful write', async () => {
+      remoteFileStore.get.mockResolvedValue({
+        body: new TextEncoder().encode(FIXTURE_TFVARS),
+        etag: 'etag-1',
+      });
+      remoteFileStore.put.mockResolvedValueOnce({ etag: 'etag-2', versionId: 'v-123' });
+
+      const service = new TfvarsService(makeConfig({ bucket: 'my-tfvars-bucket' }), remoteFileStore);
+
+      await expect(
+        service.updateGameServer('palworld', UPDATED_ENTRY_CONFIG, 'etag-1'),
+      ).resolves.toEqual({ etag: 'etag-2', versionId: 'v-123' });
     });
 
     it('should throw OptimisticLockError (not a raw RemoteFileConflictError) when the store rejects a conditional put', async () => {
