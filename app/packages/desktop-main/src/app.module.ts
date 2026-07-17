@@ -22,6 +22,8 @@ import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
 import { DriftController } from './controllers/drift.controller.js';
 import { DriftHttpController } from './controllers/drift-http.controller.js';
+import { AuditController } from './controllers/audit.controller.js';
+import { AuditHttpController } from './controllers/audit-http.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { DriftService } from './services/DriftService.js';
 import { GamesWriteService } from './services/GamesWriteService.js';
@@ -53,6 +55,8 @@ import { AuditService } from './services/AuditService.js';
     DiagnosticsHttpController,
     DriftController,
     DriftHttpController,
+    AuditController,
+    AuditHttpController,
   ],
   providers: [
     {
