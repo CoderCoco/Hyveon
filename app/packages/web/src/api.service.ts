@@ -338,6 +338,55 @@ export interface DriftReport {
 }
 
 /**
+ * The kind of mutation an {@link AuditEntry} records.
+ *
+ * Mirrors `AuditAction` in `@hyveon/shared/src/audit.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type AuditAction = 'add' | 'edit' | 'remove';
+
+/**
+ * A single row in the DynamoDB audit log, recording who changed a game
+ * server's configuration, what changed, and the resulting `terraform.tfvars`
+ * S3 version.
+ *
+ * Mirrors `AuditEntry` in `@hyveon/shared/src/audit.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface AuditEntry {
+  /** Sort key: `<ISO timestamp>#<ULID>`. */
+  sk: string;
+  /** ISO-8601 timestamp of the mutation. */
+  timestamp: string;
+  /** Identifier of the user or system that performed the mutation. */
+  actor: string;
+  /** The kind of mutation performed. */
+  action: AuditAction;
+  /** The `game_servers` map key the mutation applied to. */
+  game: string;
+  /** The game's configuration before the mutation, or `null` for `add`. */
+  before: GameServer | null;
+  /** The game's configuration after the mutation, or `null` for `remove`. */
+  after: GameServer | null;
+  /** S3 object version id of `terraform.tfvars` produced by the write, if known. */
+  versionId?: string;
+}
+
+/**
+ * A page of audit entries, newest-first, plus an optional cursor for
+ * fetching the next page. Returned by the `audit.list` IPC channel.
+ *
+ * Mirrors `AuditPageResult` in `@hyveon/shared/src/audit.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export interface AuditPageResult {
+  /** The page of entries, newest-first. */
+  entries: AuditEntry[];
+  /** Cursor (an {@link AuditEntry.sk} value) to pass as `before` to fetch the next, older page. Absent on the last page. */
+  nextBefore?: string;
+}
+
+/**
  * Returns the `window.gsd` IPC bridge, throwing a descriptive error if it is
  * absent. The bridge is injected by the Electron preload script, so a missing
  * one means the renderer is running outside Electron (e.g. a plain browser).
@@ -419,4 +468,7 @@ export const api = {
   diagnosticsLogPath: async (): Promise<{ path: string }> => gsd().diagnostics.path(),
 
   drift: async (): Promise<DriftReport> => gsd().drift.get(),
+
+  audit: async (opts?: { limit?: number; before?: string }): Promise<AuditPageResult> =>
+    gsd().audit.list(opts),
 };
