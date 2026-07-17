@@ -26,9 +26,9 @@ function formatDiffValue(value: unknown): string {
 
 /**
  * One row in the `/audit` table. Always shows the summary columns
- * (timestamp, actor, action, game, version id); clicking the row (or its
- * chevron) expands a second row underneath showing the raw `before`/`after`
- * JSON diff in two side-by-side `<pre>` blocks.
+ * (timestamp, actor, action, game, version id); clicking the chevron button
+ * expands a second row underneath showing the raw `before`/`after` JSON
+ * diff in two side-by-side `<pre>` blocks.
  */
 export function AuditEntryRow({ entry }: { entry: AuditEntry }) {
   const [expanded, setExpanded] = useState(false);
@@ -36,29 +36,15 @@ export function AuditEntryRow({ entry }: { entry: AuditEntry }) {
 
   return (
     <>
-      <TableRow
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={toggle}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            toggle();
-          }
-        }}
-        className="cursor-pointer"
-      >
+      <TableRow>
         <TableCell className="w-8">
           <Button
             variant="ghost"
             size="sm"
             className="h-6 w-6 p-0"
+            aria-expanded={expanded}
             aria-label={expanded ? 'Collapse diff' : 'Expand diff'}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggle();
-            }}
+            onClick={toggle}
           >
             {expanded ? (
               <ChevronDown className="size-3.5" aria-hidden="true" />
