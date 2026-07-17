@@ -26,13 +26,14 @@ export class AuditPage {
 
   /**
    * The nth summary row (0-indexed, newest first) rendered by
-   * `AuditEntryRow`. Scoped to `tr[aria-expanded]` — only the summary `<tr>`
-   * carries that attribute in production (the expanded detail row and the
-   * unrelated mobile-nav hamburger button do not), so this stays stable
-   * whether or not other rows are currently expanded.
+   * `AuditEntryRow`. Scoped to `tr` elements containing an
+   * `aria-expanded` button — only the summary row's expand/collapse
+   * toggle carries that attribute in production (the expanded detail row
+   * has no such button), so this stays stable whether or not other rows
+   * are currently expanded.
    */
   entryRow(n: number): Locator {
-    return this.page.locator('tr[aria-expanded]').nth(n);
+    return this.page.locator('tr:has(button[aria-expanded])').nth(n);
   }
 
   /** Expand/collapse toggle button inside the nth summary row. */
