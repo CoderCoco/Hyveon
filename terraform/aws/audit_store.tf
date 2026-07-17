@@ -1,11 +1,13 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Audit log DynamoDB table
 #
-# Pay-per-request table recording who did what and when across the management
-# app and the Discord bot (e.g. server start/stop, credential edits). Items are
-# expected to use a partition key that groups related events (e.g. by date or
-# actor) and a sort key for ordering within the partition — schema details live
-# in the app layer, not here.
+# Pay-per-request table recording game-server config mutations (add/edit/
+# remove) made through the management app. All items live under a single
+# fixed partition (`pk = "AUDIT"`); the sort key is `<ISO timestamp>#<ULID>`
+# (see `buildAuditSk` in `@hyveon/shared/audit.ts`), so a query against that
+# partition with `ScanIndexForward: false` returns entries newest-first. See
+# `AwsAuditLogStore` in `app/packages/cloud-aws/src/AwsAuditLogStore.ts` for
+# the read/write implementation.
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "audit" {
