@@ -168,21 +168,16 @@ export class TerraformService {
   private lastInitConfig: TerraformInitConfig | null = null;
 
   /**
-   * `true` while an {@link init} call is actively running (from the moment
-   * its generator body starts executing, i.e. the first `.next()` call, until
-   * it completes or throws). Guards against a second concurrent `init()` call
-   * racing the first against the same `terraform` working directory.
+   * Name of whichever subcommand ({@link init} or {@link plan}) is actively
+   * running against `getTerraformDir()`, or `null` when neither is. A single
+   * shared lock (rather than separate `initInFlight`/`planInFlight` flags) is
+   * required because `init` mutates the `backend/.terraform` state that
+   * `plan` reads — letting the two subcommands run concurrently against the
+   * same workspace would race one against the other's writes/reads. Set the
+   * moment a generator body starts executing (i.e. the first `.next()` call)
+   * until it completes or throws.
    */
-  private initInFlight = false;
-
-  /**
-   * `true` while a {@link plan} call is actively running (from the moment its
-   * generator body starts executing until it completes or throws). Guards
-   * against a second concurrent `plan()` call racing the first against the
-   * same working directory/runs directory. Tracked separately from
-   * {@link initInFlight} since `init` and `plan` are distinct subcommands.
-   */
-  private planInFlight = false;
+  private workspaceInFlight: 'init' | 'plan' | null = null;
 
   /**
    * `config` resolves the terraform working directory (`getTerraformDir()`)
@@ -265,8 +260,10 @@ export class TerraformService {
    * rather than rejecting with {@link TerraformInitError}.
    *
    * Throws a descriptive `Error` synchronously (on the first `.next()` call)
-   * if another `init()` call is already in flight on this instance — overlapping
-   * `terraform init` runs against the same working directory would race.
+   * if another `init()` *or* `plan()` call is already in flight on this
+   * instance — both subcommands share a single {@link workspaceInFlight} lock
+   * because `init` mutates the `backend/.terraform` state that `plan` reads;
+   * overlapping runs against the same working directory would race.
    *
    * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
    * resolved, or {@link TerraformInitError} if the spawned process exits with
@@ -277,12 +274,13 @@ export class TerraformService {
     config: TerraformInitConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<TerraformRunChunk, void> {
-    if (this.initInFlight) {
+    if (this.workspaceInFlight) {
       throw new Error(
-        'TerraformService.init() is already running; wait for it to finish before calling init() again.',
+        `TerraformService.init() cannot run while ${this.workspaceInFlight}() is already ` +
+          'running; wait for it to finish before calling init() again.',
       );
     }
-    this.initInFlight = true;
+    this.workspaceInFlight = 'init';
     try {
       if (this.lastInitConfig && TerraformService.sameBackendConfig(this.lastInitConfig, config)) {
         yield {
@@ -329,7 +327,7 @@ export class TerraformService {
       }
       throw new TerraformInitError(result.exitCode);
     } finally {
-      this.initInFlight = false;
+      this.workspaceInFlight = null;
     }
   }
 
@@ -374,7 +372,10 @@ export class TerraformService {
    * {@link TerraformPlanError}.
    *
    * Throws a descriptive `Error` synchronously (on the first `.next()` call)
-   * if another `plan()` call is already in flight on this instance.
+   * if another `plan()` *or* `init()` call is already in flight on this
+   * instance — both subcommands share a single {@link workspaceInFlight} lock
+   * because `plan` reads the `backend/.terraform` state that `init` mutates;
+   * overlapping runs against the same working directory would race.
    *
    * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
    * resolved, a plain `Error` if the configured tfvars source can't be read
@@ -386,12 +387,13 @@ export class TerraformService {
     tfvarsVersionId?: string,
     signal?: AbortSignal,
   ): AsyncGenerator<TerraformRunChunk, TerraformPlanResult | undefined> {
-    if (this.planInFlight) {
+    if (this.workspaceInFlight) {
       throw new Error(
-        'TerraformService.plan() is already running; wait for it to finish before calling plan() again.',
+        `TerraformService.plan() cannot run while ${this.workspaceInFlight}() is already ` +
+          'running; wait for it to finish before calling plan() again.',
       );
     }
-    this.planInFlight = true;
+    this.workspaceInFlight = 'plan';
     try {
       if (signal?.aborted) {
         // Already aborted before we even started resolving the binary path —
@@ -478,7 +480,7 @@ export class TerraformService {
       }
       throw new TerraformPlanError(result.exitCode);
     } finally {
-      this.planInFlight = false;
+      this.workspaceInFlight = null;
     }
   }
 
@@ -649,6 +651,24 @@ export class TerraformService {
       return { aborted: false, exitCode };
     } finally {
       signal?.removeEventListener('abort', onAbort);
+      if (!closed) {
+        // The generator was force-closed early (e.g. plan()'s own finally
+        // calling `stream.return()` when its consumer breaks/throws) before
+        // the child process actually exited. Removing the abort listener
+        // alone leaves Terraform (and its stdout/stderr listeners) running
+        // in the background — explicitly kill the child and wait for it to
+        // actually close before this generator resolves, so forced cleanup
+        // terminates the underlying process instead of orphaning it.
+        child.kill();
+        await new Promise<void>((resolve) => {
+          if (closed) {
+            resolve();
+            return;
+          }
+          child.once('close', () => resolve());
+          child.once('error', () => resolve());
+        });
+      }
     }
   }
 
