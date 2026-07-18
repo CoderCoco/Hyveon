@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { readFileSync, writeFileSync, existsSync, cpSync, renameSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { randomUUID } from 'crypto';
@@ -233,6 +234,14 @@ export class ConfigService {
   }
 
   /**
+   * Read the Terraform run-artifacts directory override from `RUNS_DIR_PATH`.
+   * Extracted for test-stubbing, mirroring {@link readEnvTerraformDir}.
+   */
+  readEnvRunsDir(): string | undefined {
+    return process.env['RUNS_DIR_PATH'];
+  }
+
+  /**
    * Return `process.resourcesPath` when running inside an Electron packaged app,
    * or `undefined` otherwise. Extracted as a protected method so tests can stub
    * it via `vi.spyOn` without touching `process.resourcesPath` directly.
@@ -387,6 +396,37 @@ export class ConfigService {
       }
       return false;
     }
+  }
+
+  /**
+   * Resolve the absolute path to the directory `TerraformService.plan()`
+   * (and future `apply`/`destroy`) writes per-run artifacts into — the
+   * pulled tfvars snapshot, the `.tfplan` file, and partial logs, one
+   * subdirectory per `runId` (`<runsDir>/<runId>/...`). See the "Terraform
+   * run cache" row in `docs/superpowers/specs/2026-05-10-electron-desktop-pivot-design.md`.
+   *
+   * Resolution order:
+   *  1. `RUNS_DIR_PATH` env var — wins when set. Resolved with `resolve()`
+   *     against `process.cwd()` so a relative override doesn't silently
+   *     resolve against `getTerraformDir()`'s cwd (the directory
+   *     `TerraformService` spawns `terraform` from) instead of the
+   *     directory the app was launched from.
+   *  2. Electron `userData` directory (`<userData>/runs`) — a writable
+   *     per-user location that survives app updates, available whenever this
+   *     process is running inside Electron (see {@link readUserDataPath}).
+   *  3. OS temp directory (`<os.tmpdir()>/hyveon-runs`) fallback — used in
+   *     plain-Node/test contexts where no Electron `userData` path exists.
+   */
+  getRunsDir(): string {
+    const envOverride = this.readEnvRunsDir();
+    if (envOverride) return resolve(envOverride);
+
+    const userData = this.readUserDataPath();
+    if (userData) {
+      return join(userData, 'runs');
+    }
+
+    return join(tmpdir(), 'hyveon-runs');
   }
 
   /**

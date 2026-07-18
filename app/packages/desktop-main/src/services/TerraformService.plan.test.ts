@@ -6,25 +6,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * vi.mock() calls are lifted to the top of the compiled output above regular
  * declarations.
  */
-const { execFileMock, spawnMock, mkdirSyncMock, existsSyncMock, writeFileSyncMock, copyFileSyncMock, randomUUIDMock } =
-  vi.hoisted(() => {
-    const execFileMock = vi.fn();
-    const spawnMock = vi.fn();
-    const mkdirSyncMock = vi.fn();
-    const existsSyncMock = vi.fn();
-    const writeFileSyncMock = vi.fn();
-    const copyFileSyncMock = vi.fn();
-    const randomUUIDMock = vi.fn();
-    return {
-      execFileMock,
-      spawnMock,
-      mkdirSyncMock,
-      existsSyncMock,
-      writeFileSyncMock,
-      copyFileSyncMock,
-      randomUUIDMock,
-    };
-  });
+const {
+  execFileMock,
+  spawnMock,
+  mkdirSyncMock,
+  existsSyncMock,
+  writeFileSyncMock,
+  copyFileSyncMock,
+  randomUUIDMock,
+} = vi.hoisted(() => {
+  const execFileMock = vi.fn();
+  const spawnMock = vi.fn();
+  const mkdirSyncMock = vi.fn();
+  const existsSyncMock = vi.fn();
+  const writeFileSyncMock = vi.fn();
+  const copyFileSyncMock = vi.fn();
+  const randomUUIDMock = vi.fn();
+  return {
+    execFileMock,
+    spawnMock,
+    mkdirSyncMock,
+    existsSyncMock,
+    writeFileSyncMock,
+    copyFileSyncMock,
+    randomUUIDMock,
+  };
+});
 
 vi.mock('node:child_process', () => ({
   execFile: execFileMock,
@@ -45,9 +52,7 @@ vi.mock('node:crypto', () => ({
 import {
   TerraformService,
   TerraformNotFoundError,
-  TerraformInitError,
   TerraformPlanError,
-  type TerraformInitConfig,
   type TerraformRunChunk,
   type TerraformPlanResult,
 } from './TerraformService.js';
@@ -87,18 +92,9 @@ function queueSuccessfulResolution(binaryPath = '/usr/local/bin/terraform', vers
 }
 
 /**
- * Minimal `ConfigService` stub sufficient to satisfy `TerraformService`'s
- * constructor dependency and its `getTerraformDir()` call from `init()`.
- */
-function stubConfigService(terraformDir = '/repo/terraform'): ConfigService {
-  return { getTerraformDir: () => terraformDir } as ConfigService;
-}
-
-/**
  * `ConfigService` stub for `plan()` tests: exposes `getTerraformDir`,
  * `getRunsDir`, `getTfvarsBucket`, and `getTfvarsPath` — the accessors
- * `plan()` reads, beyond the narrower `getTerraformDir()`-only stub above
- * that's sufficient for `init()`.
+ * `plan()` reads.
  */
 function stubPlanConfigService(
   opts: {
@@ -137,7 +133,7 @@ function stubRemoteFileStore(): RemoteFileStore & {
 }
 
 /**
- * A fake `child_process.ChildProcess` sufficient for exercising `init()`'s
+ * A fake `child_process.ChildProcess` sufficient for exercising `plan()`'s
  * streaming logic: an `EventEmitter` standing in for the process itself,
  * with `stdout`/`stderr` sub-emitters standing in for the piped streams, and
  * a spied `kill()` so abort tests can assert the process was actually
@@ -169,8 +165,8 @@ function queueSpawn(child: FakeChildProcess): void {
 
 /**
  * Waits for every already-queued microtask to drain (via a macrotask
- * boundary) before returning. `init()` awaits the binary/version resolution
- * (itself a chain of `execFileAsync` promises) before it reaches the
+ * boundary) before returning. `plan()` awaits the binary/version resolution
+ * plus the tfvars pull (itself a chain of promises) before it reaches the
  * `spawn()` call and registers listeners on the child process, so tests must
  * flush past that chain before driving `child.emitStdout`/`close`/`error` —
  * otherwise those events fire before any listener has been attached.
@@ -180,42 +176,12 @@ function flushMicrotasks(): Promise<void> {
 }
 
 /**
- * Drains an `init()` async generator to completion, collecting every yielded
- * chunk. `driveChild` is invoked once (after the first `.next()` has been
- * issued so the child process is spawned and listeners are attached) to let
- * the caller emit data/close/error events on the fake child at the right
- * moment relative to iteration.
- */
-async function collectAllChunks(
-  gen: AsyncGenerator<TerraformRunChunk, void>,
-  driveChild?: () => void,
-): Promise<TerraformRunChunk[]> {
-  const chunks: TerraformRunChunk[] = [];
-  const first = gen.next();
-  // Attach a no-op rejection handler immediately so a generator that throws
-  // before `driveChild` is even relevant (e.g. binary resolution failure)
-  // doesn't trip Node's unhandled-rejection detection during the
-  // `flushMicrotasks` gap below — the real `await first` a few lines down
-  // still surfaces the rejection to the caller.
-  first.catch(() => {});
-  await flushMicrotasks();
-  driveChild?.();
-  let result = await first;
-  while (!result.done) {
-    chunks.push(result.value);
-    const next = gen.next();
-    next.catch(() => {});
-    result = await next;
-  }
-  return chunks;
-}
-
-/**
  * Drains a `plan()` async generator to completion, collecting every yielded
  * chunk plus the generator's final return value — a `TerraformPlanResult` on
- * success, or `undefined` on a clean abort. Mirrors {@link collectAllChunks}
- * but also captures the return value, which `plan()` (unlike `init()`)
- * resolves with on success.
+ * success, or `undefined` on a clean abort. `driveChild` is invoked once
+ * (after the first `.next()` has been issued so the child process is spawned
+ * and listeners are attached) to let the caller emit data/close/error events
+ * on the fake child at the right moment relative to iteration.
  */
 async function collectPlanChunks(
   gen: AsyncGenerator<TerraformRunChunk, TerraformPlanResult | undefined>,
@@ -223,6 +189,11 @@ async function collectPlanChunks(
 ): Promise<{ chunks: TerraformRunChunk[]; result: TerraformPlanResult | undefined }> {
   const chunks: TerraformRunChunk[] = [];
   const first = gen.next();
+  // Attach a no-op rejection handler immediately so a generator that throws
+  // before `driveChild` is even relevant (e.g. binary resolution failure)
+  // doesn't trip Node's unhandled-rejection detection during the
+  // `flushMicrotasks` gap below — the real `await first` a few lines down
+  // still surfaces the rejection to the caller.
   first.catch(() => {});
   await flushMicrotasks();
   driveChild?.();
@@ -236,12 +207,6 @@ async function collectPlanChunks(
   return { chunks, result: next.value };
 }
 
-const sampleConfig: TerraformInitConfig = {
-  bucket: 'hyveon-tf-state',
-  region: 'us-east-1',
-  dynamodbTable: 'hyveon-tf-locks',
-};
-
 beforeEach(() => {
   execFileMock.mockReset();
   spawnMock.mockReset();
@@ -252,348 +217,6 @@ beforeEach(() => {
   copyFileSyncMock.mockReset();
   randomUUIDMock.mockReset();
   randomUUIDMock.mockReturnValue('run-123');
-});
-
-describe('TerraformService.init spawning', () => {
-  it('should spawn terraform init with backend-config args derived from the resolved binary path and terraform dir', async () => {
-    queueSuccessfulResolution('/usr/local/bin/terraform', '1.7.0');
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService('/repo/terraform'), stubRemoteFileStore());
-
-    await collectAllChunks(service.init(sampleConfig), () => child.close(0));
-
-    expect(spawnMock).toHaveBeenCalledWith(
-      '/usr/local/bin/terraform',
-      [
-        'init',
-        '-input=false',
-        '-no-color',
-        '-backend-config=bucket=hyveon-tf-state',
-        '-backend-config=region=us-east-1',
-        '-backend-config=dynamodb_table=hyveon-tf-locks',
-      ],
-      { cwd: '/repo/terraform' },
-    );
-  });
-
-  it('should reject with a TerraformNotFoundError instance and never call spawn when the binary cannot be resolved', async () => {
-    queueExecFileFailure();
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-
-    await expect(collectAllChunks(service.init(sampleConfig))).rejects.toBeInstanceOf(
-      TerraformNotFoundError,
-    );
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('TerraformService.init streaming', () => {
-  it('should yield each stdout line as it is produced, not only after the process exits', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const gen = service.init(sampleConfig);
-
-    const first = gen.next();
-    await flushMicrotasks();
-    child.emitStdout('Initializing the backend...\n');
-    const firstResult = await first;
-    expect(firstResult).toEqual({
-      value: { stream: 'stdout', line: 'Initializing the backend...' },
-      done: false,
-    });
-
-    const second = gen.next();
-    child.emitStdout('Terraform has been successfully initialized!\n');
-    child.close(0);
-    const secondResult = await second;
-
-    expect(secondResult).toEqual({
-      value: { stream: 'stdout', line: 'Terraform has been successfully initialized!' },
-      done: false,
-    });
-
-    const finalResult = await gen.next();
-    expect(finalResult.done).toBe(true);
-  });
-
-  it('should yield stderr lines tagged as the stderr stream', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const chunks = await collectAllChunks(service.init(sampleConfig), () => {
-      child.emitStderr('Warning: something\n');
-      child.close(0);
-    });
-
-    expect(chunks).toContainEqual({ stream: 'stderr', line: 'Warning: something' });
-  });
-
-  it('should split a single data event containing multiple lines into one chunk per line', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const chunks = await collectAllChunks(service.init(sampleConfig), () => {
-      child.emitStdout('line one\nline two\nline three\n');
-      child.close(0);
-    });
-
-    expect(chunks).toEqual([
-      { stream: 'stdout', line: 'line one' },
-      { stream: 'stdout', line: 'line two' },
-      { stream: 'stdout', line: 'line three' },
-    ]);
-  });
-
-  it('should flush a trailing partial line without a terminating newline once the process closes', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const chunks = await collectAllChunks(service.init(sampleConfig), () => {
-      child.emitStdout('no trailing newline');
-      child.close(0);
-    });
-
-    expect(chunks).toContainEqual({ stream: 'stdout', line: 'no trailing newline' });
-  });
-
-  it('should complete with no chunks when the process produces no output', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const chunks = await collectAllChunks(service.init(sampleConfig), () => child.close(0));
-
-    expect(chunks).toEqual([]);
-  });
-});
-
-describe('TerraformService.init exit handling', () => {
-  it('should complete normally when the spawned process exits with code 0', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-
-    await expect(collectAllChunks(service.init(sampleConfig), () => child.close(0))).resolves.toEqual(
-      [],
-    );
-  });
-
-  it('should reject with a TerraformInitError carrying the exit code when the process exits non-zero', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-
-    const result = collectAllChunks(service.init(sampleConfig), () => child.close(1));
-
-    await expect(result).rejects.toBeInstanceOf(TerraformInitError);
-    await expect(result).rejects.toMatchObject({ exitCode: 1 });
-  });
-
-  it('should reject when the spawned process itself errors out (e.g. ENOENT)', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-
-    const result = collectAllChunks(service.init(sampleConfig), () =>
-      child.emit('error', new Error('spawn ENOENT')),
-    );
-
-    await expect(result).rejects.toThrow('spawn ENOENT');
-  });
-});
-
-describe('TerraformService.init idempotency', () => {
-  it('should complete a second init() call with an identical config without calling spawn again', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    await collectAllChunks(service.init(sampleConfig), () => child.close(0));
-
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-
-    await collectAllChunks(service.init({ ...sampleConfig }));
-
-    // The second call must be a genuine no-op: spawn is not invoked again.
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('should yield exactly one informational stdout chunk and return without spawning when the config is unchanged', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    await collectAllChunks(service.init(sampleConfig), () => child.close(0));
-
-    spawnMock.mockClear();
-
-    const secondChunks = await collectAllChunks(service.init({ ...sampleConfig }));
-
-    expect(secondChunks).toHaveLength(1);
-    expect(secondChunks[0]?.stream).toBe('stdout');
-    expect(secondChunks[0]?.line).toContain('backend config unchanged');
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it('should spawn again when a subsequent init() call uses a different backend config', async () => {
-    queueSuccessfulResolution();
-    const firstChild = new FakeChildProcess();
-    queueSpawn(firstChild);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    await collectAllChunks(service.init(sampleConfig), () => firstChild.close(0));
-
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-
-    const secondChild = new FakeChildProcess();
-    queueSpawn(secondChild);
-    await collectAllChunks(service.init({ ...sampleConfig, bucket: 'a-different-bucket' }), () =>
-      secondChild.close(0),
-    );
-
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('should not memoize a failed init() call, so a retry with the same config spawns again', async () => {
-    queueSuccessfulResolution();
-    const firstChild = new FakeChildProcess();
-    queueSpawn(firstChild);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    await expect(
-      collectAllChunks(service.init(sampleConfig), () => firstChild.close(1)),
-    ).rejects.toBeInstanceOf(TerraformInitError);
-
-    const secondChild = new FakeChildProcess();
-    queueSpawn(secondChild);
-    await expect(
-      collectAllChunks(service.init(sampleConfig), () => secondChild.close(0)),
-    ).resolves.toEqual([]);
-
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('TerraformService.init abort handling', () => {
-  it('should kill the child process and end the generator cleanly when the AbortSignal fires mid-run', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const controller = new AbortController();
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const gen = service.init(sampleConfig, controller.signal);
-
-    const pendingNext = gen.next();
-    await flushMicrotasks();
-
-    controller.abort();
-    // The fake child doesn't auto-emit `close` on `kill()` — simulate the
-    // real process actually terminating in response to the kill signal.
-    child.close(null);
-
-    const result = await pendingNext;
-
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(result.done).toBe(true);
-
-    // Iterating further keeps returning done, never throwing.
-    await expect(gen.next()).resolves.toMatchObject({ done: true });
-  });
-
-  it('should end the generator cleanly without resolving the binary or spawning when the signal is already aborted', async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const gen = service.init(sampleConfig, controller.signal);
-
-    const result = await gen.next();
-
-    expect(result.done).toBe(true);
-    expect(execFileMock).not.toHaveBeenCalled();
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it('should not update the memoized config when a run is aborted, so a later identical config still spawns', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const controller = new AbortController();
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-
-    const pendingNext = service.init(sampleConfig, controller.signal).next();
-    await flushMicrotasks();
-    controller.abort();
-    child.close(null);
-    await pendingNext;
-
-    const secondChild = new FakeChildProcess();
-    queueSpawn(secondChild);
-    await collectAllChunks(service.init({ ...sampleConfig }), () => secondChild.close(0));
-
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('TerraformService.init concurrency guard', () => {
-  it('should throw a descriptive Error from a second init() call while the first is still in flight', async () => {
-    queueSuccessfulResolution();
-    const child = new FakeChildProcess();
-    queueSpawn(child);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    const firstGen = service.init(sampleConfig);
-    const firstNext = firstGen.next(); // starts the generator body, setting the in-flight flag synchronously
-
-    const secondGen = service.init(sampleConfig);
-    await expect(secondGen.next()).rejects.toThrow(/already running/i);
-
-    // Let the first call finish so it doesn't leak into other tests.
-    await flushMicrotasks();
-    child.close(0);
-    await firstNext;
-    await firstGen.next();
-  });
-
-  it('should allow a new init() call once the previous one has completed', async () => {
-    queueSuccessfulResolution();
-    const firstChild = new FakeChildProcess();
-    queueSpawn(firstChild);
-
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
-    await collectAllChunks(service.init(sampleConfig), () => firstChild.close(0));
-
-    const secondChild = new FakeChildProcess();
-    queueSpawn(secondChild);
-    await expect(
-      collectAllChunks(service.init({ ...sampleConfig, bucket: 'another-bucket' }), () =>
-        secondChild.close(0),
-      ),
-    ).resolves.toEqual([]);
-  });
 });
 
 describe('TerraformService.plan spawning and artifact persistence', () => {
@@ -708,6 +331,21 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('should reject and never call spawn when the S3 tfvars object is missing from the bucket', async () => {
+    queueSuccessfulResolution();
+
+    const remoteFileStore = stubRemoteFileStore();
+    remoteFileStore.get.mockResolvedValue(null);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars', tfvarsPath: '/repo/terraform/terraform.tfvars' }),
+      remoteFileStore,
+    );
+
+    await expect(collectPlanChunks(service.plan())).rejects.toThrow(/not found in S3 bucket/i);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('should reject and never call spawn when the local tfvars source does not exist', async () => {
     queueSuccessfulResolution();
     existsSyncMock.mockReturnValue(false);
@@ -743,6 +381,24 @@ describe('TerraformService.plan streaming', () => {
 
     expect(chunks).toContainEqual({ stream: 'stdout', line: 'Refreshing state...' });
     expect(chunks).toContainEqual({ stream: 'stderr', line: 'Warning: something' });
+  });
+
+  it('should split a single data event containing multiple lines into one chunk per line', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const { chunks } = await collectPlanChunks(service.plan(), () => {
+      child.emitStdout('line one\nline two\nline three\n');
+      child.close(0);
+    });
+
+    expect(chunks).toEqual([
+      { stream: 'stdout', line: 'line one' },
+      { stream: 'stdout', line: 'line two' },
+      { stream: 'stdout', line: 'line three' },
+    ]);
   });
 });
 
@@ -803,6 +459,18 @@ describe('TerraformService.plan exit handling', () => {
     await expect(result).rejects.toBeInstanceOf(TerraformPlanError);
     await expect(result).rejects.toMatchObject({ exitCode: 1 });
   });
+
+  it('should reject when the spawned process itself errors out (e.g. ENOENT)', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+
+    const result = collectPlanChunks(service.plan(), () => child.emit('error', new Error('spawn ENOENT')));
+
+    await expect(result).rejects.toThrow('spawn ENOENT');
+  });
 });
 
 describe('TerraformService.plan abort handling', () => {
@@ -844,6 +512,87 @@ describe('TerraformService.plan abort handling', () => {
     expect(execFileMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
+
+  it('should end the generator cleanly without spawning when the signal is aborted while resolving the binary path', async () => {
+    const controller = new AbortController();
+    execFileMock.mockImplementationOnce((...args: unknown[]) => {
+      controller.abort();
+      lastArgAsCallback(args)(null, { stdout: '/usr/local/bin/terraform\n', stderr: '' });
+    });
+    queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.0' }));
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const gen = service.plan(undefined, controller.signal);
+
+    const result = await gen.next();
+
+    expect(result.done).toBe(true);
+    expect(result.value).toBeUndefined();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('should end the generator cleanly without spawning when the signal is aborted while pulling the tfvars snapshot', async () => {
+    queueSuccessfulResolution();
+    const controller = new AbortController();
+
+    const remoteFileStore = stubRemoteFileStore();
+    remoteFileStore.get.mockImplementation(async () => {
+      controller.abort();
+      return { body: new TextEncoder().encode('game_servers = {}'), etag: 'etag-1' };
+    });
+
+    const service = new TerraformService(
+      stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars' }),
+      remoteFileStore,
+    );
+    const gen = service.plan(undefined, controller.signal);
+
+    const result = await gen.next();
+
+    expect(result.done).toBe(true);
+    expect(result.value).toBeUndefined();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('should kill the child process and wait for it to close when the generator is force-closed early (e.g. consumer break) before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const gen = service.plan();
+
+    // Drive the generator to its first yielded chunk, mirroring a consumer
+    // that starts iterating (e.g. a `for await...of` loop) but never reaches
+    // the child process's `close` event before bailing out.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    // Simulate the consumer force-closing the generator early (what a
+    // `for await...of` `break`/`throw` desugars to under the hood). This
+    // should propagate through plan()'s finally into spawnAndStream's
+    // finally, which must kill the still-running child rather than just
+    // detaching the abort listener.
+    let returnSettled = false;
+    const returnPromise = gen.return(undefined).then((result) => {
+      returnSettled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    // The generator must not resolve its forced return until the child
+    // process actually reports closing — killing it isn't enough on its own.
+    expect(returnSettled).toBe(false);
+
+    child.close(null);
+    const result = await returnPromise;
+
+    expect(returnSettled).toBe(true);
+    expect(result.done).toBe(true);
+  });
 });
 
 describe('TerraformService.plan concurrency guard', () => {
@@ -873,6 +622,23 @@ describe('TerraformService.plan concurrency guard', () => {
 
     const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
     await collectPlanChunks(service.plan(), () => firstChild.close(0));
+
+    const secondChild = new FakeChildProcess();
+    queueSpawn(secondChild);
+    const { result } = await collectPlanChunks(service.plan(), () => secondChild.close(0));
+
+    expect(result).toBeDefined();
+  });
+
+  it('should allow a new plan() call once the previous one has failed', async () => {
+    queueSuccessfulResolution();
+    const firstChild = new FakeChildProcess();
+    queueSpawn(firstChild);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    await expect(
+      collectPlanChunks(service.plan(), () => firstChild.close(1)),
+    ).rejects.toBeInstanceOf(TerraformPlanError);
 
     const secondChild = new FakeChildProcess();
     queueSpawn(secondChild);
