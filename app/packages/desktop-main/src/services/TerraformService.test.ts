@@ -19,17 +19,28 @@ import { TerraformService, TerraformNotFoundError, lookupCommandFor } from './Te
 /** Error-first callback shape `util.promisify` invokes the mocked `execFile` with. */
 type ExecFileCallback = (error: Error | null, result?: { stdout: string; stderr: string }) => void;
 
+/**
+ * Extracts the error-first callback from an `execFile` call's arguments,
+ * regardless of whether `util.promisify` invoked it with or without an
+ * `options` object (i.e. `(file, args, callback)` or
+ * `(file, args, options, callback)`) — the production code now always passes
+ * a `{ timeout }` options object, so the mock must tolerate both shapes.
+ */
+function lastArgAsCallback(args: unknown[]): ExecFileCallback {
+  return args[args.length - 1] as ExecFileCallback;
+}
+
 /** Queues a successful `execFile` invocation (stdout/stderr) for the next call. */
 function queueExecFileSuccess(stdout: string, stderr = ''): void {
-  execFileMock.mockImplementationOnce((_file: string, _args: string[], callback: ExecFileCallback) => {
-    callback(null, { stdout, stderr });
+  execFileMock.mockImplementationOnce((...args: unknown[]) => {
+    lastArgAsCallback(args)(null, { stdout, stderr });
   });
 }
 
 /** Queues a failing `execFile` invocation (e.g. binary not found) for the next call. */
 function queueExecFileFailure(error: Error = new Error('spawn ENOENT')): void {
-  execFileMock.mockImplementationOnce((_file: string, _args: string[], callback: ExecFileCallback) => {
-    callback(error);
+  execFileMock.mockImplementationOnce((...args: unknown[]) => {
+    lastArgAsCallback(args)(error);
   });
 }
 
