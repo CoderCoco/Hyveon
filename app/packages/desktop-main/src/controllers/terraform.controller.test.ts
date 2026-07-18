@@ -42,9 +42,10 @@ const CONFIG: TerraformInitConfig = {
 
 /** Build a TerraformService stub whose `init` yields nothing by default. */
 function makeTerraform(): TerraformService {
-  return {
+  const stub: Partial<TerraformService> = {
     init: vi.fn().mockImplementation(async function* () { /* empty */ }),
-  } as unknown as TerraformService;
+  };
+  return stub as TerraformService;
 }
 
 /**
@@ -56,11 +57,15 @@ function makeCtx(isDestroyed = false) {
   const sender = {
     send: vi.fn(),
     isDestroyed: vi.fn().mockReturnValue(isDestroyed),
+    // `TerraformController.init` registers a `'destroyed'` listener (and
+    // removes it once the run settles) so it can abort immediately when the
+    // WebContents goes away instead of only checking `isDestroyed()` between
+    // chunks.
+    once: vi.fn(),
+    removeListener: vi.fn(),
   };
-  return {
-    ctx: { evt: { sender } } as unknown as { evt: { sender: typeof sender } },
-    sender,
-  };
+  const ctx: { evt: { sender: typeof sender } } = { evt: { sender } };
+  return { ctx, sender };
 }
 
 /** Flush the microtask queue so async fire-and-forget loops fully settle. */
@@ -159,7 +164,7 @@ describe('TerraformController', () => {
 
       const result = await new TerraformController(terraform).init(CONFIG, ctx);
 
-      expect(result).toEqual({ started: true });
+      expect(result).toEqual({ started: true, streamId: expect.any(String) });
     });
 
     it('should send each yielded chunk to the renderer via sender.send, in order', async () => {
@@ -179,7 +184,12 @@ describe('TerraformController', () => {
       await flushPromises();
 
       const chunkCalls = sender.send.mock.calls.filter(([channel]) => channel === 'terraform.init.chunk');
-      expect(chunkCalls.map(([, payload]) => payload)).toEqual(chunks);
+      // Every chunk payload is tagged with the same per-call streamId so the
+      // renderer (and a rejected concurrent call) can tell which run it
+      // belongs to.
+      const streamIds = new Set(chunkCalls.map(([, payload]) => (payload as { streamId: string }).streamId));
+      expect(streamIds.size).toBe(1);
+      expect(chunkCalls.map(([, payload]) => (payload as { chunk: TerraformRunChunk }).chunk)).toEqual(chunks);
     });
 
     it('should forward the config payload and an AbortSignal to TerraformService.init', async () => {
@@ -201,7 +211,7 @@ describe('TerraformController', () => {
       await new TerraformController(terraform).init(CONFIG, ctx);
       await flushPromises();
 
-      expect(sender.send).toHaveBeenCalledWith('terraform.init.end', { exitCode: 0 });
+      expect(sender.send).toHaveBeenCalledWith('terraform.init.end', { streamId: expect.any(String), exitCode: 0 });
       const endCall = sender.send.mock.calls.find(([channel]) => channel === 'terraform.init.end');
       expect(endCall?.[1]).not.toHaveProperty('error');
     });
