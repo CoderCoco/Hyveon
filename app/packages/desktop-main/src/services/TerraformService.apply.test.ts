@@ -313,16 +313,27 @@ describe('TerraformService.apply streaming', () => {
     queueSpawn(child);
 
     const service = new TerraformService(stubApplyConfigService(), stubRemoteFileStore());
-    const { chunks } = await collectApplyChunks(
-      service.apply('run-6', undefined, '/repo/runs/run-6/run-6.tfplan'),
-      () => {
-        child.emitStdout('aws_instance.game: Creating...\n');
-        child.emitStderr('Warning: something\n');
-        child.close(0);
-      },
-    );
+    const gen = service.apply('run-6', undefined, '/repo/runs/run-6/run-6.tfplan');
 
-    expect(chunks).toContainEqual({ stream: 'stdout', line: 'aws_instance.game: Creating...' });
+    // Drive and await the first yielded chunk *before* emitting stderr or
+    // closing the child — a buffer-until-exit implementation would still be
+    // blocked on `child.close()` at this point, so awaiting here first
+    // proves stdout is streamed rather than accumulated until exit.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Creating...\n');
+    const firstResult = await first;
+
+    expect(firstResult.done).toBe(false);
+    expect(firstResult.value).toEqual({ stream: 'stdout', line: 'aws_instance.game: Creating...' });
+
+    // Only now produce stderr and close the process, and drain the rest of
+    // the generator via the existing helper.
+    const { chunks } = await collectApplyChunks(gen, () => {
+      child.emitStderr('Warning: something\n');
+      child.close(0);
+    });
+
     expect(chunks).toContainEqual({ stream: 'stderr', line: 'Warning: something' });
   });
 });
@@ -552,6 +563,44 @@ describe('TerraformService.apply abort handling', () => {
 
     expect(returnSettled).toBe(true);
     expect(result.done).toBe(true);
+  });
+
+  it('should write exactly one run.json record with a null exitCode when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubApplyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const gen = service.apply('run-31', 'v1', '/repo/runs/run-31/run-31.tfplan');
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed. writeRunRecord() lives after the inner try/finally in
+    // apply()'s body, which a forced completion unwinds straight past; the
+    // persistence must instead happen from the outer finally.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Creating...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.close(null);
+    await returnPromise;
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
+    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    expect(path).toBe('/repo/runs/run-31/run.json');
+    const record = JSON.parse(contents) as TerraformRunRecord;
+    expect(record.runId).toBe('run-31');
+    expect(record.kind).toBe('apply');
+    expect(record.exitCode).toBeNull();
+    expect(record.tfvarsVersionId).toBe('v1');
   });
 });
 
