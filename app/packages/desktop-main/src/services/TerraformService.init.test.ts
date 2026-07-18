@@ -419,6 +419,20 @@ describe('TerraformService.init abort handling', () => {
     await expect(gen.next()).resolves.toMatchObject({ done: true });
   });
 
+  it('should end the generator cleanly without resolving the binary or spawning when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const service = new TerraformService(stubConfigService());
+    const gen = service.init(sampleConfig, controller.signal);
+
+    const result = await gen.next();
+
+    expect(result.done).toBe(true);
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('should not update the memoized config when a run is aborted, so a later identical config still spawns', async () => {
     queueSuccessfulResolution();
     const child = new FakeChildProcess();

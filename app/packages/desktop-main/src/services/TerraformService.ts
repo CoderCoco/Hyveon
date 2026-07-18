@@ -208,7 +208,19 @@ export class TerraformService {
         return;
       }
 
+      if (signal?.aborted) {
+        // Already aborted before we even started resolving the binary path —
+        // end the generator cleanly without spawning anything.
+        return;
+      }
+
       const binaryPath = await this.getBinaryPath();
+
+      if (signal?.aborted) {
+        // Aborted while resolving the binary path — end cleanly before spawn.
+        return;
+      }
+
       const cwd = this.config.getTerraformDir();
       const args = [
         'init',
