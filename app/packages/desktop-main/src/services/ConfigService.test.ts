@@ -338,6 +338,7 @@ describe('ConfigService', () => {
       delete process.env['SERVER_CONFIG_PATH'];
       delete process.env['TFVARS_PATH'];
       delete process.env['GSD_TFVARS_BUCKET'];
+      delete process.env['TF_DIR'];
     });
 
     it('should return packaged tfstate path when readIsPackaged returns true', () => {
@@ -439,6 +440,25 @@ describe('ConfigService', () => {
         throw new Error('EACCES');
       });
       expect(service.getTfvarsBucket()).toBeNull();
+    });
+
+    it('should return the TF_DIR env var value when set', () => {
+      process.env['TF_DIR'] = '/custom/terraform';
+      expect(service.getTerraformDir()).toBe('/custom/terraform');
+    });
+
+    it('should return the packaged resourcesPath terraform dir when readIsPackaged returns true', () => {
+      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
+      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
+      expect(service.getTerraformDir()).toBe(path.join('/fake/resources', 'terraform'));
+    });
+
+    it('should return the repo-root terraform dir fallback when readIsPackaged returns false', () => {
+      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
+      const result = service.getTerraformDir();
+      expect(result).toMatch(/terraform$/);
+      expect(path.isAbsolute(result)).toBe(true);
     });
   });
 });

@@ -291,6 +291,32 @@ export class ConfigService {
   }
 
   /**
+   * Resolve the absolute path to the Terraform *composer root* — the
+   * directory `TerraformService` spawns the `terraform` binary in for
+   * `init`/`plan`/`apply`/`destroy`/`output`. This is `terraform/`, which
+   * holds the thin backend/provider composer (`terraform/main.tf`) that
+   * wires in `module "cloud"` — **not** `terraform/aws/`, where the actual
+   * AWS resources live.
+   *
+   * Resolution order (identical in structure to {@link getTfStatePath}):
+   *  1. `TF_DIR` env var — wins when set.
+   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform`.
+   *  3. Dev/test fallback — repo root `terraform/`.
+   */
+  getTerraformDir(): string {
+    const envOverride = process.env['TF_DIR'];
+    if (envOverride) return envOverride;
+
+    if (this.readIsPackaged()) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      return join(this.readResourcesPath()!, 'terraform');
+    }
+
+    // Dev fallback: repo root is one level above _APP_ROOT (app/)
+    return join(_APP_ROOT, '..', 'terraform');
+  }
+
+  /**
    * Resolve the absolute path to `server_config.json`.
    *
    * Resolution order:
