@@ -7,6 +7,8 @@ vi.mock('fs', () => ({
   writeFileSync: vi.fn(),
   existsSync: vi.fn(),
   cpSync: vi.fn(),
+  renameSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock('../logger.js', () => ({
@@ -18,7 +20,7 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-import { readFileSync, writeFileSync, existsSync, cpSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, cpSync, renameSync, rmSync } from 'fs';
 import { ConfigService } from './ConfigService.js';
 
 /** Strongly-typed mock handles for the `fs` module. */
@@ -26,6 +28,8 @@ const mockExists = vi.mocked(existsSync);
 const mockRead = vi.mocked(readFileSync);
 const mockWrite = vi.mocked(writeFileSync);
 const mockCp = vi.mocked(cpSync);
+const mockRename = vi.mocked(renameSync);
+const mockRm = vi.mocked(rmSync);
 
 /**
  * Test-only subclass that re-exposes `ConfigService`'s protected
@@ -479,13 +483,44 @@ describe('ConfigService', () => {
       mockExists.mockReturnValue(false);
 
       const result = testableService.getTerraformDir();
+      const writableDir = path.join('/fake/userData', 'terraform');
 
-      expect(result).toBe(path.join('/fake/userData', 'terraform'));
-      expect(mockCp).toHaveBeenCalledWith(
-        path.join('/fake/resources', 'terraform'),
-        path.join('/fake/userData', 'terraform'),
-        { recursive: true },
-      );
+      expect(result).toBe(writableDir);
+      // Seeding stages the copy into a sibling directory and renames it into
+      // place, so `writableDir` never exists in a partially-copied state.
+      expect(mockCp).toHaveBeenCalledTimes(1);
+      const [cpFrom, cpTo] = mockCp.mock.calls[0];
+      expect(cpFrom).toBe(path.join('/fake/resources', 'terraform'));
+      expect(cpTo).toMatch(new RegExp(`^${writableDir}\\.staging-`));
+      expect(mockRename).toHaveBeenCalledWith(cpTo, writableDir);
+    });
+
+    it('should fall back to the packaged resourcesPath terraform dir and not treat writableDir as seeded when cpSync fails', () => {
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
+      const writableDir = path.join('/fake/userData', 'terraform');
+      // Only the final writableDir check should report "exists" as false —
+      // the staging dir cleanup check runs after the throw, so report it as
+      // present so we can assert the cleanup path (rmSync) runs too.
+      mockExists.mockImplementation((p) => p !== writableDir);
+      mockCp.mockImplementation(() => {
+        throw new Error('ENOSPC: no space left on device');
+      });
+
+      const result = testableService.getTerraformDir();
+
+      expect(result).toBe(path.join('/fake/resources', 'terraform'));
+      expect(mockRename).not.toHaveBeenCalled();
+      expect(mockRm).toHaveBeenCalledTimes(1);
+      const [rmPath] = mockRm.mock.calls[0];
+      expect(rmPath).toMatch(new RegExp(`^${writableDir}\\.staging-`));
+
+      // A subsequent call must retry seeding rather than treating the failed
+      // attempt as "already seeded" — `writableDir` was never created.
+      mockCp.mockClear();
+      testableService.getTerraformDir();
+      expect(mockCp).toHaveBeenCalledTimes(1);
     });
 
     it('should not re-seed the writable userData terraform dir when it already exists', () => {

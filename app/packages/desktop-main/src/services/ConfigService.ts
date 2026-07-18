@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { readFileSync, writeFileSync, existsSync, cpSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, cpSync, renameSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { randomUUID } from 'crypto';
 import type { GameServer } from '@hyveon/shared';
 import { logger } from '../logger.js';
 
@@ -203,6 +204,14 @@ export class ConfigService {
   }
 
   /**
+   * Read the Terraform composer root override from `TF_DIR`. Extracted for
+   * test-stubbing, mirroring {@link readEnvRegion} / {@link readEnvApiToken}.
+   */
+  readEnvTerraformDir(): string | undefined {
+    return process.env['TF_DIR'];
+  }
+
+  /**
    * Read the tfvars in-memory cache TTL override (milliseconds) from
    * `TFVARS_CACHE_TTL_MS`. Extracted for test-stubbing, mirroring
    * {@link readEnvRegion} / {@link readEnvApiToken}.
@@ -306,12 +315,13 @@ export class ConfigService {
    *     `.terraform/`, lock files, and plan artifacts. So the bundled composer
    *     is seeded (once, on first use) into `<userData>/terraform` — a
    *     writable per-user directory — via {@link seedTerraformWorkspace}, and
-   *     that writable copy is returned instead. Falls back to the read-only
-   *     `<resourcesPath>/terraform` if `userData` can't be resolved.
+   *     that writable copy is returned instead. If seeding fails, the
+   *     read-only `<resourcesPath>/terraform` is returned instead of a
+   *     partially-copied `writableDir` — see {@link seedTerraformWorkspace}.
    *  3. Dev/test fallback — repo root `terraform/`.
    */
   getTerraformDir(): string {
-    const envOverride = process.env['TF_DIR'];
+    const envOverride = this.readEnvTerraformDir();
     if (envOverride) return envOverride;
 
     if (this.readIsPackaged()) {
@@ -320,8 +330,13 @@ export class ConfigService {
       const userData = this.readUserDataPath();
       if (userData) {
         const writableDir = join(userData, 'terraform');
-        this.seedTerraformWorkspace(bundledDir, writableDir);
-        return writableDir;
+        if (this.seedTerraformWorkspace(bundledDir, writableDir)) {
+          return writableDir;
+        }
+        logger.warn('Falling back to read-only bundled Terraform dir after seed failure', {
+          bundledDir,
+        });
+        return bundledDir;
       }
       return bundledDir;
     }
@@ -333,22 +348,44 @@ export class ConfigService {
   /**
    * Copy the bundled read-only Terraform composer (`<resourcesPath>/terraform`)
    * into the writable `<userData>/terraform` workspace on first use. No-ops
-   * when the writable directory already exists, so subsequent runs reuse the
-   * previously-seeded copy (and its `.terraform/` init state) instead of
-   * clobbering it on every launch.
+   * (returns `true`) when the writable directory already exists, so
+   * subsequent runs reuse the previously-seeded copy (and its `.terraform/`
+   * init state) instead of clobbering it on every launch.
+   *
+   * Copies into a sibling staging directory first, then atomically renames it
+   * into place with {@link renameSync}. This guarantees `writableDir` only
+   * ever exists in a fully-seeded state — a `cpSync` failure never leaves a
+   * partially-copied `writableDir` behind, so a future call won't mistake an
+   * incomplete copy for "already seeded" via the `existsSync` check above.
+   *
+   * @returns `true` if `writableDir` is present and fully seeded after this
+   *   call, `false` if seeding failed (caller must not treat `writableDir` as
+   *   usable in that case).
    */
-  private seedTerraformWorkspace(bundledDir: string, writableDir: string): void {
-    if (existsSync(writableDir)) return;
+  private seedTerraformWorkspace(bundledDir: string, writableDir: string): boolean {
+    if (existsSync(writableDir)) return true;
 
+    const stagingDir = `${writableDir}.staging-${randomUUID()}`;
     try {
-      cpSync(bundledDir, writableDir, { recursive: true });
+      cpSync(bundledDir, stagingDir, { recursive: true });
+      renameSync(stagingDir, writableDir);
       logger.info('Seeded Terraform workspace into userData', { from: bundledDir, to: writableDir });
+      return true;
     } catch (err) {
       logger.error('Failed to seed Terraform workspace into userData', {
         err,
         from: bundledDir,
         to: writableDir,
       });
+      try {
+        if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        logger.error('Failed to clean up Terraform workspace staging directory', {
+          err: cleanupErr,
+          stagingDir,
+        });
+      }
+      return false;
     }
   }
 
