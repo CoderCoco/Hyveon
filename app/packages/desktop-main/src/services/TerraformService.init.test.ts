@@ -125,11 +125,12 @@ function stubRemoteFileStore(): RemoteFileStore & {
   get: ReturnType<typeof vi.fn>;
   listVersions: ReturnType<typeof vi.fn>;
 } {
-  return {
+  const store: Partial<RemoteFileStore> = {
     get: vi.fn(),
     put: vi.fn(),
     listVersions: vi.fn(),
-  } as unknown as RemoteFileStore & {
+  };
+  return store as RemoteFileStore & {
     get: ReturnType<typeof vi.fn>;
     listVersions: ReturnType<typeof vi.fn>;
   };

@@ -121,11 +121,12 @@ function stubRemoteFileStore(): RemoteFileStore & {
   get: ReturnType<typeof vi.fn>;
   listVersions: ReturnType<typeof vi.fn>;
 } {
-  return {
+  const store: Partial<RemoteFileStore> = {
     get: vi.fn(),
     put: vi.fn(),
     listVersions: vi.fn(),
-  } as unknown as RemoteFileStore & {
+  };
+  return store as RemoteFileStore & {
     get: ReturnType<typeof vi.fn>;
     listVersions: ReturnType<typeof vi.fn>;
   };
@@ -551,6 +552,46 @@ describe('TerraformService.plan abort handling', () => {
     expect(result.done).toBe(true);
     expect(result.value).toBeUndefined();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('should kill the child process and wait for it to close when the generator is force-closed early (e.g. consumer break) before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const gen = service.plan();
+
+    // Drive the generator to its first yielded chunk, mirroring a consumer
+    // that starts iterating (e.g. a `for await...of` loop) but never reaches
+    // the child process's `close` event before bailing out.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    // Simulate the consumer force-closing the generator early (what a
+    // `for await...of` `break`/`throw` desugars to under the hood). This
+    // should propagate through plan()'s finally into spawnAndStream's
+    // finally, which must kill the still-running child rather than just
+    // detaching the abort listener.
+    let returnSettled = false;
+    const returnPromise = gen.return(undefined).then((result) => {
+      returnSettled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    // The generator must not resolve its forced return until the child
+    // process actually reports closing — killing it isn't enough on its own.
+    expect(returnSettled).toBe(false);
+
+    child.close(null);
+    const result = await returnPromise;
+
+    expect(returnSettled).toBe(true);
+    expect(result.done).toBe(true);
   });
 });
 
