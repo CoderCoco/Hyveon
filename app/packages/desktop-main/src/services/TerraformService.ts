@@ -436,18 +436,34 @@ export class TerraformService {
       // being forwarded to the caller unmodified.
       const stream = this.spawnAndStream(binaryPath, args, cwd, signal);
       let next = await stream.next();
-      while (!next.done) {
-        const chunk = next.value;
-        if (chunk.stream === 'stdout') {
-          const match = PLAN_SUMMARY_PATTERN.exec(chunk.line);
-          if (match) {
-            add = Number(match[1]);
-            change = Number(match[2]);
-            destroy = Number(match[3]);
+      try {
+        while (!next.done) {
+          const chunk = next.value;
+          if (chunk.stream === 'stdout') {
+            const match = PLAN_SUMMARY_PATTERN.exec(chunk.line);
+            if (match) {
+              add = Number(match[1]);
+              change = Number(match[2]);
+              destroy = Number(match[3]);
+            }
           }
+          yield chunk;
+          next = await stream.next();
         }
-        yield chunk;
-        next = await stream.next();
+      } finally {
+        // If plan()'s own generator is terminated early (consumer break /
+        // .return() / .throw()), the `yield chunk` above unwinds through
+        // this finally without `next` ever reaching `done`. Explicitly
+        // finalize the inner generator so its own finally (abort-listener
+        // removal in spawnAndStream) still runs — mirrors what `yield*`
+        // gives `init()` for free.
+        if (!next.done) {
+          // The forced value here is never observed by any caller (plan()
+          // is already unwinding for its own reasons) — it only needs to be
+          // a well-typed `SpawnStreamResult` so `.return()` can drive
+          // `spawnAndStream`'s try/finally to completion.
+          await stream.return({ aborted: true });
+        }
       }
 
       const result = next.value;
