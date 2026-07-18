@@ -491,7 +491,7 @@ describe('ConfigService', () => {
       expect(mockCp).toHaveBeenCalledTimes(1);
       const [cpFrom, cpTo] = mockCp.mock.calls[0];
       expect(cpFrom).toBe(path.join('/fake/resources', 'terraform'));
-      expect(cpTo).toMatch(new RegExp(`^${writableDir}\\.staging-`));
+      expect(String(cpTo).startsWith(`${writableDir}.staging-`)).toBe(true);
       expect(mockRename).toHaveBeenCalledWith(cpTo, writableDir);
     });
 
@@ -514,7 +514,7 @@ describe('ConfigService', () => {
       expect(mockRename).not.toHaveBeenCalled();
       expect(mockRm).toHaveBeenCalledTimes(1);
       const [rmPath] = mockRm.mock.calls[0];
-      expect(rmPath).toMatch(new RegExp(`^${writableDir}\\.staging-`));
+      expect(String(rmPath).startsWith(`${writableDir}.staging-`)).toBe(true);
 
       // A subsequent call must retry seeding rather than treating the failed
       // attempt as "already seeded" — `writableDir` was never created.
