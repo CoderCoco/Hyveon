@@ -14,13 +14,17 @@
  * generator. Aborting the supplied `AbortSignal` — or breaking out of the
  * `for await` loop — sends `logs.stream.<id>.cancel` to stop the main loop.
  *
- * `terraform.init(config, signal)` streams similarly, but since only one
- * `terraform init` run is ever in flight at a time, it wraps the fixed
- * `terraform.init.chunk` / `terraform.init.end` side channels directly rather
- * than minting a per-call stream id. There is no dedicated cancel channel —
- * aborting simply stops the generator from consuming further chunks, since
- * `TerraformService.init` only ever allows one run in flight at a time and the
- * main process has nothing to tear down early.
+ * `terraform.init(config, signal)` streams similarly, but `TerraformController.init`
+ * pushes chunks/end messages on fixed `terraform.init.chunk` / `terraform.init.end`
+ * side channels shared by every call rather than per-call channel names.
+ * `invoke('terraform.init', config)` resolves with a `streamId` minted by the
+ * controller for this call, and every chunk/end message on those shared
+ * channels is tagged with the `streamId` of the call that produced it — the
+ * generator ignores any message whose `streamId` doesn't match its own, so a
+ * rejected concurrent call or a late message from an abandoned stream can
+ * never resolve/terminate a different call's generator. There is no dedicated
+ * cancel channel — aborting simply stops the generator from consuming further
+ * chunks, since the main process has nothing to tear down early.
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
@@ -176,10 +180,15 @@ async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<Lo
  * `terraform.init.end` side channels into an {@link AsyncIterable} of
  * {@link TerraformRunChunk}.
  *
- * Unlike `streamLogs`, `TerraformService.init` only ever allows a single run
- * in flight at a time, so `TerraformController.init` always pushes chunks on
- * the same fixed channel names rather than minting a per-call `streamId` —
- * there is nothing to key listeners on beyond the two constants above.
+ * `TerraformController.init` pushes chunk/end events on these two fixed
+ * channel names for *every* call (rather than minting per-call channel
+ * names the way `streamLogs` does), but tags each payload with the
+ * `streamId` it minted for this call and returned in the invoke ack
+ * (`{ started, streamId, error? }`). Events whose `streamId` doesn't match
+ * this call's own `streamId` are ignored — this is what stops a second,
+ * rejected concurrent `terraform.init` call (e.g. `TerraformService.init`'s
+ * single-flight guard rejecting an overlapping run) from broadcasting an end
+ * event that would otherwise prematurely terminate this caller's stream.
  *
  * When a mock is registered for the `'terraform.init'` channel (test mode
  * only), the mock handler is called with `(config)` and its return value is
@@ -190,14 +199,18 @@ async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<Lo
  * `terraform.init.end` listeners are attached **before**
  * `ipcRenderer.invoke('terraform.init', config)` is called, so no chunk sent
  * immediately after the main process acknowledges the call can ever be
- * dropped. The invoke call resolves with `{ started, error? }`: a `false`
+ * dropped. Since this call's own `streamId` isn't known until the invoke
+ * resolves, events observed before then are held in a raw buffer and
+ * replayed (filtered by the now-known `streamId`) once the ack arrives. The
+ * invoke call resolves with `{ started, streamId?, error? }`: a `false`
  * `started` value means `config` failed validation and no `terraform init`
  * process was ever spawned — no chunk/end messages will ever arrive, so the
  * generator throws right away using `error` (and cleans up the now-unused
- * listeners in `finally`). When `started` is `true`, chunks are buffered as
- * they arrive on `terraform.init.chunk` and yielded in order; the generator
- * completes when `terraform.init.end` fires with no `error`, or throws using
- * its `error` field otherwise.
+ * listeners in `finally`). When `started` is `true`, chunks tagged with this
+ * call's `streamId` are buffered as they arrive on `terraform.init.chunk`
+ * and yielded in order; the generator completes when a `terraform.init.end`
+ * event tagged with this call's `streamId` fires with no `error`, or throws
+ * using its `error` field otherwise.
  *
  * Following the `logs.stream` pattern, an optional `signal` may be supplied to
  * cancel consumption early: aborting (or breaking out of the `for await`
@@ -219,6 +232,16 @@ async function* streamTerraformInit(config: TerraformInitConfig, signal?: AbortS
   let ended = false;
   let endError: string | undefined;
   let aborted = false;
+  /**
+   * This call's own `streamId`, known only once the `terraform.init` invoke
+   * resolves. `null` until then, at which point every raw chunk/end event
+   * buffered so far is replayed through the `streamId` filter below.
+   */
+  let ownStreamId: string | null = null;
+  /** Chunk events observed before `ownStreamId` is known. */
+  const rawChunkBuffer: Array<{ streamId: string; chunk: TerraformRunChunk }> = [];
+  /** End events observed before `ownStreamId` is known. */
+  const rawEndBuffer: Array<{ streamId: string; exitCode: number | null; error?: string }> = [];
   /** Resolves the pending `await` when a chunk arrives, the stream ends, or the signal aborts. */
   let wake: (() => void) | null = null;
   const signalWake = () => {
@@ -229,26 +252,49 @@ async function* streamTerraformInit(config: TerraformInitConfig, signal?: AbortS
     }
   };
 
-  const onChunk = (_evt: IpcRendererEvent, chunk: TerraformRunChunk) => {
-    buffer.push(chunk);
+  /** Applies a chunk event, discarding it if it belongs to a different `terraform.init` call. */
+  const applyChunk = (data: { streamId: string; chunk: TerraformRunChunk }) => {
+    if (data.streamId !== ownStreamId) return;
+    buffer.push(data.chunk);
     signalWake();
   };
-  const onEnd = (_evt: IpcRendererEvent, data: { exitCode: number | null; error?: string }) => {
+  /** Applies an end event, discarding it if it belongs to a different `terraform.init` call. */
+  const applyEnd = (data: { streamId: string; exitCode: number | null; error?: string }) => {
+    if (data.streamId !== ownStreamId) return;
     ended = true;
-    endError = data?.error;
+    endError = data.error;
     signalWake();
+  };
+
+  const onChunk = (_evt: IpcRendererEvent, data: { streamId: string; chunk: TerraformRunChunk }) => {
+    if (ownStreamId === null) {
+      rawChunkBuffer.push(data);
+      return;
+    }
+    applyChunk(data);
+  };
+  const onEnd = (_evt: IpcRendererEvent, data: { streamId: string; exitCode: number | null; error?: string }) => {
+    if (ownStreamId === null) {
+      rawEndBuffer.push(data);
+      return;
+    }
+    applyEnd(data);
   };
   const onAbort = () => {
     aborted = true;
     signalWake();
   };
 
-  // Attach both listeners before invoking so no early chunk sent right after
+  // Attach both listeners before invoking so no early event sent right after
   // the main process acknowledges the call is ever dropped — unlike
   // `streamLogs`, the channel names here are fixed constants known up front,
-  // so there is no need to wait for the invoke response first.
+  // so there is no need to wait for the invoke response first. `onEnd` can no
+  // longer use `ipcRenderer.once`: a rejected concurrent call's end event
+  // (tagged with a foreign `streamId`) could arrive on this same fixed
+  // channel before our own, and a `once` listener would consume and discard
+  // it, missing our own end event entirely.
   ipcRenderer.on(TERRAFORM_INIT_CHUNK_CHANNEL, onChunk);
-  ipcRenderer.once(TERRAFORM_INIT_END_CHANNEL, onEnd);
+  ipcRenderer.on(TERRAFORM_INIT_END_CHANNEL, onEnd);
   if (signal) {
     if (signal.aborted) aborted = true;
     else signal.addEventListener('abort', onAbort, { once: true });
@@ -257,13 +303,22 @@ async function* streamTerraformInit(config: TerraformInitConfig, signal?: AbortS
   try {
     if (aborted) return;
 
-    const ack = (await invoke('terraform.init', config)) as { started: boolean; error?: string };
-    if (!ack.started) {
+    const ack = (await invoke('terraform.init', config)) as { started: boolean; streamId?: string; error?: string };
+    if (!ack.started || !ack.streamId) {
       throw new Error(ack.error ?? 'terraform.init failed to start');
     }
+    ownStreamId = ack.streamId;
+
+    // Replay anything observed before we knew our own streamId, filtering
+    // out events tagged with a different (foreign, overlapping) run.
+    for (const data of rawChunkBuffer) applyChunk(data);
+    rawChunkBuffer.length = 0;
+    for (const data of rawEndBuffer) applyEnd(data);
+    rawEndBuffer.length = 0;
 
     while (true) {
       while (buffer.length > 0) {
+        if (aborted) return;
         yield buffer.shift()!;
       }
       if (aborted) return;

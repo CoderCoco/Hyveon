@@ -1,7 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { Controller, OnModuleInit } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron';
-import { TerraformService, TerraformInitError, type TerraformInitConfig } from '../services/TerraformService.js';
+import {
+  TerraformService,
+  TerraformInitError,
+  type TerraformInitConfig,
+  type TerraformRunChunk,
+} from '../services/TerraformService.js';
 import { logger } from '../logger.js';
 
 /** Fixed side-channel `TerraformController.init` pushes streamed output on. */
@@ -11,13 +17,29 @@ const CHUNK_CHANNEL = 'terraform.init.chunk';
 const END_CHANNEL = 'terraform.init.end';
 
 /**
+ * Message payload sent, in order, on {@link CHUNK_CHANNEL} for every chunk
+ * `TerraformService.init` yields. `streamId` ties the chunk back to the
+ * `init()` call that produced it (see {@link TerraformInitAck.streamId}) so
+ * the renderer — and a second, rejected concurrent call — can never mix up
+ * output from two overlapping runs.
+ */
+interface TerraformInitChunkMessage {
+  streamId: string;
+  chunk: TerraformRunChunk;
+}
+
+/**
  * Message payload sent once on {@link END_CHANNEL} when a `terraform.init`
- * run finishes. `exitCode` is `0` on success. On failure it carries whatever
- * exit code the spawned process reported (or `null` when the run failed
+ * run finishes. `streamId` identifies which `init()` call this terminates
+ * (see {@link TerraformInitAck.streamId}) so a rejected/second concurrent
+ * call can't broadcast an end event that the first caller mistakes for its
+ * own. `exitCode` is `0` on success. On failure it carries whatever exit
+ * code the spawned process reported (or `null` when the run failed
  * before/without an exit code, e.g. the binary couldn't be resolved or a
  * second `init` was already in flight), plus a stringified `error`.
  */
 interface TerraformInitEndMessage {
+  streamId: string;
   exitCode: number | null;
   error?: string;
 }
@@ -25,12 +47,13 @@ interface TerraformInitEndMessage {
 /**
  * Immediate acknowledgement `init()` resolves with. `started: true` means the
  * streaming loop was kicked off in the background (chunk/end messages will
- * follow on the side channels). `started: false` means `config` failed
- * validation and no `TerraformService.init` run was attempted — `error`
- * describes why.
+ * follow on the side channels, tagged with `streamId`). `started: false`
+ * means `config` failed validation and no `TerraformService.init` run was
+ * attempted — `error` describes why and `streamId` is omitted.
  */
 interface TerraformInitAck {
   started: boolean;
+  streamId?: string;
   error?: string;
 }
 
@@ -45,6 +68,15 @@ interface TerraformInitAck {
 @Controller()
 export class TerraformController implements OnModuleInit {
   constructor(private readonly terraform: TerraformService) {}
+
+  /**
+   * Per-call `AbortController`s keyed by the `streamId` minted in
+   * {@link init}. Lets a future `terraform.init.cancel` channel reach the
+   * right in-flight run, and lets the `WebContents` `'destroyed'` listener in
+   * {@link init} abort immediately without racing the chunk loop's own
+   * `isDestroyed()` check.
+   */
+  private readonly activeInits = new Map<string, AbortController>();
 
   /**
    * Registers an `ipcMain.handle` bridge for the `terraform.init` channel
@@ -90,24 +122,33 @@ export class TerraformController implements OnModuleInit {
    * run is attempted and the method resolves immediately with
    * `{ started: false, error }` — no chunk/end messages are sent.
    *
-   * Otherwise the streaming loop is fired and forgotten (mirroring
-   * `LogsController.streamLogs`'s `void (async () => { ... })()` pattern) and
-   * the method resolves immediately with `{ started: true }`, well before the
-   * `terraform init` run itself settles. Each chunk `TerraformService.init`
-   * yields is forwarded, in order, to the renderer via `sender.send` on
-   * {@link CHUNK_CHANNEL}. Once the run settles a single terminal message is
-   * sent on {@link END_CHANNEL}: `{ exitCode: 0 }` on success, or
-   * `{ exitCode, error }` on failure — `exitCode` comes from
+   * Otherwise a per-call `streamId` (`randomUUID()`) is minted and returned
+   * in the ack, and the streaming loop is fired and forgotten (mirroring
+   * `LogsController.streamLogs`'s `void (async () => { ... })()` pattern);
+   * the method resolves immediately with `{ started: true, streamId }`, well
+   * before the `terraform init` run itself settles. Every chunk/end message
+   * is tagged with that same `streamId` so the renderer — and a second,
+   * rejected concurrent call — can always tell which run a message belongs
+   * to and never cross-terminate another caller's stream. Each chunk
+   * `TerraformService.init` yields is forwarded, in order, to the renderer
+   * via `sender.send` on {@link CHUNK_CHANNEL} as
+   * `{ streamId, chunk }`. Once the run settles a single terminal message is
+   * sent on {@link END_CHANNEL}: `{ streamId, exitCode: 0 }` on success, or
+   * `{ streamId, exitCode, error }` on failure — `exitCode` comes from
    * {@link TerraformInitError} when the spawned process exited non-zero, and
    * is `null` for any other failure (binary not found, a second `init`
    * already in flight, a spawn error, etc).
    *
    * Creates its own `AbortController` per invocation (the same reasoning as
    * `LogsController.streamLogs`: `ElectronIPCTransport` passes `{ evt }` as
-   * the execution context, so there's no `signal` injected by the transport)
-   * and passes its `signal` through to `TerraformService.init` so a future
-   * cancel channel (or WebContents-destroyed cleanup) has something to abort
-   * against.
+   * the execution context, so there's no `signal` injected by the transport),
+   * registers it in {@link activeInits} keyed by `streamId` so a future
+   * cancel channel can reach it, and passes its `signal` through to
+   * `TerraformService.init`. A `'destroyed'` listener on the `WebContents`
+   * aborts the controller the instant the window/webview goes away, rather
+   * than relying solely on the chunk loop's own `isDestroyed()` check (which
+   * only re-evaluates between chunks and never fires at all once
+   * `TerraformService.init` stops yielding).
    *
    * Reachable via the Electron IPC transport (`terraform.init`).
    */
@@ -123,7 +164,16 @@ export class TerraformController implements OnModuleInit {
     }
 
     const sender: WebContents = ctx.evt.sender;
+    const streamId = randomUUID();
     const ac = new AbortController();
+    this.activeInits.set(streamId, ac);
+
+    const onDestroyed = () => ac.abort();
+    sender.once('destroyed', onDestroyed);
+    const cleanup = () => {
+      this.activeInits.delete(streamId);
+      sender.removeListener('destroyed', onDestroyed);
+    };
 
     // Fire-and-forget the streaming loop. Chunks are pushed back to the
     // renderer directly via WebContents.send rather than through the normal
@@ -132,23 +182,26 @@ export class TerraformController implements OnModuleInit {
       try {
         for await (const chunk of this.terraform.init(config, ac.signal)) {
           if (sender.isDestroyed()) { ac.abort(); return; }
-          sender.send(CHUNK_CHANNEL, chunk);
+          const chunkMessage: TerraformInitChunkMessage = { streamId, chunk };
+          sender.send(CHUNK_CHANNEL, chunkMessage);
         }
         if (!sender.isDestroyed()) {
-          const message: TerraformInitEndMessage = { exitCode: 0 };
+          const message: TerraformInitEndMessage = { streamId, exitCode: 0 };
           sender.send(END_CHANNEL, message);
         }
       } catch (err) {
         logger.error('terraform init error', { err });
         if (!sender.isDestroyed()) {
           const exitCode = err instanceof TerraformInitError ? err.exitCode : null;
-          const message: TerraformInitEndMessage = { exitCode, error: String(err) };
+          const message: TerraformInitEndMessage = { streamId, exitCode, error: String(err) };
           sender.send(END_CHANNEL, message);
         }
+      } finally {
+        cleanup();
       }
     })();
 
-    return { started: true };
+    return { started: true, streamId };
   }
 
   /**
