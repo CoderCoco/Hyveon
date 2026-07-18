@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'path';
+import os from 'os';
 
 vi.mock('fs', () => ({
   readFileSync: vi.fn(),
@@ -371,6 +372,7 @@ describe('ConfigService', () => {
       delete process.env['TFVARS_PATH'];
       delete process.env['GSD_TFVARS_BUCKET'];
       delete process.env['TF_DIR'];
+      delete process.env['RUNS_DIR_PATH'];
     });
 
     it('should return packaged tfstate path when readIsPackaged returns true', () => {
@@ -549,6 +551,25 @@ describe('ConfigService', () => {
       const result = testableService.getTerraformDir();
       expect(result).toMatch(/terraform$/);
       expect(path.isAbsolute(result)).toBe(true);
+    });
+
+    describe('getRunsDir', () => {
+      it('should return the RUNS_DIR_PATH env var value when set', () => {
+        process.env['RUNS_DIR_PATH'] = '/custom/runs';
+        expect(service.getRunsDir()).toBe('/custom/runs');
+      });
+
+      it('should return <userData>/runs when the env var is unset and userData is available', () => {
+        vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
+        expect(testableService.getRunsDir()).toBe(path.join('/fake/userData', 'runs'));
+      });
+
+      it('should return the OS tmpdir fallback when the env var is unset and userData is unavailable', () => {
+        vi.spyOn(testableService, 'readUserDataPath').mockReturnValue(null);
+        const result = testableService.getRunsDir();
+        expect(result).toBe(path.join(os.tmpdir(), 'hyveon-runs'));
+        expect(path.isAbsolute(result)).toBe(true);
+      });
     });
   });
 });
