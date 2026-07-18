@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from './ConfigService.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,45 +31,78 @@ export class TerraformNotFoundError extends Error {
   }
 }
 
+/** Binary path + semver version resolved on first use and memoized thereafter. */
+interface TerraformResolution {
+  binaryPath: string;
+  version: string;
+}
+
 /**
- * Resolves and caches the system `terraform` binary's absolute path and
- * semver version at construction time. This is the seam every later
+ * Lazily resolves and caches the system `terraform` binary's absolute path
+ * and semver version. This is the seam every later
  * `init`/`plan`/`apply`/`destroy`/`output` orchestration method (added in
  * later child issues of Epic D) will spawn against — see the "Terraform
  * orchestrator" section of the electron-desktop-pivot design spec.
  *
- * Construction is asynchronous (binary lookup + `terraform version` both
- * shell out), so instances are built via the static {@link create} factory
- * rather than a public constructor. `TerraformModule` wires this factory
- * into Nest DI via a `useFactory` provider.
+ * Construction is synchronous and never throws — the binary lookup +
+ * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
+ * {@link getVersion} is first called, so `TerraformModule` can be imported by
+ * `AppModule` unconditionally even on machines without `terraform` on PATH.
+ * The resolution (or its rejection) is memoized on the instance, so the
+ * lookup/version commands only ever run once per instance regardless of how
+ * many times the accessors are called.
  */
 @Injectable()
 export class TerraformService {
-  private constructor(
-    private readonly binaryPath: string,
-    private readonly version: string,
-  ) {}
+  private resolution: Promise<TerraformResolution> | null = null;
+
+  /**
+   * `config` isn't consumed yet — it's the seam a later child issue of Epic D
+   * will use to resolve the terraform working directory for
+   * `init`/`plan`/`apply`/`destroy`/`output`. The `void` below is a
+   * deliberate no-op read so `noUnusedLocals` doesn't flag the property
+   * before that consumer exists; remove it once `this.config` is used for
+   * real.
+   */
+  constructor(private readonly config: ConfigService) {
+    void this.config;
+  }
 
   /**
    * Resolves the system `terraform` binary via `which` (POSIX) / `where.exe`
    * (Windows), then queries `terraform version` for the semver string,
-   * caching both on the returned instance. Rejects with
-   * {@link TerraformNotFoundError} when the lookup fails.
+   * memoizing the result (or rejection) so subsequent calls don't re-run the
+   * shell-outs. Rejects with {@link TerraformNotFoundError} when the lookup
+   * fails.
    */
-  static async create(): Promise<TerraformService> {
-    const binaryPath = await TerraformService.resolveBinaryPath();
-    const version = await TerraformService.resolveVersion(binaryPath);
-    return new TerraformService(binaryPath, version);
+  private resolve(): Promise<TerraformResolution> {
+    if (!this.resolution) {
+      this.resolution = TerraformService.resolveBinaryPath().then(async (binaryPath) => {
+        const version = await TerraformService.resolveVersion(binaryPath);
+        return { binaryPath, version };
+      });
+    }
+    return this.resolution;
   }
 
-  /** Returns the cached absolute path to the resolved `terraform` binary. */
-  getBinaryPath(): string {
-    return this.binaryPath;
+  /**
+   * Returns the absolute path to the resolved `terraform` binary, resolving
+   * (and memoizing) it on first call. Rejects with
+   * {@link TerraformNotFoundError} when the binary can't be found on PATH.
+   */
+  async getBinaryPath(): Promise<string> {
+    const { binaryPath } = await this.resolve();
+    return binaryPath;
   }
 
-  /** Returns the cached semver version string parsed from `terraform version`. */
-  getVersion(): string {
-    return this.version;
+  /**
+   * Returns the semver version string parsed from `terraform version`,
+   * resolving (and memoizing) it on first call. Rejects with
+   * {@link TerraformNotFoundError} when the binary can't be found on PATH.
+   */
+  async getVersion(): Promise<string> {
+    const { version } = await this.resolve();
+    return version;
   }
 
   /**

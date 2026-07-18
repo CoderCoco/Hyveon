@@ -15,6 +15,17 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { TerraformService, TerraformNotFoundError, lookupCommandFor } from './TerraformService.js';
+import type { ConfigService } from './ConfigService.js';
+
+/**
+ * Minimal `ConfigService` stub sufficient to satisfy `TerraformService`'s
+ * constructor dependency. `TerraformService` doesn't call any `ConfigService`
+ * methods yet, so an empty object cast is enough — this keeps the stub
+ * trivially in sync as `ConfigService`'s surface grows.
+ */
+function stubConfigService(): ConfigService {
+  return {} as ConfigService;
+}
 
 /** Error-first callback shape `util.promisify` invokes the mocked `execFile` with. */
 type ExecFileCallback = (error: Error | null, result?: { stdout: string; stderr: string }) => void;
@@ -42,6 +53,12 @@ function queueExecFileFailure(error: Error = new Error('spawn ENOENT')): void {
   execFileMock.mockImplementationOnce((...args: unknown[]) => {
     lastArgAsCallback(args)(error);
   });
+}
+
+/** Queues a successful binary lookup followed by a successful `-json` version response. */
+function queueSuccessfulResolution(binaryPath = '/usr/local/bin/terraform', version = '1.7.0'): void {
+  queueExecFileSuccess(`${binaryPath}\n`);
+  queueExecFileSuccess(JSON.stringify({ terraform_version: version }));
 }
 
 beforeEach(() => {
@@ -79,52 +96,76 @@ describe('TerraformNotFoundError', () => {
   });
 });
 
-describe('TerraformService.create binary detection', () => {
+describe('TerraformService construction', () => {
+  it('should never throw when constructing the service, even without any execFile mocks queued', () => {
+    expect(() => new TerraformService(stubConfigService())).not.toThrow();
+  });
+
+  it('should not shell out to resolve the binary until an accessor is called', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const service = new TerraformService(stubConfigService());
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerraformService binary detection', () => {
   it('should resolve the binary path from the which/where.exe output', async () => {
-    queueExecFileSuccess('/usr/local/bin/terraform\n');
-    queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.0' }));
+    queueSuccessfulResolution('/usr/local/bin/terraform', '1.7.0');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getBinaryPath()).toBe('/usr/local/bin/terraform');
+    await expect(service.getBinaryPath()).resolves.toBe('/usr/local/bin/terraform');
   });
 
   it('should use the first non-empty trimmed line when the lookup command returns multiple lines', async () => {
     queueExecFileSuccess('\n  /opt/homebrew/bin/terraform  \nsome-other-line\n');
     queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.0' }));
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getBinaryPath()).toBe('/opt/homebrew/bin/terraform');
+    await expect(service.getBinaryPath()).resolves.toBe('/opt/homebrew/bin/terraform');
   });
 
-  it('should reject with a TerraformNotFoundError instance when the lookup command fails', async () => {
+  it('should reject getBinaryPath with a TerraformNotFoundError instance on first use when the lookup command fails', async () => {
     queueExecFileFailure();
 
-    await expect(TerraformService.create()).rejects.toBeInstanceOf(TerraformNotFoundError);
+    const service = new TerraformService(stubConfigService());
+
+    await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
+  });
+
+  it('should reject getVersion with a TerraformNotFoundError instance on first use when the lookup command fails', async () => {
+    queueExecFileFailure();
+
+    const service = new TerraformService(stubConfigService());
+
+    await expect(service.getVersion()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
 
   it('should reject with a TerraformNotFoundError instance when the lookup command produces no output', async () => {
     queueExecFileSuccess('');
 
-    await expect(TerraformService.create()).rejects.toBeInstanceOf(TerraformNotFoundError);
+    const service = new TerraformService(stubConfigService());
+
+    await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
 
   it('should reject with a TerraformNotFoundError instance when the lookup command output is only whitespace', async () => {
     queueExecFileSuccess('   \n  \n');
 
-    await expect(TerraformService.create()).rejects.toBeInstanceOf(TerraformNotFoundError);
+    const service = new TerraformService(stubConfigService());
+
+    await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
 });
 
-describe('TerraformService.create version parsing', () => {
+describe('TerraformService version parsing', () => {
   it('should parse the terraform_version field from terraform version -json output', async () => {
-    queueExecFileSuccess('/usr/local/bin/terraform\n');
-    queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.5' }));
+    queueSuccessfulResolution('/usr/local/bin/terraform', '1.7.5');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getVersion()).toBe('1.7.5');
+    await expect(service.getVersion()).resolves.toBe('1.7.5');
   });
 
   it('should fall back to parsing plain-text output when the -json output is not valid JSON', async () => {
@@ -132,9 +173,9 @@ describe('TerraformService.create version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('Terraform v1.6.2\non linux_amd64\n');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getVersion()).toBe('1.6.2');
+    await expect(service.getVersion()).resolves.toBe('1.6.2');
   });
 
   it('should fall back to parsing plain-text output when terraform_version is missing from the json output', async () => {
@@ -142,9 +183,9 @@ describe('TerraformService.create version parsing', () => {
     queueExecFileSuccess(JSON.stringify({ some_other_field: true }));
     queueExecFileSuccess('Terraform v1.5.0\n');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getVersion()).toBe('1.5.0');
+    await expect(service.getVersion()).resolves.toBe('1.5.0');
   });
 
   it('should parse a pre-release version suffix from the plain-text fallback output', async () => {
@@ -152,9 +193,9 @@ describe('TerraformService.create version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('Terraform v1.9.0-beta1\n');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getVersion()).toBe('1.9.0-beta1');
+    await expect(service.getVersion()).resolves.toBe('1.9.0-beta1');
   });
 
   it('should throw a plain Error, not a TerraformNotFoundError, when the plain-text output cannot be parsed', async () => {
@@ -162,7 +203,8 @@ describe('TerraformService.create version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('garbage output with no version');
 
-    const result = TerraformService.create();
+    const service = new TerraformService(stubConfigService());
+    const result = service.getVersion();
 
     await expect(result).rejects.toThrow('Unable to parse terraform version');
     await expect(result).rejects.not.toBeInstanceOf(TerraformNotFoundError);
@@ -171,20 +213,65 @@ describe('TerraformService.create version parsing', () => {
 
 describe('TerraformService instance accessors', () => {
   it('should expose the resolved binary path via getBinaryPath', async () => {
-    queueExecFileSuccess('/usr/bin/terraform\n');
-    queueExecFileSuccess(JSON.stringify({ terraform_version: '1.8.1' }));
+    queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getBinaryPath()).toBe('/usr/bin/terraform');
+    await expect(service.getBinaryPath()).resolves.toBe('/usr/bin/terraform');
   });
 
   it('should expose the resolved version via getVersion', async () => {
-    queueExecFileSuccess('/usr/bin/terraform\n');
-    queueExecFileSuccess(JSON.stringify({ terraform_version: '1.8.1' }));
+    queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = await TerraformService.create();
+    const service = new TerraformService(stubConfigService());
 
-    expect(service.getVersion()).toBe('1.8.1');
+    await expect(service.getVersion()).resolves.toBe('1.8.1');
+  });
+});
+
+describe('TerraformService resolution memoization', () => {
+  it('should only shell out once across multiple getBinaryPath calls', async () => {
+    queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
+
+    const service = new TerraformService(stubConfigService());
+
+    await service.getBinaryPath();
+    await service.getBinaryPath();
+
+    expect(execFileMock).toHaveBeenCalledTimes(2); // one lookup call + one version call
+  });
+
+  it('should reuse the memoized resolution between getBinaryPath and getVersion', async () => {
+    queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
+
+    const service = new TerraformService(stubConfigService());
+
+    await service.getBinaryPath();
+    await service.getVersion();
+
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('should resolve concurrent getBinaryPath calls to the same memoized result with a single lookup', async () => {
+    queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
+
+    const service = new TerraformService(stubConfigService());
+
+    const [first, second] = await Promise.all([service.getBinaryPath(), service.getBinaryPath()]);
+
+    expect(first).toBe('/usr/bin/terraform');
+    expect(second).toBe('/usr/bin/terraform');
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('should memoize a TerraformNotFoundError rejection so a second call does not re-invoke execFile', async () => {
+    queueExecFileFailure();
+
+    const service = new TerraformService(stubConfigService());
+
+    await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
+    await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
+
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
