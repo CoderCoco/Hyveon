@@ -16,9 +16,8 @@ import { TerraformService } from '../services/TerraformService.js';
  * will use to resolve the working directory) — plain Nest DI, no factory
  * needed since neither service does async work at construction time.
  *
- * Not yet imported by `AppModule` — this is scaffolding only. A later child
- * issue of Epic D (local terraform orchestration) will import this module
- * once IPC-driven plan/apply/destroy/output handlers exist to consume it.
+ * Imported by `AppModule` alongside `TerraformController`, which bridges
+ * `TerraformService.init`'s async-generator output onto Electron IPC.
  */
 @Module({
   imports: [ConfigModule],
