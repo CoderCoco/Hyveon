@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, cpSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -300,7 +300,14 @@ export class ConfigService {
    *
    * Resolution order (identical in structure to {@link getTfStatePath}):
    *  1. `TF_DIR` env var — wins when set.
-   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform`.
+   *  2. Electron packaged app (`app.isPackaged`) — `<resourcesPath>/terraform` is
+   *     read-only in most installed-app layouts (macOS code-signing, Windows
+   *     `Program Files` ACLs), and `terraform init`/`apply` need to write
+   *     `.terraform/`, lock files, and plan artifacts. So the bundled composer
+   *     is seeded (once, on first use) into `<userData>/terraform` — a
+   *     writable per-user directory — via {@link seedTerraformWorkspace}, and
+   *     that writable copy is returned instead. Falls back to the read-only
+   *     `<resourcesPath>/terraform` if `userData` can't be resolved.
    *  3. Dev/test fallback — repo root `terraform/`.
    */
   getTerraformDir(): string {
@@ -309,11 +316,40 @@ export class ConfigService {
 
     if (this.readIsPackaged()) {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      return join(this.readResourcesPath()!, 'terraform');
+      const bundledDir = join(this.readResourcesPath()!, 'terraform');
+      const userData = this.readUserDataPath();
+      if (userData) {
+        const writableDir = join(userData, 'terraform');
+        this.seedTerraformWorkspace(bundledDir, writableDir);
+        return writableDir;
+      }
+      return bundledDir;
     }
 
     // Dev fallback: repo root is one level above _APP_ROOT (app/)
     return join(_APP_ROOT, '..', 'terraform');
+  }
+
+  /**
+   * Copy the bundled read-only Terraform composer (`<resourcesPath>/terraform`)
+   * into the writable `<userData>/terraform` workspace on first use. No-ops
+   * when the writable directory already exists, so subsequent runs reuse the
+   * previously-seeded copy (and its `.terraform/` init state) instead of
+   * clobbering it on every launch.
+   */
+  private seedTerraformWorkspace(bundledDir: string, writableDir: string): void {
+    if (existsSync(writableDir)) return;
+
+    try {
+      cpSync(bundledDir, writableDir, { recursive: true });
+      logger.info('Seeded Terraform workspace into userData', { from: bundledDir, to: writableDir });
+    } catch (err) {
+      logger.error('Failed to seed Terraform workspace into userData', {
+        err,
+        from: bundledDir,
+        to: writableDir,
+      });
+    }
   }
 
   /**
