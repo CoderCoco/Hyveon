@@ -492,6 +492,31 @@ export interface AuditPageResult {
   nextBefore?: string;
 }
 
+/**
+ * A single line of output from a streamed `terraform` subcommand run, tagged
+ * with the stream it came from.
+ *
+ * Mirrors `TerraformRunChunk` in `@hyveon/desktop-main/src/services/TerraformService.ts`
+ * — that file is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformRunChunk {
+  stream: 'stdout' | 'stderr';
+  line: string;
+}
+
+/**
+ * Backend configuration values passed to `terraform init -backend-config=...`
+ * for the S3 remote state backend bootstrapped by the First-Run Wizard.
+ *
+ * Mirrors `TerraformInitConfig` in `@hyveon/desktop-main/src/services/TerraformService.ts`
+ * — that file is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformInitConfig {
+  bucket: string;
+  region: string;
+  dynamodbTable: string;
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace sub-interfaces
 // ---------------------------------------------------------------------------
@@ -632,6 +657,34 @@ export interface GsdAuditApi {
   list: (opts?: { limit?: number; before?: string }) => Promise<AuditPageResult>;
 }
 
+/**
+ * Terraform orchestration: streams `terraform init` output live as the
+ * process runs.
+ */
+export interface GsdTerraformApi {
+  /**
+   * Runs `terraform init` against `config` (backend bucket/region/DynamoDB
+   * lock table) and returns its output as an async iterable of
+   * {@link TerraformRunChunk}. Consume it with
+   * `for await (const chunk of terraform.init(config, signal))`.
+   *
+   * Internally this wraps the fixed `terraform.init.chunk` / `terraform.init.end`
+   * side-channel IPC messages `TerraformController.init` sends in an async
+   * generator — unlike `logs.stream`, there is no per-call `streamId` because
+   * `TerraformService.init` only ever allows one run in flight at a time.
+   *
+   * Pass an `AbortSignal` to cancel the stream: aborting (or breaking out of
+   * the `for await` loop) stops consuming the run early, mirroring
+   * `logs.stream`'s cancellation semantics.
+   *
+   * The iterator completes normally once the run finishes successfully, and
+   * throws (using the `terraform.init.end` payload's `error` field) if the
+   * run failed — including if the initial `config` failed validation and no
+   * `terraform init` process was ever spawned.
+   */
+  init: (config: TerraformInitConfig, signal?: AbortSignal) => AsyncIterable<TerraformRunChunk>;
+}
+
 // ---------------------------------------------------------------------------
 // Test-only injection surface
 // ---------------------------------------------------------------------------
@@ -734,6 +787,8 @@ export interface GsdApi {
   diagnostics: GsdDiagnosticsApi;
   /** Audit log: paginated history of `game_servers` mutations from DynamoDB. */
   audit: GsdAuditApi;
+  /** Terraform orchestration: streams `terraform init` output live as the process runs. */
+  terraform: GsdTerraformApi;
   /**
    * Test-only injection surface; `undefined` in production.
    *

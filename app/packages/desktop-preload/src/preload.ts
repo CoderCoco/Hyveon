@@ -13,6 +13,14 @@
  * the per-stream `logs.stream.<id>.chunk` / `.end` IPC events in an async
  * generator. Aborting the supplied `AbortSignal` — or breaking out of the
  * `for await` loop — sends `logs.stream.<id>.cancel` to stop the main loop.
+ *
+ * `terraform.init(config, signal)` streams similarly, but since only one
+ * `terraform init` run is ever in flight at a time, it wraps the fixed
+ * `terraform.init.chunk` / `terraform.init.end` side channels directly rather
+ * than minting a per-call stream id. There is no dedicated cancel channel —
+ * aborting simply stops the generator from consuming further chunks, since
+ * `TerraformService.init` only ever allows one run in flight at a time and the
+ * main process has nothing to tear down early.
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
@@ -23,8 +31,16 @@ import type {
   GsdApi,
   GsdTestApi,
   LogChunk,
+  TerraformInitConfig,
+  TerraformRunChunk,
   UpdateGamePayload,
 } from './gsd-api.js';
+
+/** Fixed side-channel `TerraformController.init` pushes streamed output on. */
+const TERRAFORM_INIT_CHUNK_CHANNEL = 'terraform.init.chunk';
+
+/** Fixed side-channel `TerraformController.init` sends its terminal message on. */
+const TERRAFORM_INIT_END_CHANNEL = 'terraform.init.end';
 
 /**
  * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
@@ -155,6 +171,117 @@ async function* streamLogs(game: string, signal?: AbortSignal): AsyncIterable<Lo
   }
 }
 
+/**
+ * Bridges `TerraformController.init`'s fixed `terraform.init.chunk` /
+ * `terraform.init.end` side channels into an {@link AsyncIterable} of
+ * {@link TerraformRunChunk}.
+ *
+ * Unlike `streamLogs`, `TerraformService.init` only ever allows a single run
+ * in flight at a time, so `TerraformController.init` always pushes chunks on
+ * the same fixed channel names rather than minting a per-call `streamId` —
+ * there is nothing to key listeners on beyond the two constants above.
+ *
+ * When a mock is registered for the `'terraform.init'` channel (test mode
+ * only), the mock handler is called with `(config)` and its return value is
+ * treated as an `AsyncIterable<TerraformRunChunk>` — the real IPC listener
+ * path is never touched.
+ *
+ * In production (no mock registered), the `terraform.init.chunk` /
+ * `terraform.init.end` listeners are attached **before**
+ * `ipcRenderer.invoke('terraform.init', config)` is called, so no chunk sent
+ * immediately after the main process acknowledges the call can ever be
+ * dropped. The invoke call resolves with `{ started, error? }`: a `false`
+ * `started` value means `config` failed validation and no `terraform init`
+ * process was ever spawned — no chunk/end messages will ever arrive, so the
+ * generator throws right away using `error` (and cleans up the now-unused
+ * listeners in `finally`). When `started` is `true`, chunks are buffered as
+ * they arrive on `terraform.init.chunk` and yielded in order; the generator
+ * completes when `terraform.init.end` fires with no `error`, or throws using
+ * its `error` field otherwise.
+ *
+ * Following the `logs.stream` pattern, an optional `signal` may be supplied to
+ * cancel consumption early: aborting (or breaking out of the `for await`
+ * loop) stops the wait loop and the `finally` block detaches the listeners.
+ * There is no per-run cancel side channel to notify the main process — the
+ * `terraform init` run itself keeps running to completion in the background,
+ * but the generator stops yielding further chunks to the caller.
+ */
+async function* streamTerraformInit(config: TerraformInitConfig, signal?: AbortSignal): AsyncIterable<TerraformRunChunk> {
+  const initMock = mockRegistry.get('terraform.init');
+  if (initMock !== undefined) {
+    const mockIterable = initMock(config, signal) as AsyncIterable<TerraformRunChunk>;
+    yield* mockIterable;
+    return;
+  }
+
+  /** Chunks received but not yet yielded. */
+  const buffer: TerraformRunChunk[] = [];
+  let ended = false;
+  let endError: string | undefined;
+  let aborted = false;
+  /** Resolves the pending `await` when a chunk arrives, the stream ends, or the signal aborts. */
+  let wake: (() => void) | null = null;
+  const signalWake = () => {
+    if (wake) {
+      const fn = wake;
+      wake = null;
+      fn();
+    }
+  };
+
+  const onChunk = (_evt: IpcRendererEvent, chunk: TerraformRunChunk) => {
+    buffer.push(chunk);
+    signalWake();
+  };
+  const onEnd = (_evt: IpcRendererEvent, data: { exitCode: number | null; error?: string }) => {
+    ended = true;
+    endError = data?.error;
+    signalWake();
+  };
+  const onAbort = () => {
+    aborted = true;
+    signalWake();
+  };
+
+  // Attach both listeners before invoking so no early chunk sent right after
+  // the main process acknowledges the call is ever dropped — unlike
+  // `streamLogs`, the channel names here are fixed constants known up front,
+  // so there is no need to wait for the invoke response first.
+  ipcRenderer.on(TERRAFORM_INIT_CHUNK_CHANNEL, onChunk);
+  ipcRenderer.once(TERRAFORM_INIT_END_CHANNEL, onEnd);
+  if (signal) {
+    if (signal.aborted) aborted = true;
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  try {
+    if (aborted) return;
+
+    const ack = (await invoke('terraform.init', config)) as { started: boolean; error?: string };
+    if (!ack.started) {
+      throw new Error(ack.error ?? 'terraform.init failed to start');
+    }
+
+    while (true) {
+      while (buffer.length > 0) {
+        yield buffer.shift()!;
+      }
+      if (aborted) return;
+      if (ended) {
+        if (endError) throw new Error(endError);
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+  } finally {
+    ipcRenderer.removeListener(TERRAFORM_INIT_CHUNK_CHANNEL, onChunk);
+    ipcRenderer.removeListener(TERRAFORM_INIT_END_CHANNEL, onEnd);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
 const api: GsdApi = {
   games: {
     list: () => invoke('games.list'),
@@ -229,6 +356,10 @@ const api: GsdApi = {
 
   audit: {
     list: (opts?: { limit?: number; before?: string }) => invoke('audit.list', opts),
+  },
+
+  terraform: {
+    init: streamTerraformInit,
   },
 };
 
