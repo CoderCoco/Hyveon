@@ -138,14 +138,100 @@ export interface TerraformPlanResult {
 const PLAN_SUMMARY_PATTERN = /Plan:\s*(\d+) to add,\s*(\d+) to change,\s*(\d+) to destroy\./;
 
 /**
+ * Thrown by {@link TerraformService.apply} before spawning `terraform apply`
+ * when the caller supplied a `tfvarsVersionId` (the version the plan being
+ * applied was generated against) and the S3 tfvars object's current head
+ * version no longer matches it — the remote tfvars changed underneath the
+ * caller since the plan was produced, so applying the stale `.tfplan`
+ * artifact could deploy against configuration nobody actually planned.
+ * Distinct from the plain `Error` {@link TerraformService.pullVarFile} throws
+ * for the equivalent staleness check ahead of `plan()`, so callers can branch
+ * on `instanceof StalePlanError` to prompt "re-plan before applying" flows
+ * specifically.
+ */
+export class StalePlanError extends Error {
+  constructor(key: string, bucket: string, expectedVersionId: string, actualVersionId: string | undefined) {
+    super(
+      `tfvars object "${key}" in S3 bucket "${bucket}" is stale for this plan: expected version ` +
+        `"${expectedVersionId}" to still be the current head, but the head version is now ` +
+        `${actualVersionId ? `"${actualVersionId}"` : 'missing'}. Re-run plan() before applying.`,
+    );
+    this.name = 'StalePlanError';
+  }
+}
+
+/**
+ * Thrown when the spawned `terraform apply` process exits with a non-zero
+ * status code. Distinct from {@link TerraformNotFoundError} (binary can't be
+ * resolved) and {@link StalePlanError} (the pre-spawn staleness guard).
+ */
+export class TerraformApplyError extends Error {
+  constructor(public readonly exitCode: number | null) {
+    super(`terraform apply exited with code ${exitCode ?? 'null'}`);
+    this.name = 'TerraformApplyError';
+  }
+}
+
+/**
+ * Outcome of a successful {@link TerraformService.apply} run, resolved via the
+ * async generator's return value once the spawned `terraform apply` process
+ * exits `0` and the run wasn't aborted.
+ */
+export interface TerraformApplyResult {
+  /** The `runId` this apply run was invoked with — matches the directory `run.json` is written into. */
+  runId: string;
+  /** Number of resources Terraform reported adding. */
+  added: number;
+  /** Number of resources Terraform reported changing in place. */
+  changed: number;
+  /** Number of resources Terraform reported destroying. */
+  destroyed: number;
+}
+
+/**
+ * Matches Terraform's apply-summary stdout line, e.g.
+ * `Apply complete! Resources: 3 added, 1 changed, 0 destroyed.` — scanned for
+ * while streaming {@link TerraformService.apply}'s output to extract the
+ * resource change counts returned in the generator's return value. Mirrors
+ * {@link PLAN_SUMMARY_PATTERN} for the equivalent `plan()` summary line.
+ */
+const APPLY_SUMMARY_PATTERN =
+  /Apply complete!\s*Resources:\s*(\d+) added,\s*(\d+) changed,\s*(\d+) destroyed\./;
+
+/**
+ * Persisted to `<runsDir>/<runId>/run.json` once a {@link TerraformService.apply}
+ * run's spawned process has closed (whether it exited cleanly, non-zero, or
+ * was killed via an abort signal) — a lightweight local run history so a
+ * future Apply-history UI can list past runs without a database. `kind` is
+ * currently always `'apply'`; the union leaves room for `plan`/`destroy`
+ * records to reuse the same shape without a breaking change later.
+ */
+export interface TerraformRunRecord {
+  /** The `runId` this record describes — matches the directory it's written into. */
+  runId: string;
+  /** Which subcommand produced this record. */
+  kind: 'apply';
+  /** ISO-8601 timestamp captured immediately before the process was spawned. */
+  startedAt: string;
+  /** ISO-8601 timestamp captured immediately after the process closed. */
+  completedAt: string;
+  /** The process's exit code, or `null` if it never reported one (e.g. killed via abort signal). */
+  exitCode: number | null;
+  /** The tfvars version id the applied plan was generated against, if the caller supplied one. */
+  tfvarsVersionId?: string;
+}
+
+/**
  * Lazily resolves and caches the system `terraform` binary's absolute path
  * and semver version, and orchestrates `terraform` subcommands against it:
  * {@link TerraformService.init}, the streaming/idempotent `terraform init`
- * runner, and {@link TerraformService.plan}, the streaming `terraform plan`
+ * runner; {@link TerraformService.plan}, the streaming `terraform plan`
  * runner that persists its `.tfplan` artifact and the pulled tfvars snapshot
- * under `ConfigService.getRunsDir()`. Later child issues of Epic D add
- * `apply`/`destroy`/`output` — see the "Terraform orchestrator" section of
- * the electron-desktop-pivot design spec.
+ * under `ConfigService.getRunsDir()`; and {@link TerraformService.apply}, the
+ * streaming `terraform apply <planFile>` runner that persists a
+ * {@link TerraformRunRecord} to the same per-run directory once the process
+ * closes. Later child issues of Epic D add `destroy`/`output` — see the
+ * "Terraform orchestrator" section of the electron-desktop-pivot design spec.
  *
  * Construction is synchronous and never throws — the binary lookup +
  * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
@@ -168,16 +254,18 @@ export class TerraformService {
   private lastInitConfig: TerraformInitConfig | null = null;
 
   /**
-   * Name of whichever subcommand ({@link init} or {@link plan}) is actively
-   * running against `getTerraformDir()`, or `null` when neither is. A single
-   * shared lock (rather than separate `initInFlight`/`planInFlight` flags) is
-   * required because `init` mutates the `backend/.terraform` state that
-   * `plan` reads — letting the two subcommands run concurrently against the
-   * same workspace would race one against the other's writes/reads. Set the
+   * Name of whichever subcommand ({@link init}, {@link plan}, or
+   * {@link apply}) is actively running against `getTerraformDir()`, or `null`
+   * when none is. A single shared lock (rather than separate
+   * `initInFlight`/`planInFlight`/`applyInFlight` flags) is required because
+   * `init` mutates the `backend/.terraform` state that `plan`/`apply` read,
+   * and `apply` itself mutates the state that a concurrent `plan` would read
+   * — letting any two of these subcommands run concurrently against the same
+   * workspace would race one against the other's writes/reads. Set the
    * moment a generator body starts executing (i.e. the first `.next()` call)
    * until it completes or throws.
    */
-  private workspaceInFlight: 'init' | 'plan' | null = null;
+  private workspaceInFlight: 'init' | 'plan' | 'apply' | null = null;
 
   /**
    * `config` resolves the terraform working directory (`getTerraformDir()`)
@@ -482,6 +570,220 @@ export class TerraformService {
     } finally {
       this.workspaceInFlight = null;
     }
+  }
+
+  /**
+   * Runs `terraform apply -input=false -no-color <planFile>` inside the
+   * Terraform composer root (`ConfigService.getTerraformDir()`), yielding a
+   * {@link TerraformRunChunk} per line of output as the process produces it —
+   * mirrors {@link init}/{@link plan}'s streaming shape. `runId` and
+   * `planFile` are expected to be the values a prior {@link plan} call
+   * returned (`runId`/`artifactPath`), so the applied plan and its run record
+   * live under the same `<runsDir>/<runId>/` directory.
+   *
+   * Before spawning: throws a descriptive `Error` synchronously (mirroring
+   * the {@link workspaceInFlight} lock check below) if `planFile` doesn't
+   * exist on disk — there's nothing meaningful to apply. Then, once the
+   * abort signal has been checked (see below) and if `tfvarsVersionId` is
+   * provided and the tfvars source is S3-backed
+   * (`ConfigService.getTfvarsBucket()` resolves one), asserts that it still
+   * matches the head (most recent) version of the tfvars object via
+   * `remoteFileStore.listVersions(key)`, throwing {@link StalePlanError}
+   * *before* `terraform` is ever spawned when they no longer match — the
+   * plan being applied was generated against tfvars that have since changed
+   * underneath the caller. Ignored entirely in local-file mode or when
+   * `tfvarsVersionId` is omitted.
+   *
+   * While streaming, stdout lines are scanned via {@link APPLY_SUMMARY_PATTERN}
+   * for Terraform's summary line (`Apply complete! Resources: N added, N changed, N destroyed.`)
+   * to extract the resource change counts returned in the generator's return
+   * value alongside `runId`. A run that never reaches the summary line (e.g.
+   * it errors out first) resolves all three counts to `0`, but in that case
+   * the generator throws {@link TerraformApplyError} instead of returning.
+   *
+   * `signal`, if provided, aborts the run the same way {@link init}/{@link plan}
+   * do: the spawned child process is killed and the generator ends cleanly —
+   * no further chunks, no throw.
+   *
+   * Once the spawned process has closed — whether it exited cleanly,
+   * non-zero, or was killed via `signal` — writes a {@link TerraformRunRecord}
+   * to `<runsDir>/<runId>/run.json` capturing `runId`, `kind: 'apply'`,
+   * `startedAt`/`completedAt` timestamps, the process's `exitCode` (`null`
+   * when killed via abort), and `tfvarsVersionId`. No record is written if
+   * the process never spawned (stale-plan guard rejected, or `signal` was
+   * already aborted before `getBinaryPath()`/spawn).
+   *
+   * Throws a descriptive `Error` synchronously (on the first `.next()` call)
+   * if another `apply()`, `plan()`, or `init()` call is already in flight on
+   * this instance — all three subcommands share a single
+   * {@link workspaceInFlight} lock because they read/write the same
+   * `backend/.terraform` workspace state; overlapping runs would race — or
+   * if `planFile` doesn't exist on disk.
+   *
+   * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
+   * resolved, {@link StalePlanError} if `tfvarsVersionId` no longer matches
+   * the S3 tfvars head version, or {@link TerraformApplyError} if the spawned
+   * process exits with a non-zero status code (and the run wasn't aborted).
+   */
+  async *apply(
+    runId: string,
+    tfvarsVersionId: string | undefined,
+    planFile: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<TerraformRunChunk, TerraformApplyResult | undefined> {
+    if (this.workspaceInFlight) {
+      throw new Error(
+        `TerraformService.apply() cannot run while ${this.workspaceInFlight}() is already ` +
+          'running; wait for it to finish before calling apply() again.',
+      );
+    }
+    if (!existsSync(planFile)) {
+      throw new Error(`TerraformService.apply() cannot run: plan file "${planFile}" does not exist on disk.`);
+    }
+    this.workspaceInFlight = 'apply';
+    try {
+      if (signal?.aborted) {
+        // Already aborted before we even started the stale-plan guard — end
+        // the generator cleanly without spawning anything (and without
+        // writing a run record, since no process ever ran). Checked before
+        // assertPlanTfvarsNotStale so an already-aborted signal short-circuits
+        // ahead of that S3 round-trip, matching plan()'s established pattern
+        // of checking abort status before any expensive async work.
+        return undefined;
+      }
+
+      await this.assertPlanTfvarsNotStale(tfvarsVersionId);
+
+      if (signal?.aborted) {
+        // Aborted while the stale-plan guard was checking listVersions — end
+        // the generator cleanly before resolving the binary path / spawning.
+        return undefined;
+      }
+
+      const binaryPath = await this.getBinaryPath();
+
+      if (signal?.aborted) {
+        // Aborted while resolving the binary path — end cleanly before spawn.
+        return undefined;
+      }
+
+      const cwd = this.config.getTerraformDir();
+      const args = ['apply', '-input=false', '-no-color', planFile];
+      const startedAt = new Date().toISOString();
+
+      let added = 0;
+      let changed = 0;
+      let destroyed = 0;
+
+      // Driven manually (rather than `yield*`) so each stdout line can be
+      // scanned for the apply summary as it streams through, in addition to
+      // being forwarded to the caller unmodified — mirrors plan()'s approach.
+      const stream = this.spawnAndStream(binaryPath, args, cwd, signal);
+      let next = await stream.next();
+      try {
+        while (!next.done) {
+          const chunk = next.value;
+          if (chunk.stream === 'stdout') {
+            const match = APPLY_SUMMARY_PATTERN.exec(chunk.line);
+            if (match) {
+              added = Number(match[1]);
+              changed = Number(match[2]);
+              destroyed = Number(match[3]);
+            }
+          }
+          yield chunk;
+          next = await stream.next();
+        }
+      } finally {
+        // If apply()'s own generator is terminated early (consumer break /
+        // .return() / .throw()), the `yield chunk` above unwinds through
+        // this finally without `next` ever reaching `done`. Explicitly
+        // finalize the inner generator so its own finally (abort-listener
+        // removal in spawnAndStream) still runs — mirrors what `yield*`
+        // gives `init()` for free, and what `plan()` does above.
+        if (!next.done) {
+          // The forced value here is never observed by any caller (apply()
+          // is already unwinding for its own reasons) — it only needs to be
+          // a well-typed `SpawnStreamResult` so `.return()` can drive
+          // `spawnAndStream`'s try/finally to completion.
+          await stream.return({ aborted: true });
+        }
+      }
+
+      const result = next.value;
+
+      // The process has closed by this point regardless of `aborted` — even
+      // the abort path in `spawnAndStream` only resolves once `close` (or
+      // `error`) has fired — so a run record is always written here. Its own
+      // exitCode is discarded by `spawnAndStream` when aborted (the caller is
+      // expected to treat the run as cancelled rather than pass/fail), so
+      // `null` is recorded in that case.
+      this.writeRunRecord(runId, startedAt, result.aborted ? null : result.exitCode, tfvarsVersionId);
+
+      if (result.aborted) {
+        // Aborted mid-run: the child was killed inside spawnAndStream. End
+        // the generator cleanly rather than surfacing the resulting
+        // error/exit code.
+        return undefined;
+      }
+      if (result.exitCode === 0) {
+        return { runId, added, changed, destroyed };
+      }
+      throw new TerraformApplyError(result.exitCode);
+    } finally {
+      this.workspaceInFlight = null;
+    }
+  }
+
+  /**
+   * Pre-spawn staleness guard for {@link apply}: when `tfvarsVersionId` is
+   * provided and the tfvars source is S3-backed
+   * (`ConfigService.getTfvarsBucket()` resolves one), asserts it still
+   * matches the head (most recent) version of the tfvars object via
+   * `remoteFileStore.listVersions(key)`. A no-op in local-file mode or when
+   * `tfvarsVersionId` is omitted — there's no version history to compare
+   * against.
+   *
+   * @throws {@link StalePlanError} when the head version no longer matches.
+   */
+  private async assertPlanTfvarsNotStale(tfvarsVersionId?: string): Promise<void> {
+    if (!tfvarsVersionId) return;
+
+    const bucket = this.config.getTfvarsBucket();
+    if (!bucket) return;
+
+    const key = basename(this.config.getTfvarsPath());
+    const versions = await this.remoteFileStore.listVersions(key);
+    const head = versions[0];
+    if (!head || head.versionId !== tfvarsVersionId) {
+      throw new StalePlanError(key, bucket, tfvarsVersionId, head?.versionId);
+    }
+  }
+
+  /**
+   * Writes a {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` once
+   * an {@link apply} run's spawned process has closed. Creates the run
+   * directory if it doesn't already exist (defensive — {@link plan} normally
+   * creates it ahead of `apply`, but nothing prevents a caller from applying
+   * a plan file whose directory was cleaned up in between).
+   */
+  private writeRunRecord(
+    runId: string,
+    startedAt: string,
+    exitCode: number | null,
+    tfvarsVersionId: string | undefined,
+  ): void {
+    const runDir = join(this.config.getRunsDir(), runId);
+    mkdirSync(runDir, { recursive: true });
+    const record: TerraformRunRecord = {
+      runId,
+      kind: 'apply',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      exitCode,
+      tfvarsVersionId,
+    };
+    writeFileSync(join(runDir, 'run.json'), JSON.stringify(record, null, 2));
   }
 
   /**
