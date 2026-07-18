@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { readFileSync, writeFileSync, existsSync, cpSync, renameSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -406,7 +406,11 @@ export class ConfigService {
    * run cache" row in `docs/superpowers/specs/2026-05-10-electron-desktop-pivot-design.md`.
    *
    * Resolution order:
-   *  1. `RUNS_DIR_PATH` env var — wins when set.
+   *  1. `RUNS_DIR_PATH` env var — wins when set. Resolved with `resolve()`
+   *     against `process.cwd()` so a relative override doesn't silently
+   *     resolve against `getTerraformDir()`'s cwd (the directory
+   *     `TerraformService` spawns `terraform` from) instead of the
+   *     directory the app was launched from.
    *  2. Electron `userData` directory (`<userData>/runs`) — a writable
    *     per-user location that survives app updates, available whenever this
    *     process is running inside Electron (see {@link readUserDataPath}).
@@ -415,7 +419,7 @@ export class ConfigService {
    */
   getRunsDir(): string {
     const envOverride = this.readEnvRunsDir();
-    if (envOverride) return envOverride;
+    if (envOverride) return resolve(envOverride);
 
     const userData = this.readUserDataPath();
     if (userData) {

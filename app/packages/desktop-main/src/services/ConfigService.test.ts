@@ -559,6 +559,13 @@ describe('ConfigService', () => {
         expect(service.getRunsDir()).toBe('/custom/runs');
       });
 
+      it('should resolve a relative RUNS_DIR_PATH env var against process.cwd() rather than getTerraformDir()', () => {
+        process.env['RUNS_DIR_PATH'] = 'relative/runs';
+        const result = service.getRunsDir();
+        expect(result).toBe(path.resolve('relative/runs'));
+        expect(path.isAbsolute(result)).toBe(true);
+      });
+
       it('should return <userData>/runs when the env var is unset and userData is available', () => {
         vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
         expect(testableService.getRunsDir()).toBe(path.join('/fake/userData', 'runs'));
