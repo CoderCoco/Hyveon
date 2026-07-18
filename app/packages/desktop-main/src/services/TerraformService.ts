@@ -78,6 +78,20 @@ export class TerraformInitError extends Error {
 }
 
 /**
+ * Outcome of {@link TerraformService.spawnAndStream} once the spawned process
+ * has closed (or been aborted). Consumed via `yield*` delegation from
+ * subcommand runners like {@link TerraformService.init}, which decide what a
+ * given exit code means for their own subcommand — `spawnAndStream` itself
+ * has no opinion on success/failure beyond surfacing the raw exit code.
+ */
+type SpawnStreamResult =
+  | { aborted: true }
+  | {
+      aborted: false;
+      exitCode: number | null;
+    };
+
+/**
  * Lazily resolves and caches the system `terraform` binary's absolute path
  * and semver version, and orchestrates `terraform` subcommands against it —
  * starting with {@link TerraformService.init}, the streaming/idempotent
@@ -231,95 +245,131 @@ export class TerraformService {
         `-backend-config=dynamodb_table=${config.dynamodbTable}`,
       ];
 
-      const child = spawn(binaryPath, args, { cwd });
-      const buffers: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
+      const result = yield* this.spawnAndStream(binaryPath, args, cwd, signal);
 
-      const queue: TerraformRunChunk[] = [];
-      let wake: (() => void) | null = null;
-      let closed = false;
-      let closeError: Error | null = null;
-      let exitCode: number | null = null;
-
-      const notify = (): void => {
-        wake?.();
-        wake = null;
-      };
-
-      const push = (chunk: TerraformRunChunk): void => {
-        queue.push(chunk);
-        notify();
-      };
-
-      const handleData = (stream: 'stdout' | 'stderr', data: Buffer | string): void => {
-        buffers[stream] += data.toString();
-        const lines = buffers[stream].split(/\r?\n/);
-        // The last element is either an empty string (data ended on a
-        // newline) or an incomplete trailing line — hold it back until more
-        // data (or `close`) completes it.
-        buffers[stream] = lines.pop() ?? '';
-        for (const line of lines) {
-          push({ stream, line });
-        }
-      };
-
-      child.stdout?.on('data', (data: Buffer) => handleData('stdout', data));
-      child.stderr?.on('data', (data: Buffer) => handleData('stderr', data));
-
-      child.on('error', (err: Error) => {
-        closeError = err;
-        closed = true;
-        notify();
-      });
-
-      child.on('close', (code: number | null) => {
-        for (const stream of ['stdout', 'stderr'] as const) {
-          if (buffers[stream].length > 0) {
-            push({ stream, line: buffers[stream] });
-            buffers[stream] = '';
-          }
-        }
-        exitCode = code;
-        closed = true;
-        notify();
-      });
-
-      const onAbort = (): void => {
-        child.kill();
-      };
-      signal?.addEventListener('abort', onAbort);
-
-      try {
-        while (true) {
-          if (queue.length > 0) {
-            yield queue.shift()!;
-            continue;
-          }
-          if (closed) {
-            break;
-          }
-          await new Promise<void>((resolve) => {
-            wake = resolve;
-          });
-        }
-
-        if (signal?.aborted) {
-          // Aborted mid-run: the child was killed above. End the generator
-          // cleanly rather than surfacing the resulting error/exit code.
-          return;
-        }
-        if (closeError) {
-          throw closeError;
-        }
-        if (exitCode === 0) {
-          this.lastInitConfig = config;
-          return;
-        }
-        throw new TerraformInitError(exitCode);
-      } finally {
-        signal?.removeEventListener('abort', onAbort);
+      if (result.aborted) {
+        // Aborted mid-run: the child was killed inside spawnAndStream. End
+        // the generator cleanly rather than surfacing the resulting
+        // error/exit code.
+        return;
       }
+      if (result.exitCode === 0) {
+        this.lastInitConfig = config;
+        return;
+      }
+      throw new TerraformInitError(result.exitCode);
     } finally {
       this.initInFlight = false;
+    }
+  }
+
+  /**
+   * Spawns `binaryPath` with `args` inside `cwd` and streams its stdout/stderr
+   * as {@link TerraformRunChunk} values line-by-line as the process produces
+   * them, rather than buffering until it exits. Shared by every streaming
+   * subcommand runner — currently just {@link init}, with `plan`/`apply`/
+   * `destroy`/`output` expected to reuse it as they're added — so the
+   * buffering/queue/wake plumbing lives in exactly one place.
+   *
+   * If `signal` fires while the process is still running, the child is
+   * killed and the generator's return value resolves to `{ aborted: true }`
+   * once the process actually closes, rather than surfacing the resulting
+   * error/exit code — callers should end their own generator cleanly in that
+   * case instead of throwing. Otherwise resolves to
+   * `{ aborted: false, exitCode }`; callers decide what a given exit code
+   * means for their own subcommand (e.g. {@link init} maps non-zero to
+   * {@link TerraformInitError}).
+   *
+   * Throws whatever error the spawned process itself raised (e.g. `ENOENT`)
+   * verbatim — that failure mode isn't subcommand-specific, so it isn't left
+   * to the caller to interpret.
+   */
+  private async *spawnAndStream(
+    binaryPath: string,
+    args: string[],
+    cwd: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<TerraformRunChunk, SpawnStreamResult> {
+    const child = spawn(binaryPath, args, { cwd });
+    const buffers: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
+
+    const queue: TerraformRunChunk[] = [];
+    let wake: (() => void) | null = null;
+    let closed = false;
+    let closeError: Error | null = null;
+    let exitCode: number | null = null;
+
+    const notify = (): void => {
+      wake?.();
+      wake = null;
+    };
+
+    const push = (chunk: TerraformRunChunk): void => {
+      queue.push(chunk);
+      notify();
+    };
+
+    const handleData = (stream: 'stdout' | 'stderr', data: Buffer | string): void => {
+      buffers[stream] += data.toString();
+      const lines = buffers[stream].split(/\r?\n/);
+      // The last element is either an empty string (data ended on a
+      // newline) or an incomplete trailing line — hold it back until more
+      // data (or `close`) completes it.
+      buffers[stream] = lines.pop() ?? '';
+      for (const line of lines) {
+        push({ stream, line });
+      }
+    };
+
+    child.stdout?.on('data', (data: Buffer) => handleData('stdout', data));
+    child.stderr?.on('data', (data: Buffer) => handleData('stderr', data));
+
+    child.on('error', (err: Error) => {
+      closeError = err;
+      closed = true;
+      notify();
+    });
+
+    child.on('close', (code: number | null) => {
+      for (const stream of ['stdout', 'stderr'] as const) {
+        if (buffers[stream].length > 0) {
+          push({ stream, line: buffers[stream] });
+          buffers[stream] = '';
+        }
+      }
+      exitCode = code;
+      closed = true;
+      notify();
+    });
+
+    const onAbort = (): void => {
+      child.kill();
+    };
+    signal?.addEventListener('abort', onAbort);
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift()!;
+          continue;
+        }
+        if (closed) {
+          break;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+
+      if (signal?.aborted) {
+        return { aborted: true };
+      }
+      if (closeError) {
+        throw closeError;
+      }
+      return { aborted: false, exitCode };
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
   }
 
