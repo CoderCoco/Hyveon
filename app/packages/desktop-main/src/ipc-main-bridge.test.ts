@@ -134,6 +134,20 @@ describe('registerIpcMainBridges', () => {
     expect(mockIpcMainHandle).toHaveBeenCalledWith('logs.get', expect.any(Function));
   });
 
+  it('should skip "terraform.init" entirely, leaving it to bridge itself', async () => {
+    expect(SELF_BRIDGED_PATTERNS.has('terraform.init')).toBe(true);
+
+    const { transport } = makeTransport(['terraform.init', 'games.list']);
+
+    await registerIpcMainBridges(transport);
+
+    expect(mockIpcMainRemoveHandler).not.toHaveBeenCalledWith('terraform.init');
+    expect(mockIpcMainHandle).not.toHaveBeenCalledWith('terraform.init', expect.any(Function));
+    // The sibling pattern on the same map is still bridged normally.
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith('games.list');
+    expect(mockIpcMainHandle).toHaveBeenCalledWith('games.list', expect.any(Function));
+  });
+
   it('should be a no-op when the transport has no registered handlers', async () => {
     const { transport } = makeTransport([]);
 
