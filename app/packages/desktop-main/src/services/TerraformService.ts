@@ -1,7 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import type { RemoteFileStore } from '@hyveon/shared';
 import { ConfigService } from './ConfigService.js';
+import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -92,12 +97,55 @@ type SpawnStreamResult =
     };
 
 /**
+ * Thrown when the spawned `terraform plan` process exits with a non-zero
+ * status code. Distinct from {@link TerraformNotFoundError} (binary can't be
+ * resolved) and {@link TerraformInitError} (an `init` run's own failure).
+ */
+export class TerraformPlanError extends Error {
+  constructor(public readonly exitCode: number | null) {
+    super(`terraform plan exited with code ${exitCode ?? 'null'}`);
+    this.name = 'TerraformPlanError';
+  }
+}
+
+/**
+ * Outcome of a successful {@link TerraformService.plan} run, resolved via the
+ * async generator's return value once the spawned `terraform plan` process
+ * exits `0` and the run wasn't aborted.
+ */
+export interface TerraformPlanResult {
+  /** The `runId` minted for this run — the parent directory (`<runsDir>/<runId>/`) of both {@link artifactPath} and {@link varFilePath}. */
+  runId: string;
+  /** Absolute path to the persisted `.tfplan` binary artifact — what a future `apply()` passes to `terraform apply <artifactPath>`. */
+  artifactPath: string;
+  /** Absolute path to the pulled tfvars snapshot this plan was run against. */
+  varFilePath: string;
+  /** Number of resources Terraform plans to add. */
+  add: number;
+  /** Number of resources Terraform plans to change in place. */
+  change: number;
+  /** Number of resources Terraform plans to destroy. */
+  destroy: number;
+}
+
+/**
+ * Matches Terraform's plan-summary stdout line, e.g.
+ * `Plan: 3 to add, 1 to change, 0 to destroy.` — scanned for while streaming
+ * {@link TerraformService.plan}'s output to extract the resource change
+ * counts returned in the generator's return value. A "no changes" plan (this
+ * pattern never matches) resolves all three counts to `0`.
+ */
+const PLAN_SUMMARY_PATTERN = /Plan:\s*(\d+) to add,\s*(\d+) to change,\s*(\d+) to destroy\./;
+
+/**
  * Lazily resolves and caches the system `terraform` binary's absolute path
- * and semver version, and orchestrates `terraform` subcommands against it —
- * starting with {@link TerraformService.init}, the streaming/idempotent
- * `terraform init` runner. Later child issues of Epic D add
- * `plan`/`apply`/`destroy`/`output` — see the "Terraform orchestrator"
- * section of the electron-desktop-pivot design spec.
+ * and semver version, and orchestrates `terraform` subcommands against it:
+ * {@link TerraformService.init}, the streaming/idempotent `terraform init`
+ * runner, and {@link TerraformService.plan}, the streaming `terraform plan`
+ * runner that persists its `.tfplan` artifact and the pulled tfvars snapshot
+ * under `ConfigService.getRunsDir()`. Later child issues of Epic D add
+ * `apply`/`destroy`/`output` — see the "Terraform orchestrator" section of
+ * the electron-desktop-pivot design spec.
  *
  * Construction is synchronous and never throws — the binary lookup +
  * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
@@ -127,8 +175,30 @@ export class TerraformService {
    */
   private initInFlight = false;
 
-  /** `config` resolves the terraform working directory (`getTerraformDir()`) for `init`/`plan`/`apply`/`destroy`/`output`. */
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * `true` while a {@link plan} call is actively running (from the moment its
+   * generator body starts executing until it completes or throws). Guards
+   * against a second concurrent `plan()` call racing the first against the
+   * same working directory/runs directory. Tracked separately from
+   * {@link initInFlight} since `init` and `plan` are distinct subcommands.
+   */
+  private planInFlight = false;
+
+  /**
+   * `config` resolves the terraform working directory (`getTerraformDir()`)
+   * and the per-run artifacts directory (`getRunsDir()`) for
+   * `init`/`plan`/`apply`/`destroy`/`output`. `remoteFileStore` is typed
+   * against the cloud-agnostic `RemoteFileStore` contract (not a concrete AWS
+   * class) so this service depends only on the interface; `@Inject(REMOTE_FILE_STORE)`
+   * tells Nest which concrete provider (bound by `CloudProviderModule` for
+   * whichever cloud is active) to resolve for that parameter. Used by
+   * {@link plan} to pull the current tfvars snapshot when S3 tfvars sync is
+   * configured (mirrors `TfvarsService`'s local-vs-S3 read).
+   */
+  constructor(
+    private readonly config: ConfigService,
+    @Inject(REMOTE_FILE_STORE) private readonly remoteFileStore: RemoteFileStore,
+  ) {}
 
   /**
    * Resolves the system `terraform` binary via `which` (POSIX) / `where.exe`
@@ -264,11 +334,204 @@ export class TerraformService {
   }
 
   /**
+   * Runs `terraform plan` with `-input=false`, `-no-color`,
+   * `-out=<runDir>/<runId>.tfplan`, and `-var-file=<pulled tfvars>` flags
+   * inside the Terraform composer root (`ConfigService.getTerraformDir()`),
+   * yielding a {@link TerraformRunChunk} per line of output as the process
+   * produces it — mirrors {@link init}'s streaming shape.
+   *
+   * Before spawning: mints a fresh `runId` (`randomUUID()`), creates its
+   * per-run directory `<runsDir>/<runId>/` (`ConfigService.getRunsDir()`),
+   * and pulls a snapshot of the current tfvars into that directory via
+   * {@link pullVarFile} — so the persisted plan artifact and the exact tfvars
+   * it was planned against are captured together for a later `apply()` to
+   * consume (see the "Terraform run cache" row of the electron-desktop-pivot
+   * design spec).
+   *
+   * `tfvarsVersionId`, when provided and the tfvars source is S3-backed
+   * (`ConfigService.getTfvarsBucket()` resolves one), is enforced as a
+   * pre-spawn staleness assertion: {@link pullVarFile} calls
+   * `remoteFileStore.listVersions(key)` and compares `tfvarsVersionId`
+   * against the head (most recent) entry, throwing a descriptive `Error`
+   * before `terraform` is ever spawned when they no longer match — i.e. the
+   * remote tfvars changed underneath the caller since they last read a
+   * version id (e.g. from `TfvarsService`). `RemoteFileStore` has no
+   * version-specific `get`, so this is a staleness check rather than a
+   * pinned/versioned download; the plan is always run against the current
+   * head object once the check passes. Ignored entirely in local-file mode
+   * or when omitted.
+   *
+   * While streaming, stdout lines are scanned via {@link PLAN_SUMMARY_PATTERN}
+   * for Terraform's summary line (`Plan: N to add, N to change, N to destroy.`)
+   * to extract the resource change counts returned in the generator's return
+   * value alongside `runId`, `artifactPath`, and `varFilePath`. A "no changes"
+   * plan (no summary line present) resolves all three counts to `0`.
+   *
+   * `signal`, if provided, aborts the run the same way {@link init} does: the
+   * spawned child process is killed and the generator ends cleanly — no
+   * further chunks, no throw, and the generator resolves to `undefined`
+   * rather than a {@link TerraformPlanResult} or a thrown
+   * {@link TerraformPlanError}.
+   *
+   * Throws a descriptive `Error` synchronously (on the first `.next()` call)
+   * if another `plan()` call is already in flight on this instance.
+   *
+   * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
+   * resolved, a plain `Error` if the configured tfvars source can't be read
+   * or `tfvarsVersionId` is stale (see {@link pullVarFile}), or
+   * {@link TerraformPlanError} if the spawned process exits with a non-zero
+   * status code (and the run wasn't aborted).
+   */
+  async *plan(
+    tfvarsVersionId?: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<TerraformRunChunk, TerraformPlanResult | undefined> {
+    if (this.planInFlight) {
+      throw new Error(
+        'TerraformService.plan() is already running; wait for it to finish before calling plan() again.',
+      );
+    }
+    this.planInFlight = true;
+    try {
+      if (signal?.aborted) {
+        // Already aborted before we even started resolving the binary path —
+        // end the generator cleanly without spawning anything.
+        return undefined;
+      }
+
+      const binaryPath = await this.getBinaryPath();
+
+      if (signal?.aborted) {
+        // Aborted while resolving the binary path — end cleanly before spawn.
+        return undefined;
+      }
+
+      const runId = randomUUID();
+      const runDir = join(this.config.getRunsDir(), runId);
+      mkdirSync(runDir, { recursive: true });
+
+      const varFilePath = await this.pullVarFile(runDir, tfvarsVersionId);
+
+      if (signal?.aborted) {
+        // Aborted while pulling the tfvars snapshot — end cleanly before spawn.
+        return undefined;
+      }
+
+      const artifactPath = join(runDir, `${runId}.tfplan`);
+      const cwd = this.config.getTerraformDir();
+      const args = [
+        'plan',
+        '-input=false',
+        '-no-color',
+        `-out=${artifactPath}`,
+        `-var-file=${varFilePath}`,
+      ];
+
+      let add = 0;
+      let change = 0;
+      let destroy = 0;
+
+      // Driven manually (rather than `yield*`) so each stdout line can be
+      // scanned for the plan summary as it streams through, in addition to
+      // being forwarded to the caller unmodified.
+      const stream = this.spawnAndStream(binaryPath, args, cwd, signal);
+      let next = await stream.next();
+      while (!next.done) {
+        const chunk = next.value;
+        if (chunk.stream === 'stdout') {
+          const match = PLAN_SUMMARY_PATTERN.exec(chunk.line);
+          if (match) {
+            add = Number(match[1]);
+            change = Number(match[2]);
+            destroy = Number(match[3]);
+          }
+        }
+        yield chunk;
+        next = await stream.next();
+      }
+
+      const result = next.value;
+      if (result.aborted) {
+        // Aborted mid-run: the child was killed inside spawnAndStream. End
+        // the generator cleanly rather than surfacing the resulting
+        // error/exit code.
+        return undefined;
+      }
+      if (result.exitCode === 0) {
+        return { runId, artifactPath, varFilePath, add, change, destroy };
+      }
+      throw new TerraformPlanError(result.exitCode);
+    } finally {
+      this.planInFlight = false;
+    }
+  }
+
+  /**
+   * Pulls the current `terraform.tfvars` — from the S3 tfvars bucket via the
+   * injected `RemoteFileStore` when `ConfigService.getTfvarsBucket()`
+   * resolves one (mirrors `TfvarsService.fetchRawTfvars`'s S3-mode read),
+   * otherwise from the local file at `ConfigService.getTfvarsPath()` — and
+   * writes a snapshot copy into `runDir` under the source file's own
+   * basename, so {@link plan} runs against the exact bytes captured for this
+   * run regardless of concurrent edits to the canonical source afterward.
+   *
+   * In S3 mode, when `tfvarsVersionId` is provided, this first calls
+   * `remoteFileStore.listVersions(key)` and asserts that `tfvarsVersionId`
+   * matches the head (most recent) entry *before* reading the object —
+   * `RemoteFileStore.get` has no version-specific overload, so this is a
+   * staleness assertion rather than a pinned/versioned read: it guards
+   * against planning against tfvars that changed underneath the caller since
+   * they last observed a version id, without actually downloading that
+   * specific historical version.
+   *
+   * @returns The absolute path to the written snapshot, which {@link plan}
+   *   passes to `terraform plan` as `-var-file=<path>`.
+   * @throws A descriptive `Error` when the configured source (S3 object or
+   *   local file) doesn't exist, or when `tfvarsVersionId` no longer matches
+   *   the head version of the S3 object — a `plan()` run with no tfvars to
+   *   plan against, or against tfvars known to be stale, isn't meaningful.
+   */
+  private async pullVarFile(runDir: string, tfvarsVersionId?: string): Promise<string> {
+    const bucket = this.config.getTfvarsBucket();
+    const sourcePath = this.config.getTfvarsPath();
+    const destPath = join(runDir, basename(sourcePath));
+
+    if (bucket) {
+      const key = basename(sourcePath);
+
+      if (tfvarsVersionId) {
+        const versions = await this.remoteFileStore.listVersions(key);
+        const head = versions[0];
+        if (!head || head.versionId !== tfvarsVersionId) {
+          throw new Error(
+            `tfvars object "${key}" in S3 bucket "${bucket}" is stale: expected version ` +
+              `"${tfvarsVersionId}" to be the current head, but the head version is ` +
+              `${head ? `"${head.versionId}"` : 'missing'}. Refresh the tfvars before planning.`,
+          );
+        }
+      }
+
+      const obj = await this.remoteFileStore.get(key);
+      if (!obj) {
+        throw new Error(`tfvars object "${key}" not found in S3 bucket "${bucket}".`);
+      }
+      writeFileSync(destPath, obj.body);
+      return destPath;
+    }
+
+    if (!existsSync(sourcePath)) {
+      throw new Error(`tfvars file not found at "${sourcePath}".`);
+    }
+    copyFileSync(sourcePath, destPath);
+    return destPath;
+  }
+
+  /**
    * Spawns `binaryPath` with `args` inside `cwd` and streams its stdout/stderr
    * as {@link TerraformRunChunk} values line-by-line as the process produces
    * them, rather than buffering until it exits. Shared by every streaming
-   * subcommand runner — currently just {@link init}, with `plan`/`apply`/
-   * `destroy`/`output` expected to reuse it as they're added — so the
+   * subcommand runner — currently {@link init} and {@link plan}, with
+   * `apply`/`destroy`/`output` expected to reuse it as they're added — so the
    * buffering/queue/wake plumbing lives in exactly one place.
    *
    * If `signal` fires while the process is still running, the child is

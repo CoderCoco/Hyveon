@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from './config.module.js';
+import { CloudProviderModule } from './cloud-provider.module.js';
 import { TerraformService } from '../services/TerraformService.js';
 
 /**
@@ -12,16 +13,21 @@ import { TerraformService } from '../services/TerraformService.js';
  * even on machines without `terraform` on PATH.
  *
  * Imports `ConfigModule` because `TerraformService` takes `ConfigService` as
- * a constructor dependency (the seam later terraform orchestration methods
- * will use to resolve the working directory) — plain Nest DI, no factory
- * needed since neither service does async work at construction time.
+ * a constructor dependency (used to resolve the working directory and the
+ * per-run artifacts directory) and `CloudProviderModule` for the
+ * `REMOTE_FILE_STORE` token — `TerraformService.plan()` pulls the current
+ * tfvars snapshot from it in S3 mode, mirroring `TfvarsModule`'s wiring —
+ * both re-exported alongside `TerraformService` so any consumer that only
+ * needs `TerraformModule` gets the full dependency chain without also
+ * importing `AwsModule`. Plain Nest DI, no async factory needed since none of
+ * these providers do async work at construction time.
  *
  * Imported by `AppModule` alongside `TerraformController`, which bridges
  * `TerraformService.init`'s async-generator output onto Electron IPC.
  */
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, CloudProviderModule],
   providers: [TerraformService],
-  exports: [TerraformService],
+  exports: [ConfigModule, CloudProviderModule, TerraformService],
 })
 export class TerraformModule {}
