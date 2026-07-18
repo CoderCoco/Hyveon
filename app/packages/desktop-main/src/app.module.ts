@@ -22,11 +22,14 @@ import { DiagnosticsController } from './controllers/diagnostics.controller.js';
 import { DiagnosticsHttpController } from './controllers/diagnostics-http.controller.js';
 import { DriftController } from './controllers/drift.controller.js';
 import { DriftHttpController } from './controllers/drift-http.controller.js';
+import { AuditController } from './controllers/audit.controller.js';
+import { AuditHttpController } from './controllers/audit-http.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { DriftService } from './services/DriftService.js';
 import { GamesWriteService } from './services/GamesWriteService.js';
 import { SafeStorageService } from './services/SafeStorageService.js';
 import { ElectronStoreService } from './services/ElectronStoreService.js';
+import { AuditService } from './services/AuditService.js';
 
 /**
  * Root Nest module. Wires the feature modules (`AwsModule`, `DiscordModule`,
@@ -52,6 +55,8 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     DiagnosticsHttpController,
     DriftController,
     DriftHttpController,
+    AuditController,
+    AuditHttpController,
   ],
   providers: [
     {
@@ -70,6 +75,7 @@ import { ElectronStoreService } from './services/ElectronStoreService.js';
     GamesWriteService,
     SafeStorageService,
     ElectronStoreService,
+    AuditService,
   ],
 })
 export class AppModule {}

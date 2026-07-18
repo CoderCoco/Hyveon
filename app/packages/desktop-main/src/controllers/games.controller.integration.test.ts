@@ -34,6 +34,7 @@ import { TfvarsService } from '../services/TfvarsService.js';
 import { GamesWriteService } from '../services/GamesWriteService.js';
 import type { ConfigService, TfOutputs } from '../services/ConfigService.js';
 import type { EcsService } from '../services/EcsService.js';
+import type { AuditService } from '../services/AuditService.js';
 
 /** Strongly-typed mock handles for the `fs` module. */
 const mockExists = vi.mocked(existsSync);
@@ -122,6 +123,11 @@ function makeConfig(gameNames: string[], bucket: string | null = null): ConfigSe
 /** Minimal `EcsService` stub — none of the specs in this file call it, but the constructor requires it. */
 function makeEcs(): EcsService {
   return {} as EcsService;
+}
+
+/** Minimal `AuditService` stub — none of the specs in this file assert on it, but `GamesWriteService`'s constructor requires it. */
+function makeAudit(): AuditService {
+  return { record: vi.fn().mockResolvedValue(undefined) } as Partial<AuditService> as AuditService;
 }
 
 /** Valid, structurally-distinct config used by the `games.create` specs below (a different game from `ark`). */
@@ -228,7 +234,7 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
-    const gamesWrite = new GamesWriteService(config, tfvars);
+    const gamesWrite = new GamesWriteService(config, tfvars, makeAudit());
     const controller = new GamesController(config, makeEcs(), tfvars, gamesWrite);
 
     const createResult = await controller.createGame({ name: 'minecraft', config: VALID_MINECRAFT_CONFIG });
@@ -278,7 +284,7 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
-    const gamesWrite = new GamesWriteService(config, tfvars);
+    const gamesWrite = new GamesWriteService(config, tfvars, makeAudit());
     const controller = new GamesController(config, makeEcs(), tfvars, gamesWrite);
 
     const updateResult = await controller.updateGame({ name: 'ark', config: UPDATED_ARK_CONFIG });
@@ -311,7 +317,7 @@ describe('GamesController + GamesWriteService write-then-list round trip', () =>
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
-    const gamesWrite = new GamesWriteService(config, tfvars);
+    const gamesWrite = new GamesWriteService(config, tfvars, makeAudit());
     const controller = new GamesController(config, makeEcs(), tfvars, gamesWrite);
 
     const deleteResult = await controller.deleteGame({ name: 'ark' });
@@ -349,7 +355,7 @@ describe('GamesController + GamesWriteService games.create failure paths', () =>
 
     const config = makeConfig([]);
     const tfvars = new TfvarsService(config, makeRemoteFileStore());
-    const gamesWrite = new GamesWriteService(config, tfvars);
+    const gamesWrite = new GamesWriteService(config, tfvars, makeAudit());
     const controller = new GamesController(config, makeEcs(), tfvars, gamesWrite);
 
     const result = await controller.createGame({
@@ -381,7 +387,7 @@ describe('GamesController + GamesWriteService games.create failure paths', () =>
 
     const config = makeConfig([], 'my-tfvars-bucket');
     const tfvars = new TfvarsService(config, remoteFileStore);
-    const gamesWrite = new GamesWriteService(config, tfvars);
+    const gamesWrite = new GamesWriteService(config, tfvars, makeAudit());
     const controller = new GamesController(config, makeEcs(), tfvars, gamesWrite);
 
     const result = await controller.createGame({

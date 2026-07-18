@@ -115,7 +115,11 @@ export class AwsRemoteFileStore implements RemoteFileStore {
    * @throws {@link RemoteFileConflictError} when `opts.ifMatch` is provided but no longer
    *   matches the etag currently stored at `path`.
    */
-  async put(path: string, body: Uint8Array, opts?: { ifMatch?: string }): Promise<{ etag: string }> {
+  async put(
+    path: string,
+    body: Uint8Array,
+    opts?: { ifMatch?: string },
+  ): Promise<{ etag: string; versionId?: string }> {
     try {
       const resp = await this.getClient().send(
         new PutObjectCommand({
@@ -128,7 +132,7 @@ export class AwsRemoteFileStore implements RemoteFileStore {
       if (!resp.ETag) {
         throw new Error(`S3 PutObject for path "${path}" did not return an ETag.`);
       }
-      return { etag: unquoteEtag(resp.ETag) };
+      return { etag: unquoteEtag(resp.ETag), versionId: resp.VersionId };
     } catch (err) {
       if (
         err instanceof S3ServiceException &&

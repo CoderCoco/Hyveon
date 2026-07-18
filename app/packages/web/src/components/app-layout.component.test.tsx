@@ -94,6 +94,19 @@ describe('AppLayout — skip link and nav landmarks', () => {
     expect(screen.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
   });
+
+  it('should render an Audit nav link and highlight it on /audit', () => {
+    render(
+      <PollingProvider>
+        <MemoryRouter initialEntries={['/audit']}>
+          <AppLayout>content</AppLayout>
+        </MemoryRouter>
+      </PollingProvider>,
+    );
+
+    expect(screen.getByRole('link', { name: 'Audit' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
+  });
 });
 
 describe('AppLayout — LiveIndicator', () => {

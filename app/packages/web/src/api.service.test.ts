@@ -59,6 +59,9 @@ function makeGsdMock() {
     drift: {
       get: vi.fn().mockResolvedValue({ entries: [] }),
     },
+    audit: {
+      list: vi.fn().mockResolvedValue({ entries: [] }),
+    },
   };
 }
 
@@ -240,6 +243,36 @@ describe('IPC bridge delegation', () => {
     gsd.drift.get.mockResolvedValueOnce(report);
     await expect(api.drift()).resolves.toEqual(report);
     expect(gsd.drift.get).toHaveBeenCalledOnce();
+  });
+
+  it('should delegate api.audit() to window.gsd.audit.list() with the opts', async () => {
+    const opts = { limit: 10, before: '2026-01-01T00:00:00.000Z#01H' };
+    await api.audit(opts);
+    expect(gsd.audit.list).toHaveBeenCalledWith(opts);
+  });
+
+  it('should delegate api.audit() to window.gsd.audit.list() with undefined when opts is omitted', async () => {
+    await api.audit();
+    expect(gsd.audit.list).toHaveBeenCalledWith(undefined);
+  });
+
+  it('should resolve api.audit() with the bridge audit.list() result', async () => {
+    const page = {
+      entries: [
+        {
+          sk: '2026-01-01T00:00:00.000Z#01H',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          actor: 'operator',
+          action: 'edit' as const,
+          game: 'minecraft',
+          before: null,
+          after: null,
+        },
+      ],
+      nextBefore: '2025-12-31T00:00:00.000Z#01G',
+    };
+    gsd.audit.list.mockResolvedValueOnce(page);
+    await expect(api.audit()).resolves.toEqual(page);
   });
 
   it('should return the payload resolved by the bridge', async () => {

@@ -163,6 +163,14 @@ variable "discord_public_key" {
   sensitive   = true
 }
 
+# ── Audit log ────────────────────────────────────────────────────────────────
+
+variable "audit_table_name" {
+  description = "Name of the DynamoDB audit log table. Defaults to \"$${project_name}-audit\" when empty."
+  type        = string
+  default     = ""
+}
+
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 variable "tfvars_bucket_name" {

@@ -38,6 +38,10 @@ watchdog_min_packets      = 100
 # discord_bot_token      = "MTIz...xyz"
 # discord_public_key     = "0123abc..."
 
+# Name of the DynamoDB audit log table. Optional override — defaults to
+# "{project_name}-audit" when unset.
+# audit_table_name = "hyveon-audit"
+
 # Base allowlist / admins (optional — permanent floor managed by Terraform).
 # Guilds and admin user/role IDs listed here are written to a separate
 # BASE#discord DynamoDB row on every `terraform apply`. The management UI

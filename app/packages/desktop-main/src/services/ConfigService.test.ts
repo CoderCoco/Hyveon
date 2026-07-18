@@ -161,6 +161,24 @@ describe('ConfigService', () => {
       mockRead.mockReturnValue('not-json{');
       expect(service.getTfOutputs()).toBeNull();
     });
+
+    it('should parse audit_table_name when the output is present', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(
+        makeState({
+          audit_table_name: { value: 'hyveon-audit' },
+        }),
+      );
+
+      expect(service.getTfOutputs()!.audit_table_name).toBe('hyveon-audit');
+    });
+
+    it('should default audit_table_name to an empty string when the output is missing', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(makeState({ aws_region: { value: 'us-west-2' } }));
+
+      expect(service.getTfOutputs()!.audit_table_name).toBe('');
+    });
   });
 
   describe('getRegion', () => {

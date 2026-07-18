@@ -129,6 +129,26 @@ describe('AwsRemoteFileStore', () => {
       expect(input.IfMatch).toBeUndefined();
     });
 
+    it('should return the versionId when S3 supplies one', async () => {
+      s3Mock.on(PutObjectCommand).resolves({ ETag: '"etag-1"', VersionId: 'v1' });
+
+      const store = makeStore();
+      await expect(store.put('foo.txt', new Uint8Array([1, 2, 3]))).resolves.toEqual({
+        etag: 'etag-1',
+        versionId: 'v1',
+      });
+    });
+
+    it('should return undefined versionId when S3 does not supply one', async () => {
+      s3Mock.on(PutObjectCommand).resolves({ ETag: '"etag-1"' });
+
+      const store = makeStore();
+      await expect(store.put('foo.txt', new Uint8Array([1, 2, 3]))).resolves.toEqual({
+        etag: 'etag-1',
+        versionId: undefined,
+      });
+    });
+
     it('should send IfMatch when opts.ifMatch is provided', async () => {
       s3Mock.on(PutObjectCommand).resolves({ ETag: '"etag-2"' });
 

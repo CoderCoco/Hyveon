@@ -9,6 +9,7 @@ import type {
   DiscordConfigRedacted,
   GameListEntry,
   DriftReport,
+  AuditPageResult,
 } from '@/api.js';
 import {
   ENV_DATA,
@@ -18,7 +19,7 @@ import {
   CONFIGURED_DISCORD_CONFIG,
   makeActualCosts,
 } from './game-data.js';
-import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
+import { AppLayout, DashboardPage, CostsPage, LogsPage, SettingsPage, GamesPage, AuditPage } from '../pages/index.js';
 import { installGsdHttpBridge } from './gsd-http-bridge.js';
 
 export type {
@@ -30,6 +31,7 @@ export type {
   DiscordConfigRedacted,
   GameListEntry,
   DriftReport,
+  AuditPageResult,
 };
 export {
   ENV_DATA,
@@ -48,7 +50,7 @@ export {
   VALID_USER_ID,
   SAMPLE_LOG_LINES,
 } from './game-data.js';
-export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage, GamesPage } from '../pages/index.js';
+export { AppLayout, DashboardPage, CostsPage, DiscordPage, LogsPage, SettingsPage, GamesPage, AuditPage } from '../pages/index.js';
 
 /** Per-spec overrides for the default `/api/*` stubs registered by `stubApis`. */
 export interface StubOptions {
@@ -108,6 +110,15 @@ export interface StubOptions {
    * that yields nothing, so specs drive off the seeded snapshot only.
    */
   logLines?: Record<string, string[]>;
+  /**
+   * Response(s) returned by `GET /api/audit` (the `audit.list` IPC channel),
+   * consumed by the `/audit` page (issue #102). Either a fixed
+   * `AuditPageResult` returned for every call, or a builder receiving the
+   * parsed `limit`/`before` query params so a spec can return a different
+   * page per cursor (e.g. the first page's `nextBefore` becomes the second
+   * page's `before`). Defaults to an empty page (`{ entries: [] }`).
+   */
+  audit?: AuditPageResult | ((opts: { limit?: number; before?: string }) => AuditPageResult);
 }
 
 /**
@@ -140,6 +151,12 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
       : opts.actualCosts !== undefined
         ? () => opts.actualCosts as ActualCosts
         : (days) => makeActualCosts(days);
+  const auditFn: (opts: { limit?: number; before?: string }) => AuditPageResult =
+    typeof opts.audit === 'function'
+      ? opts.audit
+      : opts.audit !== undefined
+        ? () => opts.audit as AuditPageResult
+        : () => ({ entries: [] });
 
   await page.route('**/api/**', (route) =>
     route.fulfill({ status: 404, json: { error: 'not stubbed' } })
@@ -180,6 +197,17 @@ export async function stubApis(page: Page, opts: StubOptions = {}): Promise<void
   });
 
   await page.route('**/api/drift', (route) => route.fulfill({ json: drift }));
+
+  // Trailing `*` matches the `?limit=&before=` query string, same as the
+  // costs/actual route above.
+  await page.route('**/api/audit*', (route) => {
+    const url = new URL(route.request().url());
+    const limitRaw = url.searchParams.get('limit');
+    const before = url.searchParams.get('before') ?? undefined;
+    return route.fulfill({
+      json: auditFn({ limit: limitRaw ? Number(limitRaw) : undefined, before }),
+    });
+  });
 
   await page.route('**/api/start/*', (route) => route.fulfill({ json: startResult }));
 
@@ -254,6 +282,8 @@ type E2EFixtures = {
   settings: SettingsPage;
   /** Page object for the `/games` and `/games/:name` routes. */
   games: GamesPage;
+  /** Page object for the `/audit` route. */
+  audit: AuditPage;
   /** Page object for the persistent nav shell (sidebar + top bar). */
   layout: AppLayout;
 };
@@ -269,6 +299,9 @@ export const test = base.extend<E2EFixtures>({
   },
   logs: async ({ page }, use) => {
     await use(new LogsPage(page));
+  },
+  audit: async ({ page }, use) => {
+    await use(new AuditPage(page));
   },
   settings: async ({ page }, use) => {
     await use(new SettingsPage(page));

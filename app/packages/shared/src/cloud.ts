@@ -1,3 +1,5 @@
+import type { AuditEntry, AuditPageResult } from './audit.js';
+
 /** Options for launching a game workload. Intentionally open/opaque for v1; implementations may accept provider-specific keys or refine this via intersection. */
 export interface StartOpts {
   [key: string]: unknown;
@@ -118,9 +120,14 @@ export interface RemoteFileStore {
    *   only succeeds when the current stored etag matches this value (optimistic
    *   concurrency guard).
    * @returns An object containing the provider-assigned etag for the newly
-   *   stored version.
+   *   stored version, plus an optional `versionId` when the underlying store
+   *   supports object versioning (e.g. a versioned S3 bucket) and returns one.
    */
-  put(path: string, body: Uint8Array, opts?: { ifMatch?: string }): Promise<{ etag: string }>;
+  put(
+    path: string,
+    body: Uint8Array,
+    opts?: { ifMatch?: string },
+  ): Promise<{ etag: string; versionId?: string }>;
 
   /**
    * Lists all available versions of a file in reverse-chronological order.
@@ -179,4 +186,31 @@ export interface DiscordEventReceiver {
    *   endpoint has been configured or provisioned yet.
    */
   getInteractionEndpointUrl(): Promise<string | null>;
+}
+
+/**
+ * Cloud-agnostic interface for appending to and paginating a game-server
+ * mutation audit log. Implementations may target AWS DynamoDB, Azure Table
+ * Storage, GCP Firestore, or any other backend — callers depend only on this
+ * contract. No `@aws-sdk/*` shapes appear in this interface or its
+ * parameter/return types.
+ */
+export interface AuditLogStore {
+  /**
+   * Appends a single audit entry to the log.
+   *
+   * @param entry - The entry to persist, including its `sk` (see `buildAuditSk`).
+   */
+  putEntry(entry: AuditEntry): Promise<void>;
+
+  /**
+   * Lists audit entries newest-first, optionally paginated.
+   *
+   * @param limit  - The maximum number of entries to return.
+   * @param before - When provided, only entries older than this cursor
+   *   (an {@link AuditEntry.sk} value, typically taken from a prior page's
+   *   `nextBefore`) are returned.
+   * @returns The requested page of entries plus a cursor for the next page.
+   */
+  listEntries(limit: number, before?: string): Promise<AuditPageResult>;
 }

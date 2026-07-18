@@ -147,6 +147,25 @@ describe('preload dispatcher', () => {
       expect(result).toEqual({ entries: [{ game: 'minecraft', kind: 'pending_create' }] });
     });
 
+    it('should forward audit.list with the opts argument to ipcRenderer.invoke', async () => {
+      const page = { entries: [{ sk: '2026-07-17T00:00:00.000Z#01J', timestamp: '2026-07-17T00:00:00.000Z', actor: 'user@example.com', action: 'add', game: 'minecraft', before: null, after: {} }] };
+      ipcInvoke.mockResolvedValue(page);
+      const audit = bridge['audit'] as { list: (opts?: { limit?: number; before?: string }) => Promise<unknown> };
+      const opts = { limit: 20, before: 'cursor-value' };
+      const result = await audit.list(opts);
+
+      expect(ipcInvoke).toHaveBeenCalledWith('audit.list', opts);
+      expect(result).toEqual(page);
+    });
+
+    it('should forward audit.list with no arguments when opts is omitted', async () => {
+      ipcInvoke.mockResolvedValue({ entries: [] });
+      const audit = bridge['audit'] as { list: (opts?: { limit?: number; before?: string }) => Promise<unknown> };
+      await audit.list();
+
+      expect(ipcInvoke).toHaveBeenCalledWith('audit.list', undefined);
+    });
+
     it('should forward games.create with a single payload object to ipcRenderer.invoke', async () => {
       const writeResult = { ok: true, games: [] };
       ipcInvoke.mockResolvedValue(writeResult);

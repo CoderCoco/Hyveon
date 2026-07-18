@@ -5,3 +5,4 @@ export { DiscordPage } from './DiscordPage.js';
 export { LogsPage, type LogLevelLabel } from './LogsPage.js';
 export { SettingsPage } from './SettingsPage.js';
 export { GamesPage, type DriftLabel } from './GamesPage.js';
+export { AuditPage } from './AuditPage.js';

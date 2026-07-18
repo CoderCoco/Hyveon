@@ -1,25 +1,35 @@
 import 'reflect-metadata';
 import { describe, it, expect, afterEach } from 'vitest';
-import { AwsSecretsStore, AwsRemoteFileStore, AwsDiscordEventReceiver, AwsCloudProvider } from '@hyveon/cloud-aws';
+import {
+  AwsSecretsStore,
+  AwsRemoteFileStore,
+  AwsDiscordEventReceiver,
+  AwsCloudProvider,
+  AwsAuditLogStore,
+} from '@hyveon/cloud-aws';
 import type {
   CloudProvider,
   SecretsStore,
   RemoteFileStore,
   DiscordEventReceiver,
+  AuditLogStore,
   StartOpts,
   WorkloadHandle,
   WorkloadStatus,
   LogChunk,
   CostBreakdown,
   DateRange,
+  AuditEntry,
+  AuditPageResult,
 } from '@hyveon/shared';
 import {
   CLOUD_BINDINGS,
   resolveCloudBindings,
   resolveTfvarsFileStoreConfig,
+  resolveAuditLogStoreConfig,
   type CloudBindings,
 } from './cloud-provider.module.js';
-import type { ConfigService, ActiveCloud } from '../services/ConfigService.js';
+import type { ConfigService, ActiveCloud, TfOutputs } from '../services/ConfigService.js';
 
 /**
  * Build a minimal `ConfigService` stub reporting the given cloud as active.
@@ -27,11 +37,16 @@ import type { ConfigService, ActiveCloud } from '../services/ConfigService.js';
  * to be stubbed. The cast lets tests exercise an unregistered/fake cloud
  * value without widening `ActiveCloud` itself.
  */
-function makeConfig(activeCloud: ActiveCloud, tfvarsBucket: string | null = 'test-tfvars-bucket'): ConfigService {
+function makeConfig(
+  activeCloud: ActiveCloud,
+  tfvarsBucket: string | null = 'test-tfvars-bucket',
+  auditTableName = 'test-audit-table',
+): ConfigService {
   const stub: Partial<ConfigService> = {
     getActiveCloud: () => activeCloud,
     getRegion: () => 'us-east-1',
     getTfvarsBucket: () => tfvarsBucket,
+    getTfOutputs: () => ({ audit_table_name: auditTableName } as TfOutputs),
   };
   return stub as ConfigService;
 }
@@ -99,6 +114,16 @@ class FakeDiscordEventReceiver implements DiscordEventReceiver {
   }
 }
 
+/** Hand-rolled fake `AuditLogStore` — see {@link FakeCloudProvider}. */
+class FakeAuditLogStore implements AuditLogStore {
+  putEntry(_entry: AuditEntry): Promise<void> {
+    throw new Error('not implemented in fake');
+  }
+  listEntries(_limit: number, _before?: string): Promise<AuditPageResult> {
+    throw new Error('not implemented in fake');
+  }
+}
+
 /** Registered `CLOUD_BINDINGS` key used to exercise the fake-cloud routing case. */
 const FAKE_CLOUD = 'fake-test-cloud';
 
@@ -108,6 +133,7 @@ const FAKE_BINDINGS: CloudBindings = {
   secretsStore: () => new FakeSecretsStore(),
   remoteFileStore: () => new FakeRemoteFileStore(),
   discordReceiver: () => new FakeDiscordEventReceiver(),
+  auditLogStore: () => new FakeAuditLogStore(),
 };
 
 describe('resolveCloudBindings', () => {
@@ -154,6 +180,25 @@ describe('resolveCloudBindings', () => {
       const bindings = resolveCloudBindings(config);
       expect(bindings.discordReceiver(config)).toBeInstanceOf(AwsDiscordEventReceiver);
     });
+
+    it('should produce an AwsAuditLogStore from the aws auditLogStore factory', () => {
+      const config = makeConfig('aws');
+      const bindings = resolveCloudBindings(config);
+      expect(bindings.auditLogStore(config)).toBeInstanceOf(AwsAuditLogStore);
+    });
+
+    it('should resolve the audit log store table from ConfigService.getTfOutputs().audit_table_name and region from getRegion()', () => {
+      const config = makeConfig('aws', 'test-tfvars-bucket', 'my-audit-table');
+      expect(resolveAuditLogStoreConfig(config)).toEqual({ tableName: 'my-audit-table', region: 'us-east-1' });
+    });
+
+    it('should fall back to an empty table name when getTfOutputs() reports no audit table name', () => {
+      const config: ConfigService = {
+        ...makeConfig('aws'),
+        getTfOutputs: () => null,
+      } as ConfigService;
+      expect(resolveAuditLogStoreConfig(config)).toEqual({ tableName: '', region: 'us-east-1' });
+    });
   });
 
   describe('fake-impl routing', () => {
@@ -168,6 +213,7 @@ describe('resolveCloudBindings', () => {
       expect(bindings.secretsStore(config)).toBeInstanceOf(FakeSecretsStore);
       expect(bindings.remoteFileStore(config)).toBeInstanceOf(FakeRemoteFileStore);
       expect(bindings.discordReceiver(config)).toBeInstanceOf(FakeDiscordEventReceiver);
+      expect(bindings.auditLogStore(config)).toBeInstanceOf(FakeAuditLogStore);
     });
 
     it('should not resolve to the aws bindings once a fake cloud is registered', () => {

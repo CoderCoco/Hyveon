@@ -436,9 +436,11 @@ terraform apply
 
 `apply` takes 5–10 minutes end-to-end. It creates the VPC, two public
 subnets, an ECS cluster, one task definition + EFS access point +
-CloudWatch log group **per game**, the four Lambdas, a DynamoDB table, two
-Secrets Manager secrets, the EventBridge rule + schedule, and (if any game
-has `https = true`) an ALB with an ACM certificate.
+CloudWatch log group **per game**, the four Lambdas, two DynamoDB tables
+(Discord config/state and the audit log — see
+[step 7](#7-optional-wire-up-the-discord-bot)), two Secrets Manager secrets,
+the EventBridge rule + schedule, and (if any game has `https = true`) an ALB
+with an ACM certificate.
 
 When it finishes, note two outputs:
 
@@ -549,9 +551,17 @@ into the installer.
 
 ## 7. (Optional) Wire up the Discord bot
 
-The serverless bot is two Lambdas, one DynamoDB table, and two Secrets
-Manager secrets — all created by `terraform apply` in step 5. You now
-connect it to a Discord application.
+The serverless bot is two Lambdas, one DynamoDB table (`discord_table_name`,
+CONFIG + PENDING rows), and two Secrets Manager secrets — all created by
+`terraform apply` in step 5. You now connect it to a Discord application.
+
+> **A second DynamoDB table, `audit_table_name`, is created unconditionally**
+> in the same `terraform apply` — it is not part of the Discord bot and
+> doesn't require any of the setup below. It records structured audit log
+> entries (who did what and when) for game-server configuration changes
+> (add/edit/remove) made via the management app's UI. It does not record
+> Discord bot actions, server start/stop, or credential edits. See
+> [`audit_table_name`](/components/terraform#variables) to override its name.
 
 1. **Create a Discord application** at
    [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** →

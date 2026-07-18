@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Menu,
   X,
+  History,
 } from 'lucide-react';
 
 interface NavItem {
@@ -36,6 +37,7 @@ const monitoringItems: NavItem[] = [
 const configItems: NavItem[] = [
   { to: '/games', icon: Gamepad2, label: 'Games' },
   { to: '/discord', icon: MessageSquare, label: 'Discord' },
+  { to: '/audit', icon: History, label: 'Audit' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

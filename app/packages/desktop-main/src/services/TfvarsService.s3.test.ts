@@ -19,7 +19,7 @@ import 'reflect-metadata';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports -- test-only: exercises the real AwsRemoteFileStore against a mocked S3Client (see file header).
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { AwsRemoteFileStore } from '@hyveon/cloud-aws';
 import { TfvarsService } from './TfvarsService.js';
 import type { ConfigService } from './ConfigService.js';
@@ -118,5 +118,32 @@ describe('TfvarsService (S3 path, real AwsRemoteFileStore)', () => {
 
     await expect(service.getGameServers()).resolves.toEqual([]);
     expect(s3Mock.commandCalls(GetObjectCommand)).toHaveLength(1);
+  });
+
+  it("should propagate the S3 PutObjectCommand response's VersionId through updateGameServer's return value", async () => {
+    s3Mock.on(GetObjectCommand).resolves({
+      Body: fakeBody(new TextEncoder().encode(FIXTURE_TFVARS)) as never,
+      ETag: '"etag-1"',
+    });
+    s3Mock.on(PutObjectCommand).resolves({
+      ETag: '"etag-2"',
+      VersionId: 'v-abc123',
+    });
+
+    const remoteFileStore = new AwsRemoteFileStore(() => ({ bucket: 'my-tfvars-bucket' }));
+    const service = new TfvarsService(
+      makeConfig({ bucket: 'my-tfvars-bucket', path: '/repo/terraform/terraform.tfvars' }),
+      remoteFileStore,
+    );
+
+    const result = await service.updateGameServer('palworld', {
+      image: 'thijsvanloef/palworld-server-docker:v2',
+      cpu: 4096,
+      memory: 16384,
+      ports: [{ container: 8211, protocol: 'udp' }],
+      volumes: [{ name: 'saves', container_path: '/palworld' }],
+    });
+
+    expect(result).toEqual({ etag: 'etag-2', versionId: 'v-abc123' });
   });
 });

@@ -75,6 +75,15 @@ export function installGsdHttpBridge(): void {
     drift: {
       get: () => call('/api/drift'),
     },
+    audit: {
+      list: (opts?: { limit?: number; before?: string }) => {
+        const params = new URLSearchParams();
+        if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+        if (opts?.before !== undefined) params.set('before', opts.before);
+        const qs = params.toString();
+        return call(`/api/audit${qs ? `?${qs}` : ''}`);
+      },
+    },
     diagnostics: {
       tail: () => call('/api/diagnostics/tail'),
       path: () => call('/api/diagnostics/path'),
