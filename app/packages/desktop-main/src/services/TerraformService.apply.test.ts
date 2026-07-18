@@ -583,7 +583,7 @@ describe('TerraformService.apply run.json persistence', () => {
     expect(typeof record.completedAt).toBe('string');
   });
 
-  it('should write a run.json record with a null exitCode when the process exits non-zero', async () => {
+  it('should write a run.json record carrying the actual exit code when the process exits non-zero', async () => {
     queueSuccessfulResolution();
     const child = new FakeChildProcess();
     queueSpawn(child);
