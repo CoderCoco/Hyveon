@@ -6,6 +6,7 @@ vi.mock('fs', () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   existsSync: vi.fn(),
+  cpSync: vi.fn(),
 }));
 
 vi.mock('../logger.js', () => ({
@@ -17,13 +18,33 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, cpSync } from 'fs';
 import { ConfigService } from './ConfigService.js';
 
 /** Strongly-typed mock handles for the `fs` module. */
 const mockExists = vi.mocked(existsSync);
 const mockRead = vi.mocked(readFileSync);
 const mockWrite = vi.mocked(writeFileSync);
+const mockCp = vi.mocked(cpSync);
+
+/**
+ * Test-only subclass that re-exposes `ConfigService`'s protected
+ * environment-probing methods as public members so `vi.spyOn` can target
+ * them directly, without resorting to `as unknown as` double assertions.
+ */
+class TestableConfigService extends ConfigService {
+  public override readIsPackaged(): boolean {
+    return super.readIsPackaged();
+  }
+
+  public override readResourcesPath(): string | undefined {
+    return super.readResourcesPath();
+  }
+
+  public override readUserDataPath(): string | null {
+    return super.readUserDataPath();
+  }
+}
 
 /**
  * Build a Terraform state file payload from an `outputs` map.
@@ -332,6 +353,13 @@ describe('ConfigService', () => {
   });
 
   describe('path resolution', () => {
+    /** Subclass instance exposing protected internals for direct `vi.spyOn` stubbing. */
+    let testableService: TestableConfigService;
+
+    beforeEach(() => {
+      testableService = new TestableConfigService();
+    });
+
     afterEach(() => {
       vi.restoreAllMocks();
       delete process.env['TF_STATE_PATH'];
@@ -342,17 +370,16 @@ describe('ConfigService', () => {
     });
 
     it('should return packaged tfstate path when readIsPackaged returns true', () => {
-      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
-      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
-      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
-      expect(service.getTfStatePath()).toBe(
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      expect(testableService.getTfStatePath()).toBe(
         path.join('/fake/resources', 'terraform', 'aws', 'terraform.tfstate'),
       );
     });
 
     it('should return the repo-relative fallback when readIsPackaged returns false', () => {
-      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
-      const result = service.getTfStatePath();
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(false);
+      const result = testableService.getTfStatePath();
       expect(result).toMatch(/terraform[/\\]terraform\.tfstate$/);
       expect(path.isAbsolute(result)).toBe(true);
     });
@@ -363,17 +390,16 @@ describe('ConfigService', () => {
     });
 
     it('should return packaged server_config path when readIsPackaged returns true', () => {
-      type Internals = { readIsPackaged: () => boolean; readUserDataPath: () => string | null };
-      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
-      vi.spyOn(service as unknown as Internals, 'readUserDataPath').mockReturnValue('/fake/userData');
-      expect(service.getServerConfigPath()).toBe(
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
+      expect(testableService.getServerConfigPath()).toBe(
         path.join('/fake/userData', 'server_config.json'),
       );
     });
 
     it('should return the repo-relative fallback when readIsPackaged returns false', () => {
-      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
-      const result = service.getServerConfigPath();
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(false);
+      const result = testableService.getServerConfigPath();
       expect(result).toMatch(/server_config\.json$/);
       expect(path.isAbsolute(result)).toBe(true);
     });
@@ -384,17 +410,16 @@ describe('ConfigService', () => {
     });
 
     it('should return packaged tfvars path when readIsPackaged returns true', () => {
-      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
-      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
-      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
-      expect(service.getTfvarsPath()).toBe(
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      expect(testableService.getTfvarsPath()).toBe(
         path.join('/fake/resources', 'terraform', 'terraform.tfvars'),
       );
     });
 
     it('should return the repo-relative tfvars fallback when readIsPackaged returns false', () => {
-      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
-      const result = service.getTfvarsPath();
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(false);
+      const result = testableService.getTfvarsPath();
       expect(result).toMatch(/terraform[/\\]terraform\.tfvars$/);
       expect(path.isAbsolute(result)).toBe(true);
     });
@@ -447,16 +472,46 @@ describe('ConfigService', () => {
       expect(service.getTerraformDir()).toBe('/custom/terraform');
     });
 
-    it('should return the packaged resourcesPath terraform dir when readIsPackaged returns true', () => {
-      type Internals = { readIsPackaged: () => boolean; readResourcesPath: () => string | undefined };
-      vi.spyOn(service as unknown as Internals, 'readIsPackaged').mockReturnValue(true);
-      vi.spyOn(service as unknown as Internals, 'readResourcesPath').mockReturnValue('/fake/resources');
-      expect(service.getTerraformDir()).toBe(path.join('/fake/resources', 'terraform'));
+    it('should seed and return the writable userData terraform dir when packaged and userData is available', () => {
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
+      mockExists.mockReturnValue(false);
+
+      const result = testableService.getTerraformDir();
+
+      expect(result).toBe(path.join('/fake/userData', 'terraform'));
+      expect(mockCp).toHaveBeenCalledWith(
+        path.join('/fake/resources', 'terraform'),
+        path.join('/fake/userData', 'terraform'),
+        { recursive: true },
+      );
+    });
+
+    it('should not re-seed the writable userData terraform dir when it already exists', () => {
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      vi.spyOn(testableService, 'readUserDataPath').mockReturnValue('/fake/userData');
+      mockExists.mockReturnValue(true);
+
+      const result = testableService.getTerraformDir();
+
+      expect(result).toBe(path.join('/fake/userData', 'terraform'));
+      expect(mockCp).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to the packaged resourcesPath terraform dir when userData is unavailable', () => {
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(true);
+      vi.spyOn(testableService, 'readResourcesPath').mockReturnValue('/fake/resources');
+      vi.spyOn(testableService, 'readUserDataPath').mockReturnValue(null);
+
+      expect(testableService.getTerraformDir()).toBe(path.join('/fake/resources', 'terraform'));
+      expect(mockCp).not.toHaveBeenCalled();
     });
 
     it('should return the repo-root terraform dir fallback when readIsPackaged returns false', () => {
-      vi.spyOn(service as unknown as { readIsPackaged: () => boolean }, 'readIsPackaged').mockReturnValue(false);
-      const result = service.getTerraformDir();
+      vi.spyOn(testableService, 'readIsPackaged').mockReturnValue(false);
+      const result = testableService.getTerraformDir();
       expect(result).toMatch(/terraform$/);
       expect(path.isAbsolute(result)).toBe(true);
     });
