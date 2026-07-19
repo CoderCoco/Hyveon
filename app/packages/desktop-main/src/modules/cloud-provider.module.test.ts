@@ -6,6 +6,7 @@ import {
   AwsDiscordEventReceiver,
   AwsCloudProvider,
   AwsAuditLogStore,
+  AwsRunRecordStore,
 } from '@hyveon/cloud-aws';
 import type {
   CloudProvider,
@@ -13,6 +14,7 @@ import type {
   RemoteFileStore,
   DiscordEventReceiver,
   AuditLogStore,
+  RunRecordStore,
   StartOpts,
   WorkloadHandle,
   WorkloadStatus,
@@ -21,12 +23,14 @@ import type {
   DateRange,
   AuditEntry,
   AuditPageResult,
+  RunRecord,
 } from '@hyveon/shared';
 import {
   CLOUD_BINDINGS,
   resolveCloudBindings,
   resolveTfvarsFileStoreConfig,
   resolveAuditLogStoreConfig,
+  resolveRunRecordStoreConfig,
   type CloudBindings,
 } from './cloud-provider.module.js';
 import type { ConfigService, ActiveCloud, TfOutputs } from '../services/ConfigService.js';
@@ -41,12 +45,13 @@ function makeConfig(
   activeCloud: ActiveCloud,
   tfvarsBucket: string | null = 'test-tfvars-bucket',
   auditTableName = 'test-audit-table',
+  runsTableName = 'test-runs-table',
 ): ConfigService {
   const stub: Partial<ConfigService> = {
     getActiveCloud: () => activeCloud,
     getRegion: () => 'us-east-1',
     getTfvarsBucket: () => tfvarsBucket,
-    getTfOutputs: () => ({ audit_table_name: auditTableName } as TfOutputs),
+    getTfOutputs: () => ({ audit_table_name: auditTableName, runs_table_name: runsTableName } as TfOutputs),
   };
   return stub as ConfigService;
 }
@@ -124,6 +129,19 @@ class FakeAuditLogStore implements AuditLogStore {
   }
 }
 
+/** Hand-rolled fake `RunRecordStore` — see {@link FakeCloudProvider}. */
+class FakeRunRecordStore implements RunRecordStore {
+  putRecord(_record: RunRecord): Promise<void> {
+    throw new Error('not implemented in fake');
+  }
+  putLog(_runId: string, _body: Uint8Array): Promise<string> {
+    throw new Error('not implemented in fake');
+  }
+  getLogUrl(_logKey: string, _expiresInSeconds?: number): Promise<string> {
+    throw new Error('not implemented in fake');
+  }
+}
+
 /** Registered `CLOUD_BINDINGS` key used to exercise the fake-cloud routing case. */
 const FAKE_CLOUD = 'fake-test-cloud';
 
@@ -134,6 +152,7 @@ const FAKE_BINDINGS: CloudBindings = {
   remoteFileStore: () => new FakeRemoteFileStore(),
   discordReceiver: () => new FakeDiscordEventReceiver(),
   auditLogStore: () => new FakeAuditLogStore(),
+  runRecordStore: () => new FakeRunRecordStore(),
 };
 
 describe('resolveCloudBindings', () => {
@@ -199,6 +218,29 @@ describe('resolveCloudBindings', () => {
       } as ConfigService;
       expect(resolveAuditLogStoreConfig(config)).toEqual({ tableName: '', region: 'us-east-1' });
     });
+
+    it('should produce an AwsRunRecordStore from the aws runRecordStore factory', () => {
+      const config = makeConfig('aws');
+      const bindings = resolveCloudBindings(config);
+      expect(bindings.runRecordStore(config)).toBeInstanceOf(AwsRunRecordStore);
+    });
+
+    it('should resolve the run record store table from ConfigService.getTfOutputs().runs_table_name, bucket from getTfvarsBucket(), and region from getRegion()', () => {
+      const config = makeConfig('aws', 'my-tfvars-bucket', 'test-audit-table', 'my-runs-table');
+      expect(resolveRunRecordStoreConfig(config)).toEqual({
+        tableName: 'my-runs-table',
+        bucket: 'my-tfvars-bucket',
+        region: 'us-east-1',
+      });
+    });
+
+    it('should fall back to empty table/bucket names when getTfOutputs() and getTfvarsBucket() report nothing configured', () => {
+      const config: ConfigService = {
+        ...makeConfig('aws', null),
+        getTfOutputs: () => null,
+      } as ConfigService;
+      expect(resolveRunRecordStoreConfig(config)).toEqual({ tableName: '', bucket: '', region: 'us-east-1' });
+    });
   });
 
   describe('fake-impl routing', () => {
@@ -214,6 +256,7 @@ describe('resolveCloudBindings', () => {
       expect(bindings.remoteFileStore(config)).toBeInstanceOf(FakeRemoteFileStore);
       expect(bindings.discordReceiver(config)).toBeInstanceOf(FakeDiscordEventReceiver);
       expect(bindings.auditLogStore(config)).toBeInstanceOf(FakeAuditLogStore);
+      expect(bindings.runRecordStore(config)).toBeInstanceOf(FakeRunRecordStore);
     });
 
     it('should not resolve to the aws bindings once a fake cloud is registered', () => {
