@@ -301,9 +301,9 @@ describe('TerraformController', () => {
 
   describe('output', () => {
     /** A minimal resolved outputs payload shared across the "output" cases. */
-    const OUTPUTS: TfOutputs = {
-      cluster_name: 'hyveon-cluster',
-    } as unknown as TfOutputs;
+    const OUTPUTS = {
+      ecs_cluster_name: 'hyveon-cluster',
+    } as Partial<TfOutputs> as TfOutputs;
 
     it('should resolve with whatever TerraformService.output resolves with', async () => {
       const terraform = makeTerraform();
