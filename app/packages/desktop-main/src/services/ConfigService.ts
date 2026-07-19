@@ -65,15 +65,17 @@ export type RawTfState = { outputs?: Record<string, { value: unknown }> };
  * {@link TfOutputs}) out of a parsed `terraform.tfstate` payload, filling in
  * defaults for any keys the state doesn't have (e.g. because a Terraform
  * apply hasn't run since a given output was added). Returns `null` when the
- * state has no `outputs` map at all — treated by callers as "infra not yet
- * deployed".
+ * state has no `outputs` map at all, or when that map is empty — both cases
+ * mean nothing has been deployed yet (an empty map is what `terraform output -json`
+ * reports before the first apply) — and both are treated by callers as
+ * "infra not yet deployed".
  *
  * Extracted from {@link ConfigService.getTfOutputs} as a pure function so the
  * projection logic can be exercised (and reused) independently of the
  * instance's file-reading/caching concerns.
  */
 export function projectTfOutputs(raw: RawTfState): TfOutputs | null {
-  if (!raw.outputs) {
+  if (!raw.outputs || Object.keys(raw.outputs).length === 0) {
     logger.warn('Terraform state has no outputs — infra not yet deployed');
     return null;
   }
