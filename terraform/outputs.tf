@@ -123,6 +123,13 @@ output "audit_table_name" {
   value       = module.cloud[0].audit_table_name
 }
 
+# ── Server run history outputs ────────────────────────────────────────────────
+
+output "runs_table_name" {
+  description = "DynamoDB table holding server-run history entries"
+  value       = module.cloud[0].runs_table_name
+}
+
 # ── Bootstrap-created resources ──────────────────────────────────────────────
 
 output "tfvars_bucket_name" {

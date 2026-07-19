@@ -125,3 +125,10 @@ output "audit_table_name" {
   description = "DynamoDB table holding audit log entries"
   value       = aws_dynamodb_table.audit.name
 }
+
+# ── Server run history outputs ────────────────────────────────────────────────
+
+output "runs_table_name" {
+  description = "DynamoDB table holding server-run history entries"
+  value       = aws_dynamodb_table.runs.name
+}
