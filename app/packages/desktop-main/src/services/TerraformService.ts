@@ -1015,6 +1015,11 @@ export class TerraformService {
       // never silently lost. Best-effort: a failure here doesn't override
       // whatever completion the generator was already unwinding for.
       if (startedAt !== undefined && !runRecordWritten && forceKilled) {
+        // Mirrors destroy()'s forceKilled WARN — a cancellation via forced
+        // generator termination is still an apply outcome worth surfacing.
+        logger.warn('terraform apply cancelled — generator force-closed while running', {
+          runId,
+        });
         try {
           this.writeRunRecord(runId, 'apply', startedAt, null, tfvarsVersionId);
         } catch {
@@ -1177,19 +1182,23 @@ export class TerraformService {
           ? { kind: 'success', result: { runId, destroyed } }
           : { kind: 'failed', error: new TerraformDestroyError(result.exitCode) };
 
-      runRecordWritten = true;
-      try {
-        this.writeRunRecord(runId, 'destroy', startedAt, result.aborted ? null : result.exitCode, undefined);
-      } catch (err) {
-        throw new TerraformRunPersistError(runId, outcome, err);
-      }
-
+      // Logged before writeRunRecord (rather than after, as it was
+      // previously) so a persistence failure below can never suppress this
+      // WARN — destroying infrastructure must always show up in the log at
+      // this level regardless of whether the run record could be written.
       logger.warn('terraform destroy finished', {
         runId,
         aborted: result.aborted,
         exitCode: result.aborted ? null : result.exitCode,
         destroyed,
       });
+
+      runRecordWritten = true;
+      try {
+        this.writeRunRecord(runId, 'destroy', startedAt, result.aborted ? null : result.exitCode, undefined);
+      } catch (err) {
+        throw new TerraformRunPersistError(runId, outcome, err);
+      }
 
       if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
@@ -1206,6 +1215,13 @@ export class TerraformService {
       // finally; see its comment for the full rationale of the `forceKilled`
       // gate.
       if (startedAt !== undefined && !runRecordWritten && forceKilled) {
+        // Same WARN-level guarantee as the normal-completion path above:
+        // a cancellation via forced generator termination is still a
+        // destroy outcome worth surfacing, not just successes/failures
+        // reached through the happy path.
+        logger.warn('terraform destroy cancelled — generator force-closed while running', {
+          runId,
+        });
         try {
           this.writeRunRecord(runId, 'destroy', startedAt, null, undefined);
         } catch {
