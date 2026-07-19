@@ -1097,6 +1097,14 @@ export class TerraformService {
     // cleanly would otherwise race a post-hoc `signal.aborted` read and
     // misclassify a successful run as aborted.
     let aborted = false;
+    // `exit` fires the instant the process actually terminates, which can
+    // happen well before `close` (Node waits for stdio streams to finish
+    // draining before emitting `close`). The generator's own `finally`
+    // block uses this to tell "the process is still genuinely running" apart
+    // from "the process already exited and we're just waiting on its stdio
+    // to drain" — without it, a run that completed during that drain window
+    // would be misclassified as force-killed.
+    let exited = false;
 
     const notify = (): void => {
       wake?.();
@@ -1122,6 +1130,10 @@ export class TerraformService {
 
     child.stdout?.on('data', (data: Buffer) => handleData('stdout', data));
     child.stderr?.on('data', (data: Buffer) => handleData('stderr', data));
+
+    child.on('exit', () => {
+      exited = true;
+    });
 
     child.on('error', (err: Error) => {
       closeError = err;
@@ -1180,19 +1192,25 @@ export class TerraformService {
       if (!closed) {
         // The generator was force-closed early (e.g. plan()'s own finally
         // calling `stream.return()` when its consumer breaks/throws) before
-        // the child process actually exited. Removing the abort listener
-        // alone leaves Terraform (and its stdout/stderr listeners) running
-        // in the background — explicitly kill the child and wait for it to
-        // actually close before this generator resolves, so forced cleanup
-        // terminates the underlying process instead of orphaning it.
-        //
-        // The child is genuinely still live at this point (its `close`/
-        // `error` handlers never fired, or `closed` would already be
-        // `true`) — notify the caller via `onForceKill` so it can
-        // distinguish this from every other way its own cleanup logic might
-        // run.
-        onForceKill?.();
-        child.kill();
+        // `close` fired. Removing the abort listener alone can still leave
+        // Terraform (and its stdout/stderr listeners) running in the
+        // background — but `closed === false` alone doesn't prove that: the
+        // process may have already exited while its stdio streams were
+        // still draining, since Node only emits `close` once those streams
+        // finish, some time after `exit`. Consult the `exited` flag (set by
+        // the `exit` handler above) rather than assuming `!closed` means
+        // "still live".
+        if (!exited) {
+          // The child is genuinely still live at this point — notify the
+          // caller via `onForceKill` so it can distinguish this from every
+          // other way its own cleanup logic might run, then kill it.
+          onForceKill?.();
+          child.kill();
+        }
+        // Either way, wait for the process to actually close (flushing any
+        // buffered stdio and settling `exitCode`/`closeError`) before this
+        // generator resolves, so forced cleanup never resolves early and
+        // orphans the process or its listeners.
         await new Promise<void>((resolve) => {
           if (closed) {
             resolve();
