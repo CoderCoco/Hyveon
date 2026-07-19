@@ -1,14 +1,17 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Server-run history DynamoDB table
+# Terraform run history DynamoDB table
 #
-# Pay-per-request table recording each server run (start → stop) driven
-# through the management app. Items are keyed by `pk = "RUN#{game}"`, sort
-# key `sk = "<ISO start timestamp>#<ULID>"`, so a query against a game's
-# partition with `ScanIndexForward: false` returns runs newest-first.
+# Pay-per-request table recording one row per Terraform plan/apply run
+# (initiator, plan hash, status, approver, and a plan-diff summary) driven
+# through the management app's apply-history view. All items live under a
+# single fixed partition (`pk = "RUN"`); the sort key is
+# `<ISO start timestamp>#<ULID>`, so a query against that partition with
+# `ScanIndexForward: false` returns runs newest-first.
 #
-# The `status-index` GSI projects `status` (e.g. "RUNNING" / "STOPPED") as
-# its hash key and `startedAt` as its range key, so callers can query all
-# runs in a given status ordered by start time without scanning the table.
+# The `status-index` GSI projects `status` (e.g. "pending" / "success" /
+# "failed") as its hash key and `startedAt` as its range key, so callers can
+# query all runs in a given status ordered by start time without scanning
+# the table.
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "runs" {
