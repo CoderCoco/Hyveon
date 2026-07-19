@@ -1,7 +1,12 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TerraformController } from './terraform.controller.js';
-import { TerraformInitError, type TerraformInitConfig, type TerraformRunChunk } from '../services/TerraformService.js';
+import {
+  TerraformInitError,
+  type TerraformInitConfig,
+  type TerraformRunChunk,
+} from '../services/TerraformService.js';
+import type { TfOutputs } from '../services/ConfigService.js';
 import type { TerraformService } from '../services/TerraformService.js';
 
 // ---------------------------------------------------------------------------
@@ -40,10 +45,14 @@ const CONFIG: TerraformInitConfig = {
   dynamodbTable: 'hyveon-tf-locks',
 };
 
-/** Build a TerraformService stub whose `init` yields nothing by default. */
+/**
+ * Build a TerraformService stub whose `init` yields nothing by default and
+ * whose `output` resolves `null` by default.
+ */
 function makeTerraform(): TerraformService {
   const stub: Partial<TerraformService> = {
     init: vi.fn().mockImplementation(async function* () { /* empty */ }),
+    output: vi.fn().mockResolvedValue(null),
   };
   return stub as TerraformService;
 }
@@ -97,6 +106,11 @@ describe('TerraformController', () => {
     it('should register init on the "terraform.init" IPC channel', () => {
       const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.init);
       expect(pattern).toEqual(['terraform.init']);
+    });
+
+    it('should register output on the "terraform.output" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.output);
+      expect(pattern).toEqual(['terraform.output']);
     });
   });
 
@@ -278,6 +292,58 @@ describe('TerraformController', () => {
       expect(typeof result.error).toBe('string');
       expect(terraform.init).not.toHaveBeenCalled();
       expect(sender.send).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // output
+  // -------------------------------------------------------------------------
+
+  describe('output', () => {
+    /** A minimal resolved outputs payload shared across the "output" cases. */
+    const OUTPUTS: TfOutputs = {
+      cluster_name: 'hyveon-cluster',
+    } as unknown as TfOutputs;
+
+    it('should resolve with whatever TerraformService.output resolves with', async () => {
+      const terraform = makeTerraform();
+      vi.mocked(terraform.output).mockResolvedValue(OUTPUTS);
+
+      const result = await new TerraformController(terraform).output({});
+
+      expect(result).toBe(OUTPUTS);
+    });
+
+    it('should pass force: true through to TerraformService.output when the payload sets it', async () => {
+      const terraform = makeTerraform();
+
+      await new TerraformController(terraform).output({ force: true });
+
+      expect(terraform.output).toHaveBeenCalledWith(true);
+    });
+
+    it('should default force to false when the payload omits it', async () => {
+      const terraform = makeTerraform();
+
+      await new TerraformController(terraform).output({});
+
+      expect(terraform.output).toHaveBeenCalledWith(false);
+    });
+
+    it('should default force to false when no payload is provided at all', async () => {
+      const terraform = makeTerraform();
+
+      await new TerraformController(terraform).output(undefined);
+
+      expect(terraform.output).toHaveBeenCalledWith(false);
+    });
+
+    it('should propagate whatever error TerraformService.output rejects with', async () => {
+      const terraform = makeTerraform();
+      const error = new Error('terraform output -json exited with code 1');
+      vi.mocked(terraform.output).mockRejectedValue(error);
+
+      await expect(new TerraformController(terraform).output({})).rejects.toThrow(error);
     });
   });
 });

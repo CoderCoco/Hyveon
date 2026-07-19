@@ -8,6 +8,7 @@ import {
   type TerraformInitConfig,
   type TerraformRunChunk,
 } from '../services/TerraformService.js';
+import type { TfOutputs } from '../services/ConfigService.js';
 import { logger } from '../logger.js';
 
 /** Fixed side-channel `TerraformController.init` pushes streamed output on. */
@@ -55,6 +56,15 @@ interface TerraformInitAck {
   started: boolean;
   streamId?: string;
   error?: string;
+}
+
+/**
+ * Payload accepted by {@link TerraformController.output}. `force` is
+ * optional and defaults to `false`, mirroring `TerraformService.output`'s
+ * own default parameter.
+ */
+interface TerraformOutputPayload {
+  force?: boolean;
 }
 
 /**
@@ -202,6 +212,30 @@ export class TerraformController implements OnModuleInit {
     })();
 
     return { started: true, streamId };
+  }
+
+  /**
+   * Returns the current Terraform outputs by delegating to
+   * `TerraformService.output`. Unlike {@link init}, this channel needs no
+   * manual bridging — it resolves a single value rather than streaming
+   * progress, so the generic `ipcMain.handle` bridge in
+   * `../ipc-main-bridge.ts` wires `ipcRenderer.invoke('terraform.output', ...)`
+   * to this handler automatically (it isn't listed in
+   * `SELF_BRIDGED_PATTERNS`).
+   *
+   * `payload.force` defaults to `false` when the payload is omitted or
+   * `force` isn't set, matching `TerraformService.output`'s own default —
+   * pass `force: true` to bypass its in-memory cache and re-spawn
+   * `terraform output -json` regardless of how recently the last call
+   * resolved. Any error `TerraformService.output` throws (e.g.
+   * `TerraformNotFoundError`, a non-zero `terraform output` exit) propagates
+   * to the caller unchanged, causing `ipcRenderer.invoke` to reject.
+   *
+   * Reachable via the Electron IPC transport (`terraform.output`).
+   */
+  @MessagePattern('terraform.output')
+  async output(@Payload() payload: TerraformOutputPayload = {}): Promise<TfOutputs | null> {
+    return this.terraform.output(payload?.force ?? false);
   }
 
   /**
