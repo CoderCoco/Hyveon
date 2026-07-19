@@ -159,3 +159,11 @@ variable "audit_table_name" {
   type        = string
   default     = ""
 }
+
+# ── Server runs ──────────────────────────────────────────────────────────────
+
+variable "runs_table_name" {
+  description = "Name of the DynamoDB table holding Terraform plan/apply run records. Defaults to \"$${project_name}-runs\" when empty."
+  type        = string
+  default     = ""
+}

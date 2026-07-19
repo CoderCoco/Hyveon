@@ -125,3 +125,10 @@ output "audit_table_name" {
   description = "DynamoDB table holding audit log entries"
   value       = aws_dynamodb_table.audit.name
 }
+
+# ── Terraform run history outputs ─────────────────────────────────────────────
+
+output "runs_table_name" {
+  description = "DynamoDB table holding Terraform plan/apply run records"
+  value       = aws_dynamodb_table.runs.name
+}

@@ -123,6 +123,13 @@ output "audit_table_name" {
   value       = module.cloud[0].audit_table_name
 }
 
+# ── Terraform run history outputs ─────────────────────────────────────────────
+
+output "runs_table_name" {
+  description = "DynamoDB table holding Terraform plan/apply run records"
+  value       = module.cloud[0].runs_table_name
+}
+
 # ── Bootstrap-created resources ──────────────────────────────────────────────
 
 output "tfvars_bucket_name" {

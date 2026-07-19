@@ -209,6 +209,24 @@ describe('ConfigService', () => {
 
       expect(service.getTfOutputs()!.audit_table_name).toBe('');
     });
+
+    it('should parse runs_table_name when the output is present', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(
+        makeState({
+          runs_table_name: { value: 'hyveon-runs' },
+        }),
+      );
+
+      expect(service.getTfOutputs()!.runs_table_name).toBe('hyveon-runs');
+    });
+
+    it('should default runs_table_name to an empty string when the output is missing', () => {
+      mockExists.mockReturnValue(true);
+      mockRead.mockReturnValue(makeState({ aws_region: { value: 'us-west-2' } }));
+
+      expect(service.getTfOutputs()!.runs_table_name).toBe('');
+    });
   });
 
   describe('getRegion', () => {
