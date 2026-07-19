@@ -214,19 +214,18 @@ const APPLY_SUMMARY_PATTERN =
   /Apply complete!\s*Resources:\s*(\d+) added,\s*(\d+) changed,\s*(\d+) destroyed\./;
 
 /**
- * Persisted to `<runsDir>/<runId>/run.json` once an {@link TerraformService.apply}
- * or {@link TerraformService.destroy} run's spawned process has closed
- * (whether it exited cleanly, non-zero, or was killed via an abort signal) —
- * a lightweight local run history so a future Apply-history UI can list past
- * runs without a database. `kind` reflects which subcommand produced the
- * record; the union leaves room for a future `plan` record to reuse the same
- * shape without a breaking change later.
+ * Persisted to `<runsDir>/<runId>/run.json` once a {@link TerraformService.plan},
+ * {@link TerraformService.apply}, or {@link TerraformService.destroy} run's
+ * spawned process has closed (whether it exited cleanly, non-zero, or was
+ * killed via an abort signal) — a lightweight local run history so a future
+ * run-history UI can list past runs without a database. `kind` reflects
+ * which subcommand produced the record.
  */
 export interface TerraformRunRecord {
   /** The `runId` this record describes — matches the directory it's written into. */
   runId: string;
   /** Which subcommand produced this record. */
-  kind: 'apply' | 'destroy';
+  kind: 'plan' | 'apply' | 'destroy';
   /** ISO-8601 timestamp captured immediately before the process was spawned. */
   startedAt: string;
   /** ISO-8601 timestamp captured immediately after the process closed. */
@@ -250,21 +249,35 @@ export type TerraformApplyOutcome =
   | { kind: 'failed'; error: TerraformApplyError };
 
 /**
- * Thrown by {@link TerraformService.apply} or {@link TerraformService.destroy}
- * when persisting the {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json`
- * fails (e.g. a filesystem error surfaced from `mkdirSync`/`writeFileSync`
- * inside {@link TerraformService.writeRunRecord}) — distinct from a failure of
- * `terraform apply`/`terraform destroy` itself. Carries the
- * {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome} that had
- * already been computed before the persistence attempt (success, abort, or a
- * subcommand-specific error) so callers can recover the real outcome instead
- * of only seeing an unrelated filesystem exception, plus `cause` — the
- * underlying error `writeRunRecord` raised.
+ * Describes what {@link TerraformService.plan} was about to return/throw the
+ * moment its spawned process closed — captured before
+ * {@link TerraformService.writeRunRecord} is attempted so a persistence
+ * failure (see {@link TerraformRunPersistError}) doesn't discard the real
+ * outcome of the plan run. Mirrors {@link TerraformApplyOutcome}.
+ */
+export type TerraformPlanOutcome =
+  | { kind: 'success'; result: TerraformPlanResult }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; error: TerraformPlanError };
+
+/**
+ * Thrown by {@link TerraformService.plan}, {@link TerraformService.apply}, or
+ * {@link TerraformService.destroy} when persisting the
+ * {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` fails (e.g. a
+ * filesystem error surfaced from `mkdirSync`/`writeFileSync` inside
+ * {@link TerraformService.writeRunRecord}) — distinct from a failure of
+ * `terraform plan`/`terraform apply`/`terraform destroy` itself. Carries the
+ * {@link TerraformPlanOutcome}, {@link TerraformApplyOutcome}, or
+ * {@link TerraformDestroyOutcome} that had already been computed before the
+ * persistence attempt (success, abort, or a subcommand-specific error) so
+ * callers can recover the real outcome instead of only seeing an unrelated
+ * filesystem exception, plus `cause` — the underlying error `writeRunRecord`
+ * raised.
  */
 export class TerraformRunPersistError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly outcome: TerraformApplyOutcome | TerraformDestroyOutcome,
+    public readonly outcome: TerraformPlanOutcome | TerraformApplyOutcome | TerraformDestroyOutcome,
     public readonly cause: unknown,
   ) {
     super(
@@ -276,10 +289,13 @@ export class TerraformRunPersistError extends Error {
   }
 
   /**
-   * Renders a {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome}
-   * as a short phrase for the error message above.
+   * Renders a {@link TerraformPlanOutcome}, {@link TerraformApplyOutcome}, or
+   * {@link TerraformDestroyOutcome} as a short phrase for the error message
+   * above.
    */
-  private static describeOutcome(outcome: TerraformApplyOutcome | TerraformDestroyOutcome): string {
+  private static describeOutcome(
+    outcome: TerraformPlanOutcome | TerraformApplyOutcome | TerraformDestroyOutcome,
+  ): string {
     switch (outcome.kind) {
       case 'success':
         return 'succeeded';
@@ -382,8 +398,9 @@ export type TerraformDestroyOutcome =
  * and semver version, and orchestrates `terraform` subcommands against it:
  * {@link TerraformService.init}, the streaming/idempotent `terraform init`
  * runner; {@link TerraformService.plan}, the streaming `terraform plan`
- * runner that persists its `.tfplan` artifact and the pulled tfvars snapshot
- * under `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
+ * runner that persists its `.tfplan` artifact, the pulled tfvars snapshot,
+ * and a {@link TerraformRunRecord} (`kind: 'plan'`) under
+ * `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
  * streaming `terraform apply <planFile>` runner that persists a
  * {@link TerraformRunRecord} to the same per-run directory once the process
  * closes; {@link TerraformService.destroy}, the streaming
@@ -662,6 +679,18 @@ export class TerraformService {
    * {@link writeRunLog}) — a full stdout+stderr transcript of the run that
    * survives after the generator itself has been consumed.
    *
+   * At that same point — once the process has closed, regardless of outcome —
+   * a {@link TerraformRunRecord} (`kind: 'plan'`) is also written to
+   * `<runsDir>/<runId>/run.json` (see {@link writeRunRecord}), capturing
+   * `runId`, `startedAt`/`completedAt` timestamps, the process's `exitCode`
+   * (`null` when aborted), and `tfvarsVersionId`. Mirrors {@link apply}/
+   * {@link destroy}: if persisting that record fails (e.g. a filesystem
+   * error), the already-computed plan outcome (success/abort/
+   * {@link TerraformPlanError}) is wrapped in {@link TerraformRunPersistError}
+   * and thrown instead of being discarded behind the persistence failure. No
+   * record is written if the process never spawned (e.g. `signal` was
+   * already aborted before `getBinaryPath()`/`pullVarFile()`/spawn).
+   *
    * `signal`, if provided, aborts the run the same way {@link init} does: the
    * spawned child process is killed and the generator ends cleanly — no
    * further chunks, no throw, and the generator resolves to `undefined`
@@ -676,9 +705,11 @@ export class TerraformService {
    *
    * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
    * resolved, a plain `Error` if the configured tfvars source can't be read
-   * or `tfvarsVersionId` is stale (see {@link pullVarFile}), or
-   * {@link TerraformPlanError} if the spawned process exits with a non-zero
-   * status code (and the run wasn't aborted).
+   * or `tfvarsVersionId` is stale (see {@link pullVarFile}), {@link TerraformPlanError}
+   * if the spawned process exits with a non-zero status code (and the run
+   * wasn't aborted), or {@link TerraformRunPersistError} if the process
+   * closed successfully (or was aborted) but the run record couldn't be
+   * persisted afterward.
    */
   async *plan(
     tfvarsVersionId?: string,
@@ -734,6 +765,10 @@ export class TerraformService {
       // `<runsDir>/<runId>/terraform.log` in a single `writeFileSync` once
       // the process has closed, rather than one disk write per line.
       const logLines: string[] = [];
+      // Captured immediately before the process is spawned so it can be
+      // recorded in the `TerraformRunRecord` written below once the process
+      // closes.
+      const startedAt = new Date().toISOString();
 
       // Driven manually (rather than `yield*`) so each stdout line can be
       // scanned for the plan summary as it streams through, in addition to
@@ -779,16 +814,39 @@ export class TerraformService {
       // terraform.log behind.
       this.writeRunLog(runId, logLines);
 
-      if (result.aborted) {
+      // Compute the outcome the generator would return/throw *before*
+      // attempting to persist the run record, so a persistence failure below
+      // can still report the real plan outcome instead of losing it behind
+      // an unrelated filesystem exception — mirrors apply()/destroy().
+      const outcome: TerraformPlanOutcome = result.aborted
+        ? { kind: 'aborted' }
+        : result.exitCode === 0
+          ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy } }
+          : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
+
+      // Same guarantee for the run record: written on every exit path
+      // (success/failure/abort) so a future run-history UI can list this
+      // plan run regardless of its outcome. `exitCode` is recorded as `null`
+      // when the run was aborted, mirroring apply()/destroy(). If persisting
+      // the record fails, the already-computed plan outcome is wrapped in
+      // TerraformRunPersistError and thrown instead of being discarded
+      // behind the persistence failure — mirrors apply()/destroy().
+      try {
+        this.writeRunRecord(runId, 'plan', startedAt, result.aborted ? null : result.exitCode, tfvarsVersionId);
+      } catch (err) {
+        throw new TerraformRunPersistError(runId, outcome, err);
+      }
+
+      if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
         // the generator cleanly rather than surfacing the resulting
         // error/exit code.
         return undefined;
       }
-      if (result.exitCode === 0) {
-        return { runId, artifactPath, varFilePath, add, change, destroy };
+      if (outcome.kind === 'success') {
+        return outcome.result;
       }
-      throw new TerraformPlanError(result.exitCode);
+      throw outcome.error;
     } finally {
       this.workspaceInFlight = null;
     }
@@ -1454,11 +1512,12 @@ export class TerraformService {
 
   /**
    * Writes a {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` once
-   * an {@link apply} or {@link destroy} run's spawned process has closed.
-   * Creates the run directory if it doesn't already exist (defensive —
-   * {@link plan} normally creates it ahead of `apply`, and `destroy` creates
-   * its own run directory itself, but nothing prevents a caller from applying
-   * a plan file whose directory was cleaned up in between).
+   * a {@link plan}, {@link apply}, or {@link destroy} run's spawned process
+   * has closed. Creates the run directory if it doesn't already exist
+   * (defensive — {@link plan} normally creates it ahead of `apply`, and
+   * `destroy` creates its own run directory itself, but nothing prevents a
+   * caller from applying a plan file whose directory was cleaned up in
+   * between).
    *
    * `mkdirSync`/`writeFileSync` are wrapped in a try/catch so a filesystem
    * error here (e.g. permissions, disk full, cleaned-up parent directory)
@@ -1475,7 +1534,7 @@ export class TerraformService {
    */
   private writeRunRecord(
     runId: string,
-    kind: 'apply' | 'destroy',
+    kind: 'plan' | 'apply' | 'destroy',
     startedAt: string,
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
