@@ -436,11 +436,13 @@ terraform apply
 
 `apply` takes 5–10 minutes end-to-end. It creates the VPC, two public
 subnets, an ECS cluster, one task definition + EFS access point +
-CloudWatch log group **per game**, the four Lambdas, two DynamoDB tables
-(Discord config/state and the audit log — see
+CloudWatch log group **per game**, the four Lambdas, three DynamoDB tables
+(Discord config/state, the audit log, and the Terraform-runs history — see
 [step 7](#7-optional-wire-up-the-discord-bot)), two Secrets Manager secrets,
 the EventBridge rule + schedule, and (if any game has `https = true`) an ALB
-with an ACM certificate.
+with an ACM certificate. The deploy IAM policy's existing `dynamodb:*`
+statement (see [step 1](#1-create-and-authorise-an-iam-user)) already covers
+all three tables — no policy change was needed for the runs table.
 
 When it finishes, note two outputs:
 
@@ -555,13 +557,19 @@ The serverless bot is two Lambdas, one DynamoDB table (`discord_table_name`,
 CONFIG + PENDING rows), and two Secrets Manager secrets — all created by
 `terraform apply` in step 5. You now connect it to a Discord application.
 
-> **A second DynamoDB table, `audit_table_name`, is created unconditionally**
-> in the same `terraform apply` — it is not part of the Discord bot and
-> doesn't require any of the setup below. It records structured audit log
-> entries (who did what and when) for game-server configuration changes
-> (add/edit/remove) made via the management app's UI. It does not record
-> Discord bot actions, server start/stop, or credential edits. See
-> [`audit_table_name`](/components/terraform#variables) to override its name.
+> **Two more DynamoDB tables, `audit_table_name` and `runs_table_name`, are
+> created unconditionally** in the same `terraform apply` — neither is part
+> of the Discord bot and neither requires any of the setup below.
+> `audit_table_name` records structured audit log entries (who did what and
+> when) for game-server configuration changes (add/edit/remove) made via the
+> management app's UI; it does not record Discord bot actions, server
+> start/stop, or credential edits. `runs_table_name` records one row per
+> Terraform plan/apply run (initiator, plan hash, status, approver, and a
+> plan-diff summary) for the dashboard's apply-history view. Both tables are
+> covered by the existing `dynamodb:*` action in the deploy IAM policy — no
+> policy change is needed. See
+> [`audit_table_name` and `runs_table_name`](/components/terraform#variables)
+> to override either name.
 
 1. **Create a Discord application** at
    [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** →
