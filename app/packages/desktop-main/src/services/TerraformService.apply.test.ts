@@ -593,8 +593,12 @@ describe('TerraformService.apply abort handling', () => {
     child.close(null);
     await returnPromise;
 
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    // One write for run.json, one for the accumulated terraform.log — both
+    // persisted from the outer finally's force-killed branch.
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
+    const [path, contents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === '/repo/runs/run-31/run.json',
+    ) as [string, string];
     expect(path).toBe('/repo/runs/run-31/run.json');
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.runId).toBe('run-31');
@@ -620,8 +624,11 @@ describe('TerraformService.apply run.json persistence', () => {
     );
 
     expect(mkdirSyncMock).toHaveBeenCalledWith('/repo/runs/run-16', { recursive: true });
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    // One write for run.json, one for the accumulated terraform.log.
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
+    const [path, contents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === '/repo/runs/run-16/run.json',
+    ) as [string, string];
     expect(path).toBe('/repo/runs/run-16/run.json');
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.runId).toBe('run-16');
@@ -648,7 +655,9 @@ describe('TerraformService.apply run.json persistence', () => {
       ),
     ).rejects.toBeInstanceOf(TerraformApplyError);
 
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    const [path, contents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === '/repo/runs/run-17/run.json',
+    ) as [string, string];
     expect(path).toBe('/repo/runs/run-17/run.json');
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.exitCode).toBe(1);
@@ -672,10 +681,127 @@ describe('TerraformService.apply run.json persistence', () => {
     child.close(null);
     await pendingNext;
 
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    const [path, contents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === '/repo/runs/run-18/run.json',
+    ) as [string, string];
     expect(path).toBe('/repo/runs/run-18/run.json');
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.exitCode).toBeNull();
+  });
+});
+
+describe('TerraformService.apply run log capture', () => {
+  it('should write the accumulated stdout+stderr transcript to <runsDir>/<runId>/terraform.log in a single writeFileSync once the process closes', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubApplyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+
+    await collectApplyChunks(service.apply('run-32', undefined, '/repo/runs/run-32/run-32.tfplan'), () => {
+      child.emitStdout('aws_instance.game: Creating...\n');
+      child.emitStderr('Warning: something\n');
+      child.close(0);
+    });
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-32/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('aws_instance.game: Creating...\nWarning: something\n');
+  });
+
+  it('should still write the accumulated transcript to terraform.log when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubApplyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+
+    await expect(
+      collectApplyChunks(service.apply('run-33', undefined, '/repo/runs/run-33/run-33.tfplan'), () => {
+        child.emitStdout('Error: something went wrong\n');
+        child.close(1);
+      }),
+    ).rejects.toBeInstanceOf(TerraformApplyError);
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-33/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Error: something went wrong\n');
+  });
+
+  it('should still write whatever transcript was captured to terraform.log when the run is aborted mid-flight', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const controller = new AbortController();
+    const service = new TerraformService(
+      stubApplyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const gen = service.apply('run-34', undefined, '/repo/runs/run-34/run-34.tfplan', controller.signal);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Creating...\n');
+    const firstResult = await first;
+    expect(firstResult.done).toBe(false);
+
+    controller.abort();
+    // The fake child doesn't auto-emit `close` on `kill()` — simulate the
+    // real process actually terminating in response to the kill signal.
+    child.close(null);
+
+    const secondResult = await gen.next();
+    expect(secondResult.done).toBe(true);
+    expect(secondResult.value).toBeUndefined();
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-34/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('aws_instance.game: Creating...\n');
+  });
+
+  it('should write whatever transcript was captured to terraform.log when the generator is force-closed early', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubApplyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const gen = service.apply('run-35', undefined, '/repo/runs/run-35/run-35.tfplan');
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Creating...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-35/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('aws_instance.game: Creating...\n');
   });
 });
 

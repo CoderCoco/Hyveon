@@ -402,6 +402,95 @@ describe('TerraformService.plan streaming', () => {
   });
 });
 
+describe('TerraformService.plan run log capture', () => {
+  it('should write the accumulated stdout+stderr transcript to <runsDir>/<runId>/terraform.log in a single writeFileSync once the process closes', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-1');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+    );
+
+    await collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Refreshing state...\n');
+      child.emitStderr('Warning: something\n');
+      child.close(0);
+    });
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-1/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\nWarning: something\n');
+  });
+
+  it('should still write the accumulated transcript to terraform.log when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-2');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+    );
+
+    await expect(
+      collectPlanChunks(service.plan(), () => {
+        child.emitStdout('Error: something went wrong\n');
+        child.close(1);
+      }),
+    ).rejects.toBeInstanceOf(TerraformPlanError);
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-2/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Error: something went wrong\n');
+  });
+
+  it('should still write whatever transcript was captured to terraform.log when the run is aborted mid-flight', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-3');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const controller = new AbortController();
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+    );
+    const gen = service.plan(undefined, controller.signal);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    const firstResult = await first;
+    expect(firstResult.done).toBe(false);
+
+    controller.abort();
+    // The fake child doesn't auto-emit `close` on `kill()` — simulate the
+    // real process actually terminating in response to the kill signal.
+    child.close(null);
+
+    const secondResult = await gen.next();
+    expect(secondResult.done).toBe(true);
+    expect(secondResult.value).toBeUndefined();
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-3/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\n');
+  });
+});
+
 describe('TerraformService.plan summary parsing and return value', () => {
   it('should parse the add/change/destroy counts from the Plan: summary line and return them alongside the artifact/var-file paths', async () => {
     queueSuccessfulResolution();

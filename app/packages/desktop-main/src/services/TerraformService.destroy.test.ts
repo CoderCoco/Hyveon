@@ -291,8 +291,11 @@ describe('TerraformService.destroy confirmed run', () => {
     expect(typeof runId).toBe('string');
 
     expect(mkdirSyncMock).toHaveBeenCalledWith(`/repo/runs/${runId}`, { recursive: true });
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    // One write for run.json, one for the accumulated terraform.log.
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
+    const [path, contents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === `/repo/runs/${runId}/run.json`,
+    ) as [string, string];
     expect(path).toBe(`/repo/runs/${runId}/run.json`);
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.runId).toBe(runId);
@@ -318,8 +321,11 @@ describe('TerraformService.destroy confirmed run', () => {
     await expect(pending).rejects.toBeInstanceOf(TerraformDestroyError);
     await expect(pending).rejects.toMatchObject({ exitCode: 1 });
 
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    // One write for run.json, one for the accumulated terraform.log.
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
+    const [path, contents] = writeFileSyncMock.mock.calls.find(([callPath]) =>
+      (callPath as string).endsWith('run.json'),
+    ) as [string, string];
     expect(path).toMatch(/^\/repo\/runs\/.+\/run\.json$/);
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.kind).toBe('destroy');
@@ -415,8 +421,14 @@ describe('TerraformService.destroy run.json persistence failure', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
     const persistFailure = new Error('ENOSPC: no space left on device');
-    writeFileSyncMock.mockImplementationOnce(() => {
-      throw persistFailure;
+    // Only the run.json write fails — the terraform.log write (which now
+    // also happens once the process closes) uses the default no-op mock, so
+    // this targets the specific writeFileSync call the assertions below care
+    // about regardless of the order the two writes happen in.
+    writeFileSyncMock.mockImplementation((path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('run.json')) {
+        throw persistFailure;
+      }
     });
 
     const service = new TerraformService(
@@ -520,12 +532,100 @@ describe('TerraformService.destroy forced early termination', () => {
     child.close(null);
     await returnPromise;
 
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
-    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    // One write for run.json, one for the accumulated terraform.log — both
+    // persisted from the outer finally's force-killed branch.
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
+    const [path, contents] = writeFileSyncMock.mock.calls.find(([callPath]) =>
+      (callPath as string).endsWith('run.json'),
+    ) as [string, string];
     expect(path).toMatch(/^\/repo\/runs\/.+\/run\.json$/);
     const record = JSON.parse(contents) as TerraformRunRecord;
     expect(record.kind).toBe('destroy');
     expect(record.exitCode).toBeNull();
+  });
+});
+
+describe('TerraformService.destroy run log capture', () => {
+  it('should write the accumulated stdout+stderr transcript to <runsDir>/<runId>/terraform.log in a single writeFileSync once the process closes', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const { result } = await collectDestroyChunks(service.destroy(token), () => {
+      child.emitStdout('aws_instance.game: Destroying...\n');
+      child.emitStderr('Warning: something\n');
+      child.close(0);
+    });
+
+    const runId = result?.runId as string;
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === `/repo/runs/${runId}/terraform.log`,
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('aws_instance.game: Destroying...\nWarning: something\n');
+  });
+
+  it('should still write the accumulated transcript to terraform.log when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const pending = collectDestroyChunks(service.destroy(token), () => {
+      child.emitStdout('Error: something went wrong\n');
+      child.close(1);
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(TerraformDestroyError);
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(([path]) =>
+      (path as string).endsWith('/terraform.log'),
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Error: something went wrong\n');
+  });
+
+  it('should write whatever transcript was captured to terraform.log when the generator is force-closed early', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+    const gen = service.destroy(token);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Destroying...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(([path]) =>
+      (path as string).endsWith('/terraform.log'),
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('aws_instance.game: Destroying...\n');
   });
 });
 
@@ -569,8 +669,9 @@ describe('TerraformService.destroy forced-cleanup persistence failure', () => {
     const result = await returnPromise;
 
     // The forced-cleanup writeRunRecord attempt is swallowed (best-effort)
-    // rather than crashing the generator's teardown or rejecting return().
+    // rather than crashing the generator's teardown or rejecting return() —
+    // and so is the equally-failing writeRunLog attempt alongside it.
     expect(result.done).toBe(true);
-    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(2);
   });
 });
