@@ -39,6 +39,7 @@ export interface TfOutputs {
   acm_certificate_arn: string | null;
   discord_table_name: string;
   audit_table_name: string;
+  runs_table_name: string;
   discord_bot_token_secret_arn: string;
   discord_public_key_secret_arn: string;
   interactions_invoke_url: string | null;
@@ -99,6 +100,7 @@ export function projectTfOutputs(raw: RawTfState): TfOutputs | null {
     acm_certificate_arn: get('acm_certificate_arn', null),
     discord_table_name: get('discord_table_name', ''),
     audit_table_name: get('audit_table_name', ''),
+    runs_table_name: get('runs_table_name', ''),
     discord_bot_token_secret_arn: get('discord_bot_token_secret_arn', ''),
     discord_public_key_secret_arn: get('discord_public_key_secret_arn', ''),
     interactions_invoke_url: get('interactions_invoke_url', null),
