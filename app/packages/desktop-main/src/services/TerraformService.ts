@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import type { RemoteFileStore } from '@hyveon/shared';
+import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
 
@@ -213,18 +214,19 @@ const APPLY_SUMMARY_PATTERN =
   /Apply complete!\s*Resources:\s*(\d+) added,\s*(\d+) changed,\s*(\d+) destroyed\./;
 
 /**
- * Persisted to `<runsDir>/<runId>/run.json` once a {@link TerraformService.apply}
- * run's spawned process has closed (whether it exited cleanly, non-zero, or
- * was killed via an abort signal) — a lightweight local run history so a
- * future Apply-history UI can list past runs without a database. `kind` is
- * currently always `'apply'`; the union leaves room for `plan`/`destroy`
- * records to reuse the same shape without a breaking change later.
+ * Persisted to `<runsDir>/<runId>/run.json` once an {@link TerraformService.apply}
+ * or {@link TerraformService.destroy} run's spawned process has closed
+ * (whether it exited cleanly, non-zero, or was killed via an abort signal) —
+ * a lightweight local run history so a future Apply-history UI can list past
+ * runs without a database. `kind` reflects which subcommand produced the
+ * record; the union leaves room for a future `plan` record to reuse the same
+ * shape without a breaking change later.
  */
 export interface TerraformRunRecord {
   /** The `runId` this record describes — matches the directory it's written into. */
   runId: string;
   /** Which subcommand produced this record. */
-  kind: 'apply';
+  kind: 'apply' | 'destroy';
   /** ISO-8601 timestamp captured immediately before the process was spawned. */
   startedAt: string;
   /** ISO-8601 timestamp captured immediately after the process closed. */
@@ -248,32 +250,36 @@ export type TerraformApplyOutcome =
   | { kind: 'failed'; error: TerraformApplyError };
 
 /**
- * Thrown by {@link TerraformService.apply} when persisting the
- * {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` fails (e.g. a
- * filesystem error surfaced from `mkdirSync`/`writeFileSync` inside
- * {@link TerraformService.writeRunRecord}) — distinct from a failure of
- * `terraform apply` itself. Carries the {@link TerraformApplyOutcome} that had
+ * Thrown by {@link TerraformService.apply} or {@link TerraformService.destroy}
+ * when persisting the {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json`
+ * fails (e.g. a filesystem error surfaced from `mkdirSync`/`writeFileSync`
+ * inside {@link TerraformService.writeRunRecord}) — distinct from a failure of
+ * `terraform apply`/`terraform destroy` itself. Carries the
+ * {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome} that had
  * already been computed before the persistence attempt (success, abort, or a
- * {@link TerraformApplyError}) so callers can recover the real apply result
- * instead of only seeing an unrelated filesystem exception, plus `cause` — the
+ * subcommand-specific error) so callers can recover the real outcome instead
+ * of only seeing an unrelated filesystem exception, plus `cause` — the
  * underlying error `writeRunRecord` raised.
  */
 export class TerraformRunPersistError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly outcome: TerraformApplyOutcome,
+    public readonly outcome: TerraformApplyOutcome | TerraformDestroyOutcome,
     public readonly cause: unknown,
   ) {
     super(
-      `Failed to persist run record for run "${runId}" (apply outcome: ` +
+      `Failed to persist run record for run "${runId}" (outcome: ` +
         `${TerraformRunPersistError.describeOutcome(outcome)}): ` +
         `${cause instanceof Error ? cause.message : String(cause)}`,
     );
     this.name = 'TerraformRunPersistError';
   }
 
-  /** Renders {@link TerraformApplyOutcome} as a short phrase for the error message above. */
-  private static describeOutcome(outcome: TerraformApplyOutcome): string {
+  /**
+   * Renders a {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome}
+   * as a short phrase for the error message above.
+   */
+  private static describeOutcome(outcome: TerraformApplyOutcome | TerraformDestroyOutcome): string {
     switch (outcome.kind) {
       case 'success':
         return 'succeeded';
@@ -286,16 +292,96 @@ export class TerraformRunPersistError extends Error {
 }
 
 /**
+ * How long a token minted by {@link TerraformService.mintDestroyConfirmationToken}
+ * stays valid before {@link TerraformService.destroy} rejects it as stale,
+ * even if it was never consumed — keeps the confirmation window short enough
+ * that a token can't be replayed long after the operator actually saw the
+ * renderer's destroy-confirmation modal.
+ */
+const DESTROY_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Thrown by {@link TerraformService.destroy} when it's called without a
+ * fresh, valid confirmation token — either no token was ever minted via
+ * {@link TerraformService.mintDestroyConfirmationToken}, the supplied token
+ * doesn't match the most recently minted one, the most recently minted token
+ * has already expired ({@link DESTROY_CONFIRMATION_TTL_MS} after minting), or
+ * it was already consumed by a prior `destroy()` call. This is the gate that
+ * keeps `terraform destroy` from ever spawning off a stale or guessed token —
+ * the caller must mint (and the operator must confirm) a fresh token for
+ * every destroy attempt.
+ */
+export class DestroyNotConfirmedError extends Error {
+  constructor() {
+    super(
+      'terraform destroy refused: no fresh confirmation token was supplied. Call ' +
+        'TerraformService.mintDestroyConfirmationToken() and pass the returned token to ' +
+        'destroy() before it expires.',
+    );
+    this.name = 'DestroyNotConfirmedError';
+  }
+}
+
+/**
+ * Thrown when the spawned `terraform destroy` process exits with a non-zero
+ * status code. Distinct from {@link TerraformNotFoundError} (binary can't be
+ * resolved) and {@link DestroyNotConfirmedError} (the pre-spawn confirmation
+ * gate).
+ */
+export class TerraformDestroyError extends Error {
+  constructor(public readonly exitCode: number | null) {
+    super(`terraform destroy exited with code ${exitCode ?? 'null'}`);
+    this.name = 'TerraformDestroyError';
+  }
+}
+
+/**
+ * Outcome of a successful {@link TerraformService.destroy} run, resolved via
+ * the async generator's return value once the spawned `terraform destroy`
+ * process exits `0` and the run wasn't aborted.
+ */
+export interface TerraformDestroyResult {
+  /** The `runId` minted for this run — matches the directory `run.json` is written into. */
+  runId: string;
+  /** Number of resources Terraform reported destroying. */
+  destroyed: number;
+}
+
+/**
+ * Matches Terraform's destroy-summary stdout line, e.g.
+ * `Destroy complete! Resources: 3 destroyed.` — scanned for while streaming
+ * {@link TerraformService.destroy}'s output to extract the resource count
+ * returned in the generator's return value. Mirrors
+ * {@link APPLY_SUMMARY_PATTERN} for the equivalent `apply()` summary line.
+ */
+const DESTROY_SUMMARY_PATTERN = /Destroy complete!\s*Resources:\s*(\d+) destroyed\./;
+
+/**
+ * Describes what {@link TerraformService.destroy} was about to return/throw
+ * the moment its spawned process closed — captured before
+ * {@link TerraformService.writeRunRecord} is attempted so a persistence
+ * failure (see {@link TerraformRunPersistError}) doesn't discard the real
+ * outcome of the destroy run. Mirrors {@link TerraformApplyOutcome}.
+ */
+export type TerraformDestroyOutcome =
+  | { kind: 'success'; result: TerraformDestroyResult }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; error: TerraformDestroyError };
+
+/**
  * Lazily resolves and caches the system `terraform` binary's absolute path
  * and semver version, and orchestrates `terraform` subcommands against it:
  * {@link TerraformService.init}, the streaming/idempotent `terraform init`
  * runner; {@link TerraformService.plan}, the streaming `terraform plan`
  * runner that persists its `.tfplan` artifact and the pulled tfvars snapshot
- * under `ConfigService.getRunsDir()`; and {@link TerraformService.apply}, the
+ * under `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
  * streaming `terraform apply <planFile>` runner that persists a
  * {@link TerraformRunRecord} to the same per-run directory once the process
- * closes. Later child issues of Epic D add `destroy`/`output` — see the
- * "Terraform orchestrator" section of the electron-desktop-pivot design spec.
+ * closes; and {@link TerraformService.destroy}, the streaming
+ * `terraform destroy -auto-approve` runner gated behind a short-lived
+ * confirmation token minted via {@link TerraformService.mintDestroyConfirmationToken}.
+ * A later child issue of Epic D adds `output` — see the "Terraform
+ * orchestrator" section of the electron-desktop-pivot design spec.
  *
  * Construction is synchronous and never throws — the binary lookup +
  * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
@@ -318,18 +404,28 @@ export class TerraformService {
   private lastInitConfig: TerraformInitConfig | null = null;
 
   /**
-   * Name of whichever subcommand ({@link init}, {@link plan}, or
-   * {@link apply}) is actively running against `getTerraformDir()`, or `null`
-   * when none is. A single shared lock (rather than separate
-   * `initInFlight`/`planInFlight`/`applyInFlight` flags) is required because
-   * `init` mutates the `backend/.terraform` state that `plan`/`apply` read,
-   * and `apply` itself mutates the state that a concurrent `plan` would read
-   * — letting any two of these subcommands run concurrently against the same
-   * workspace would race one against the other's writes/reads. Set the
-   * moment a generator body starts executing (i.e. the first `.next()` call)
-   * until it completes or throws.
+   * Name of whichever subcommand ({@link init}, {@link plan}, {@link apply},
+   * or {@link destroy}) is actively running against `getTerraformDir()`, or
+   * `null` when none is. A single shared lock (rather than separate
+   * `initInFlight`/`planInFlight`/`applyInFlight`/`destroyInFlight` flags) is
+   * required because `init` mutates the `backend/.terraform` state that
+   * `plan`/`apply`/`destroy` read, and `apply`/`destroy` themselves mutate the
+   * state that a concurrent `plan` would read — letting any two of these
+   * subcommands run concurrently against the same workspace would race one
+   * against the other's writes/reads. Set the moment a generator body starts
+   * executing (i.e. the first `.next()` call) until it completes or throws.
    */
-  private workspaceInFlight: 'init' | 'plan' | 'apply' | null = null;
+  private workspaceInFlight: 'init' | 'plan' | 'apply' | 'destroy' | null = null;
+
+  /**
+   * The most recently minted destroy-confirmation token, alongside its
+   * expiry timestamp — set by {@link mintDestroyConfirmationToken} and
+   * consumed (single-use) by {@link assertFreshDestroyConfirmation} the
+   * moment a {@link destroy} call validates it. `null` when no token has been
+   * minted, or once the most recently minted one has been consumed or
+   * superseded by a newer one.
+   */
+  private pendingDestroyConfirmation: { token: string; expiresAt: number } | null = null;
 
   /**
    * `config` resolves the terraform working directory (`getTerraformDir()`)
@@ -382,6 +478,26 @@ export class TerraformService {
   async getVersion(): Promise<string> {
     const { version } = await this.resolve();
     return version;
+  }
+
+  /**
+   * Mints a fresh, single-use confirmation token for a subsequent
+   * {@link destroy} call, valid for {@link DESTROY_CONFIRMATION_TTL_MS}.
+   * Intended to be called the moment the renderer shows its destroy
+   * confirmation modal, so the token's lifetime brackets the window the
+   * operator actually has that modal open.
+   *
+   * Minting a new token immediately supersedes any previously minted (and
+   * not yet consumed) token — only the most recently minted token is ever
+   * accepted by {@link destroy}. A token is consumed (and can never be reused)
+   * the moment a `destroy()` call validates it, whether or not that run
+   * ultimately succeeds — a second destroy attempt requires minting a new
+   * token.
+   */
+  mintDestroyConfirmationToken(): string {
+    const token = randomUUID();
+    this.pendingDestroyConfirmation = { token, expiresAt: Date.now() + DESTROY_CONFIRMATION_TTL_MS };
+    return token;
   }
 
   /**
@@ -860,7 +976,7 @@ export class TerraformService {
       // write this block already tried — whether it succeeded or threw.
       runRecordWritten = true;
       try {
-        this.writeRunRecord(runId, startedAt, result.aborted ? null : result.exitCode, tfvarsVersionId);
+        this.writeRunRecord(runId, 'apply', startedAt, result.aborted ? null : result.exitCode, tfvarsVersionId);
       } catch (err) {
         throw new TerraformRunPersistError(runId, outcome, err);
       }
@@ -899,8 +1015,13 @@ export class TerraformService {
       // never silently lost. Best-effort: a failure here doesn't override
       // whatever completion the generator was already unwinding for.
       if (startedAt !== undefined && !runRecordWritten && forceKilled) {
+        // Mirrors destroy()'s forceKilled WARN — a cancellation via forced
+        // generator termination is still an apply outcome worth surfacing.
+        logger.warn('terraform apply cancelled — generator force-closed while running', {
+          runId,
+        });
         try {
-          this.writeRunRecord(runId, startedAt, null, tfvarsVersionId);
+          this.writeRunRecord(runId, 'apply', startedAt, null, tfvarsVersionId);
         } catch {
           // Nothing meaningful to do with a persistence failure while the
           // generator is already tearing down for an unrelated reason.
@@ -908,6 +1029,223 @@ export class TerraformService {
       }
       this.workspaceInFlight = null;
     }
+  }
+
+  /**
+   * Runs `terraform destroy -input=false -no-color -auto-approve` inside the
+   * Terraform composer root (`ConfigService.getTerraformDir()`), yielding a
+   * {@link TerraformRunChunk} per line of output as the process produces it —
+   * mirrors {@link apply}'s streaming shape. `-auto-approve` skips
+   * Terraform's own interactive `yes` prompt (there's no stdin attached to
+   * spawn a prompt into anyway); the confirmation gate below is what stands
+   * in for it.
+   *
+   * Before spawning: throws {@link DestroyNotConfirmedError} synchronously
+   * (on the first `.next()` call, via {@link assertFreshDestroyConfirmation})
+   * unless `confirmationToken` matches the most recently minted, unexpired,
+   * not-yet-consumed token returned by {@link mintDestroyConfirmationToken} —
+   * `terraform destroy` is never spawned without a fresh confirmation. This
+   * check runs *after* the {@link workspaceInFlight} lock check below so a
+   * "busy" refusal doesn't consume (and waste) an otherwise-valid token.
+   *
+   * A fresh `runId` is minted for every call (`randomUUID()`, mirroring
+   * {@link plan}) and its run directory `<runsDir>/<runId>/` is created ahead
+   * of the spawn, since `destroy` has no preceding `plan()` artifact to
+   * inherit a `runId` from.
+   *
+   * While streaming, stdout lines are scanned via {@link DESTROY_SUMMARY_PATTERN}
+   * for Terraform's summary line (`Destroy complete! Resources: N destroyed.`)
+   * to extract the destroyed-resource count returned in the generator's
+   * return value alongside `runId`. A run that never reaches the summary line
+   * (e.g. it errors out first) resolves the count to `0`, but in that case
+   * the generator throws {@link TerraformDestroyError} instead of returning.
+   *
+   * `signal`, if provided, aborts the run the same way {@link apply} does:
+   * the spawned child process is killed and the generator ends cleanly — no
+   * further chunks, no throw.
+   *
+   * Once the spawned process has closed — whether it exited cleanly,
+   * non-zero, or was killed via `signal` — writes a {@link TerraformRunRecord}
+   * (`kind: 'destroy'`) to `<runsDir>/<runId>/run.json`, and logs the
+   * confirmed start and the final outcome at **WARN** level (via the shared
+   * Winston `logger`) — destroying infrastructure is significant enough to
+   * always show up in the log at that level, not just on failure. If
+   * persisting the run record fails, the already-computed destroy outcome
+   * (success/abort/{@link TerraformDestroyError}) is wrapped in
+   * {@link TerraformRunPersistError} and thrown instead of being discarded
+   * behind the persistence failure. The same record is also written (with a
+   * `null` `exitCode`) if this generator itself is force-closed by its
+   * consumer while `terraform destroy` is still genuinely running — mirrors
+   * {@link apply}'s `forceKilled` handling.
+   *
+   * Throws a descriptive `Error` synchronously (on the first `.next()` call)
+   * if another `init()`, `plan()`, `apply()`, or `destroy()` call is already
+   * in flight on this instance — all four subcommands share the single
+   * {@link workspaceInFlight} lock because they read/write the same
+   * `backend/.terraform` workspace state; overlapping runs would race.
+   *
+   * Throws {@link DestroyNotConfirmedError} if `confirmationToken` isn't
+   * fresh/valid, {@link TerraformNotFoundError} if the `terraform` binary
+   * can't be resolved, {@link TerraformDestroyError} if the spawned process
+   * exits with a non-zero status code (and the run wasn't aborted), or
+   * {@link TerraformRunPersistError} if the process closed successfully (or
+   * was aborted) but the run record couldn't be persisted afterward.
+   */
+  async *destroy(
+    confirmationToken: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<TerraformRunChunk, TerraformDestroyResult | undefined> {
+    if (this.workspaceInFlight) {
+      throw new Error(
+        `TerraformService.destroy() cannot run while ${this.workspaceInFlight}() is already ` +
+          'running; wait for it to finish before calling destroy() again.',
+      );
+    }
+    this.assertFreshDestroyConfirmation(confirmationToken);
+
+    this.workspaceInFlight = 'destroy';
+    const runId = randomUUID();
+    // Hoisted for the same reason as apply()'s equivalents — a force-closed
+    // generator (consumer break/.return()/.throw()) unwinds straight past
+    // the writeRunRecord call below to the outer finally, which needs to see
+    // these.
+    let startedAt: string | undefined;
+    let runRecordWritten = false;
+    let forceKilled = false;
+    try {
+      if (signal?.aborted) {
+        // Already aborted before we even started resolving the binary path —
+        // end the generator cleanly without spawning anything (and without
+        // writing a run record, since no process ever ran).
+        return undefined;
+      }
+
+      const binaryPath = await this.getBinaryPath();
+
+      if (signal?.aborted) {
+        // Aborted while resolving the binary path — end cleanly before spawn.
+        return undefined;
+      }
+
+      const runDir = join(this.config.getRunsDir(), runId);
+      mkdirSync(runDir, { recursive: true });
+
+      const cwd = this.config.getTerraformDir();
+      const args = ['destroy', '-input=false', '-no-color', '-auto-approve'];
+      startedAt = new Date().toISOString();
+
+      logger.warn('terraform destroy confirmed — spawning terraform destroy -auto-approve', {
+        runId,
+        cwd,
+      });
+
+      let destroyed = 0;
+
+      // Driven manually (rather than `yield*`) so each stdout line can be
+      // scanned for the destroy summary as it streams through, in addition
+      // to being forwarded to the caller unmodified — mirrors apply()'s
+      // approach.
+      const stream = this.spawnAndStream(binaryPath, args, cwd, signal, () => {
+        forceKilled = true;
+      });
+      let next = await stream.next();
+      try {
+        while (!next.done) {
+          const chunk = next.value;
+          if (chunk.stream === 'stdout') {
+            const match = DESTROY_SUMMARY_PATTERN.exec(chunk.line);
+            if (match) {
+              destroyed = Number(match[1]);
+            }
+          }
+          yield chunk;
+          next = await stream.next();
+        }
+      } finally {
+        // Mirrors apply()'s equivalent finally — see its comment for why
+        // this explicit finalization is needed when this generator is
+        // force-closed early.
+        if (!next.done) {
+          await stream.return({ aborted: true });
+        }
+      }
+
+      const result = next.value;
+
+      // Compute the outcome before attempting to persist the run record, so
+      // a persistence failure below can still report the real destroy
+      // outcome instead of losing it behind an unrelated filesystem
+      // exception — mirrors apply().
+      const outcome: TerraformDestroyOutcome = result.aborted
+        ? { kind: 'aborted' }
+        : result.exitCode === 0
+          ? { kind: 'success', result: { runId, destroyed } }
+          : { kind: 'failed', error: new TerraformDestroyError(result.exitCode) };
+
+      // Logged before writeRunRecord (rather than after, as it was
+      // previously) so a persistence failure below can never suppress this
+      // WARN — destroying infrastructure must always show up in the log at
+      // this level regardless of whether the run record could be written.
+      logger.warn('terraform destroy finished', {
+        runId,
+        aborted: result.aborted,
+        exitCode: result.aborted ? null : result.exitCode,
+        destroyed,
+      });
+
+      runRecordWritten = true;
+      try {
+        this.writeRunRecord(runId, 'destroy', startedAt, result.aborted ? null : result.exitCode, undefined);
+      } catch (err) {
+        throw new TerraformRunPersistError(runId, outcome, err);
+      }
+
+      if (outcome.kind === 'aborted') {
+        // Aborted mid-run: the child was killed inside spawnAndStream. End
+        // the generator cleanly rather than surfacing the resulting
+        // error/exit code.
+        return undefined;
+      }
+      if (outcome.kind === 'success') {
+        return outcome.result;
+      }
+      throw outcome.error;
+    } finally {
+      // Covers the force-closed generator case — mirrors apply()'s outer
+      // finally; see its comment for the full rationale of the `forceKilled`
+      // gate.
+      if (startedAt !== undefined && !runRecordWritten && forceKilled) {
+        // Same WARN-level guarantee as the normal-completion path above:
+        // a cancellation via forced generator termination is still a
+        // destroy outcome worth surfacing, not just successes/failures
+        // reached through the happy path.
+        logger.warn('terraform destroy cancelled — generator force-closed while running', {
+          runId,
+        });
+        try {
+          this.writeRunRecord(runId, 'destroy', startedAt, null, undefined);
+        } catch {
+          // Nothing meaningful to do with a persistence failure while the
+          // generator is already tearing down for an unrelated reason.
+        }
+      }
+      this.workspaceInFlight = null;
+    }
+  }
+
+  /**
+   * Throws {@link DestroyNotConfirmedError} unless `token` matches the most
+   * recently minted, not-yet-expired, not-yet-consumed confirmation token
+   * (see {@link mintDestroyConfirmationToken}). On success, consumes the
+   * token (clears {@link pendingDestroyConfirmation}) so it can never be
+   * replayed against a second `destroy()` call.
+   */
+  private assertFreshDestroyConfirmation(token: string): void {
+    const pending = this.pendingDestroyConfirmation;
+    if (!pending || pending.token !== token || Date.now() > pending.expiresAt) {
+      throw new DestroyNotConfirmedError();
+    }
+    this.pendingDestroyConfirmation = null;
   }
 
   /**
@@ -937,26 +1275,28 @@ export class TerraformService {
 
   /**
    * Writes a {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` once
-   * an {@link apply} run's spawned process has closed. Creates the run
-   * directory if it doesn't already exist (defensive — {@link plan} normally
-   * creates it ahead of `apply`, but nothing prevents a caller from applying
+   * an {@link apply} or {@link destroy} run's spawned process has closed.
+   * Creates the run directory if it doesn't already exist (defensive —
+   * {@link plan} normally creates it ahead of `apply`, and `destroy` creates
+   * its own run directory itself, but nothing prevents a caller from applying
    * a plan file whose directory was cleaned up in between).
    *
    * `mkdirSync`/`writeFileSync` are wrapped in a try/catch so a filesystem
    * error here (e.g. permissions, disk full, cleaned-up parent directory)
    * surfaces as a plain descriptive `Error` rather than an opaque `ENOENT`/
-   * `EACCES` — {@link apply} catches it and re-throws it wrapped in
-   * {@link TerraformRunPersistError} alongside the already-computed apply
-   * outcome, so callers can tell a persistence failure apart from the apply
-   * itself failing.
+   * `EACCES` — {@link apply}/{@link destroy} catch it and re-throw it wrapped
+   * in {@link TerraformRunPersistError} alongside the already-computed
+   * outcome, so callers can tell a persistence failure apart from the
+   * subcommand itself failing.
    *
    * Re-validates `runId` via {@link assertValidRunId} before joining it into
-   * `runDir` — `apply()` already validates `runId` before this is called,
-   * but this guard is repeated here defensively so a future caller can never
-   * bypass it by skipping `apply()`'s own pre-spawn check.
+   * `runDir` — both `apply()`/`destroy()` already validate/mint `runId`
+   * before this is called, but this guard is repeated here defensively so a
+   * future caller can never bypass it by skipping those pre-spawn checks.
    */
   private writeRunRecord(
     runId: string,
+    kind: 'apply' | 'destroy',
     startedAt: string,
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
@@ -965,7 +1305,7 @@ export class TerraformService {
     const runDir = join(this.config.getRunsDir(), runId);
     const record: TerraformRunRecord = {
       runId,
-      kind: 'apply',
+      kind,
       startedAt,
       completedAt: new Date().toISOString(),
       exitCode,
