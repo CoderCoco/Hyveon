@@ -688,11 +688,20 @@ export class TerraformService {
    *
    * The same record is also written (with a `null` `exitCode`, mirroring the
    * abort outcome) if this generator itself is force-closed by its consumer
-   * (`break`/`.return()`/`.throw()`) after a process was spawned — the
-   * finalization above lives inside the generator's own body and is skipped
-   * when a forced completion unwinds straight past it, so an outer `finally`
-   * persists a cancelled record on that path instead, ensuring a spawned
-   * `terraform apply` is never left unrecorded.
+   * (`break`/`.return()`/`.throw()`) while the spawned `terraform apply`
+   * process is still genuinely running — the finalization above lives inside
+   * the generator's own body and is skipped when a forced completion unwinds
+   * straight past it, so an outer `finally` persists a cancelled record on
+   * that path instead, ensuring a still-running `terraform apply` killed by
+   * forced cleanup is never left unrecorded. This is narrower than "a
+   * process was spawned and no record was written yet": that condition alone
+   * is also true when `spawnAndStream` itself throws (e.g. a spawn `error`
+   * event/ENOENT, which only happens once the process has already closed) or
+   * some unrelated exception fires after the child already finished — those
+   * paths must let the real error/outcome propagate instead of being
+   * mislabeled as cancelled, so the outer `finally` also gates on a
+   * `forceKilled` flag that's only set when a genuinely still-live child was
+   * force-killed.
    *
    * Throws a descriptive `Error` synchronously (on the first `.next()` call)
    * if another `apply()`, `plan()`, or `init()` call is already in flight on
@@ -746,6 +755,16 @@ export class TerraformService {
     // the normal completion path.
     let startedAt: string | undefined;
     let runRecordWritten = false;
+    // Set to `true` only from the `onForceKill` callback passed to
+    // `spawnAndStream` below, which that method invokes exclusively from its
+    // own finally's "the child is still live — kill it" branch. This is
+    // deliberately *not* inferred from `startedAt !== undefined &&
+    // !runRecordWritten` alone — that pair is also true when `spawnAndStream`
+    // throws its own spawn error (e.g. a child `error` event/ENOENT, which
+    // only fires once the process has already closed) or some unrelated
+    // exception occurs after the child already finished successfully or
+    // failed, and neither of those is an actual cancellation.
+    let forceKilled = false;
     try {
       if (signal?.aborted) {
         // Already aborted before we even started the stale-plan guard — end
@@ -783,7 +802,9 @@ export class TerraformService {
       // Driven manually (rather than `yield*`) so each stdout line can be
       // scanned for the apply summary as it streams through, in addition to
       // being forwarded to the caller unmodified — mirrors plan()'s approach.
-      const stream = this.spawnAndStream(binaryPath, args, cwd, signal);
+      const stream = this.spawnAndStream(binaryPath, args, cwd, signal, () => {
+        forceKilled = true;
+      });
       let next = await stream.next();
       try {
         while (!next.done) {
@@ -861,12 +882,23 @@ export class TerraformService {
       // `spawnAndStream`, killing the child and waiting for it to actually
       // close), then continues unwinding *past* the `writeRunRecord` call
       // above — that statement is never reached — straight to this outer
-      // `finally`. If a process was ever spawned (`startedAt` set) and no
-      // record was written yet, persist a cancelled (`exitCode: null`) run
-      // record here so the run is never silently lost. Best-effort: a
-      // failure here doesn't override whatever completion the generator was
-      // already unwinding for.
-      if (startedAt !== undefined && !runRecordWritten) {
+      // `finally`.
+      //
+      // Gated on `forceKilled` (not merely `startedAt !== undefined &&
+      // !runRecordWritten`) — that pair alone can't tell "the consumer
+      // force-closed us while terraform was genuinely still running" apart
+      // from every other way this `finally` can be reached before
+      // `writeRunRecord` runs, e.g. `spawnAndStream` itself throwing (a
+      // spawn `error` event/ENOENT, which only happens once the process has
+      // already closed — nothing was actually killed here) or an unrelated
+      // exception after the child already finished successfully or failed.
+      // Those paths must let the real error/outcome propagate unmasked
+      // rather than being mislabeled as a cancelled run. If a process was
+      // genuinely still running and got force-killed (`forceKilled` true),
+      // persist a cancelled (`exitCode: null`) run record here so the run is
+      // never silently lost. Best-effort: a failure here doesn't override
+      // whatever completion the generator was already unwinding for.
+      if (startedAt !== undefined && !runRecordWritten && forceKilled) {
         try {
           this.writeRunRecord(runId, startedAt, null, tfvarsVersionId);
         } catch {
@@ -1031,12 +1063,25 @@ export class TerraformService {
    * Throws whatever error the spawned process itself raised (e.g. `ENOENT`)
    * verbatim — that failure mode isn't subcommand-specific, so it isn't left
    * to the caller to interpret.
+   *
+   * `onForceKill`, if provided, is invoked synchronously — and only — from
+   * this generator's own `finally` block when it force-kills a child that is
+   * still genuinely running (i.e. this generator itself was force-closed by
+   * its consumer, via `break`/`.return()`/`.throw()`, before the process had
+   * closed on its own). It is never invoked for a spawn error (`ENOENT`
+   * etc., surfaced via the thrown `closeError` above) or an abort-signal
+   * kill, both of which reach `closed === true` through the normal
+   * `child.on('error'/'close', ...)` handlers rather than this fallback path
+   * — {@link apply} uses this distinction to tell "the process was actually
+   * live and we just killed it" apart from every other reason its own outer
+   * `finally` might run before it's written a run record.
    */
   private async *spawnAndStream(
     binaryPath: string,
     args: string[],
     cwd: string,
     signal?: AbortSignal,
+    onForceKill?: () => void,
   ): AsyncGenerator<TerraformRunChunk, SpawnStreamResult> {
     const child = spawn(binaryPath, args, { cwd });
     const buffers: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
@@ -1097,6 +1142,13 @@ export class TerraformService {
     });
 
     const onAbort = (): void => {
+      // Guard against an abort event that fires after the child has already
+      // closed (success or failure) — without this, a late-firing signal
+      // would retroactively misclassify an already-completed run as
+      // aborted.
+      if (closed) {
+        return;
+      }
       aborted = true;
       child.kill();
     };
@@ -1133,6 +1185,13 @@ export class TerraformService {
         // in the background — explicitly kill the child and wait for it to
         // actually close before this generator resolves, so forced cleanup
         // terminates the underlying process instead of orphaning it.
+        //
+        // The child is genuinely still live at this point (its `close`/
+        // `error` handlers never fired, or `closed` would already be
+        // `true`) — notify the caller via `onForceKill` so it can
+        // distinguish this from every other way its own cleanup logic might
+        // run.
+        onForceKill?.();
         child.kill();
         await new Promise<void>((resolve) => {
           if (closed) {
