@@ -37,6 +37,7 @@ import type {
   LogChunk,
   TerraformInitConfig,
   TerraformRunChunk,
+  TfOutputs,
   UpdateGamePayload,
 } from './gsd-api.js';
 
@@ -415,6 +416,7 @@ const api: GsdApi = {
 
   terraform: {
     init: streamTerraformInit,
+    output: (force?: boolean) => invoke<TfOutputs | null>('terraform.output', { force }),
   },
 };
 

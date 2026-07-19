@@ -55,6 +55,62 @@ export interface TfOutputs {
 }
 
 /**
+ * Shape of the raw `terraform.tfstate` JSON as parsed off disk, restricted to
+ * the `outputs` map that {@link projectTfOutputs} reads from.
+ */
+export type RawTfState = { outputs?: Record<string, { value: unknown }> };
+
+/**
+ * Project the subset of Terraform outputs the app cares about (see
+ * {@link TfOutputs}) out of a parsed `terraform.tfstate` payload, filling in
+ * defaults for any keys the state doesn't have (e.g. because a Terraform
+ * apply hasn't run since a given output was added). Returns `null` when the
+ * state has no `outputs` map at all, or when that map is empty — both cases
+ * mean nothing has been deployed yet (an empty map is what `terraform output -json`
+ * reports before the first apply) — and both are treated by callers as
+ * "infra not yet deployed".
+ *
+ * Extracted from {@link ConfigService.getTfOutputs} as a pure function so the
+ * projection logic can be exercised (and reused) independently of the
+ * instance's file-reading/caching concerns.
+ */
+export function projectTfOutputs(raw: RawTfState): TfOutputs | null {
+  if (!raw.outputs || Object.keys(raw.outputs).length === 0) {
+    logger.warn('Terraform state has no outputs — infra not yet deployed');
+    return null;
+  }
+
+  const out = raw.outputs;
+  const get = <T>(key: string, fallback: T): T =>
+    key in out ? (out[key]!.value as T) : fallback;
+
+  const projected: TfOutputs = {
+    aws_region: get('aws_region', 'us-east-1'),
+    ecs_cluster_name: get('ecs_cluster_name', ''),
+    ecs_cluster_arn: get('ecs_cluster_arn', ''),
+    subnet_ids: get('subnet_ids', ''),
+    security_group_id: get('security_group_id', ''),
+    file_manager_security_group_id: get('file_manager_security_group_id', ''),
+    efs_file_system_id: get('efs_file_system_id', ''),
+    efs_access_points: get('efs_access_points', {}),
+    domain_name: get('domain_name', ''),
+    game_names: get('game_names', []),
+    alb_dns_name: get('alb_dns_name', null),
+    acm_certificate_arn: get('acm_certificate_arn', null),
+    discord_table_name: get('discord_table_name', ''),
+    audit_table_name: get('audit_table_name', ''),
+    discord_bot_token_secret_arn: get('discord_bot_token_secret_arn', ''),
+    discord_public_key_secret_arn: get('discord_public_key_secret_arn', ''),
+    interactions_invoke_url: get('interactions_invoke_url', null),
+    discord_interactions_url: get('discord_interactions_url', null),
+    applied_game_servers: get('applied_game_servers', null),
+  };
+
+  logger.debug('Loaded Terraform outputs', { games: projected.game_names });
+  return projected;
+}
+
+/**
  * User-editable watchdog tuning knobs persisted to `server_config.json`.
  * Consumed by the watchdog Lambda via Terraform variables; the UI only
  * displays/edits them — changes require `terraform apply` to take effect.
@@ -130,13 +186,12 @@ export class ConfigService {
   getTfOutputs(): TfOutputs | null {
     if (this.tfCache !== undefined) return this.tfCache;
 
-    type RawState = { outputs?: Record<string, { value: unknown }> };
-    let raw: RawState;
+    let raw: RawTfState;
 
     const tfStatePath = this.getTfStatePath();
     if (existsSync(tfStatePath)) {
       try {
-        raw = JSON.parse(readFileSync(tfStatePath, 'utf-8')) as RawState;
+        raw = JSON.parse(readFileSync(tfStatePath, 'utf-8')) as RawTfState;
       } catch (err) {
         logger.error('Failed to parse Terraform state', { err, path: tfStatePath });
         return (this.tfCache = null);
@@ -151,39 +206,7 @@ export class ConfigService {
     }
 
     try {
-      if (!raw.outputs) {
-        logger.warn('Terraform state has no outputs — infra not yet deployed', { path: tfStatePath });
-        return (this.tfCache = null);
-      }
-
-      const out = raw.outputs;
-      const get = <T>(key: string, fallback: T): T =>
-        key in out ? (out[key]!.value as T) : fallback;
-
-      this.tfCache = {
-        aws_region: get('aws_region', 'us-east-1'),
-        ecs_cluster_name: get('ecs_cluster_name', ''),
-        ecs_cluster_arn: get('ecs_cluster_arn', ''),
-        subnet_ids: get('subnet_ids', ''),
-        security_group_id: get('security_group_id', ''),
-        file_manager_security_group_id: get('file_manager_security_group_id', ''),
-        efs_file_system_id: get('efs_file_system_id', ''),
-        efs_access_points: get('efs_access_points', {}),
-        domain_name: get('domain_name', ''),
-        game_names: get('game_names', []),
-        alb_dns_name: get('alb_dns_name', null),
-        acm_certificate_arn: get('acm_certificate_arn', null),
-        discord_table_name: get('discord_table_name', ''),
-        audit_table_name: get('audit_table_name', ''),
-        discord_bot_token_secret_arn: get('discord_bot_token_secret_arn', ''),
-        discord_public_key_secret_arn: get('discord_public_key_secret_arn', ''),
-        interactions_invoke_url: get('interactions_invoke_url', null),
-        discord_interactions_url: get('discord_interactions_url', null),
-        applied_game_servers: get('applied_game_servers', null),
-      };
-
-      logger.debug('Loaded Terraform outputs', { games: this.tfCache.game_names });
-      return this.tfCache;
+      return (this.tfCache = projectTfOutputs(raw));
     } catch (err) {
       logger.error('Failed to parse Terraform state', { err });
       return (this.tfCache = null);

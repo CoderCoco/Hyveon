@@ -966,4 +966,99 @@ describe('preload dispatcher', () => {
       }, 10_000);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // terraform.output
+  // -------------------------------------------------------------------------
+
+  describe('terraform.output', () => {
+    /** Minimal `TfOutputs`-shaped fixture used across these tests. */
+    const OUTPUTS = {
+      aws_region: 'us-east-1',
+      ecs_cluster_name: 'hyveon-cluster',
+      ecs_cluster_arn: 'arn:aws:ecs:us-east-1:123456789012:cluster/hyveon-cluster',
+      subnet_ids: 'subnet-1,subnet-2',
+      security_group_id: 'sg-1',
+      file_manager_security_group_id: 'sg-2',
+      efs_file_system_id: 'fs-1',
+      efs_access_points: { minecraft: 'fsap-1' },
+      domain_name: 'example.com',
+      game_names: ['minecraft'],
+      alb_dns_name: null,
+      acm_certificate_arn: null,
+      discord_table_name: 'hyveon-discord',
+      audit_table_name: 'hyveon-audit',
+      discord_bot_token_secret_arn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:bot-token',
+      discord_public_key_secret_arn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:public-key',
+      interactions_invoke_url: null,
+      discord_interactions_url: null,
+      applied_game_servers: null,
+    };
+
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.output channel with { force: true } and resolve with the typed outputs object', async () => {
+        ipcInvoke.mockResolvedValue(OUTPUTS);
+        const terraform = bridge['terraform'] as { output: (force?: boolean) => Promise<unknown> };
+
+        const result = await terraform.output(true);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.output', { force: true });
+        expect(result).toEqual(OUTPUTS);
+      });
+
+      it('should invoke the terraform.output channel with { force: false } when force is explicitly false', async () => {
+        ipcInvoke.mockResolvedValue(OUTPUTS);
+        const terraform = bridge['terraform'] as { output: (force?: boolean) => Promise<unknown> };
+
+        await terraform.output(false);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.output', { force: false });
+      });
+
+      it('should invoke the terraform.output channel with { force: undefined } when no argument is supplied', async () => {
+        ipcInvoke.mockResolvedValue(OUTPUTS);
+        const terraform = bridge['terraform'] as { output: (force?: boolean) => Promise<unknown> };
+
+        await terraform.output();
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.output', { force: undefined });
+      });
+
+      it('should resolve with null when terraform.output reports no outputs', async () => {
+        ipcInvoke.mockResolvedValue(null);
+        const terraform = bridge['terraform'] as { output: (force?: boolean) => Promise<unknown> };
+
+        const result = await terraform.output();
+
+        expect(result).toBeNull();
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.output is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const mockHandler = vi.fn().mockResolvedValue(OUTPUTS);
+        testApi.mock('terraform.output', mockHandler);
+
+        const terraform = bridge['terraform'] as { output: (force?: boolean) => Promise<unknown> };
+        const result = await terraform.output(true);
+
+        expect(mockHandler).toHaveBeenCalledWith({ force: true });
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(OUTPUTS);
+      });
+    });
+  });
 });

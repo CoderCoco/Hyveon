@@ -517,6 +517,40 @@ export interface TerraformInitConfig {
   dynamodbTable: string;
 }
 
+/**
+ * Shape of the subset of Terraform root outputs the management app consumes.
+ *
+ * Mirrors `TfOutputs` in `@hyveon/desktop-main/src/services/ConfigService.ts`
+ * — that file is the source of truth; keep this copy in sync with it.
+ */
+export interface TfOutputs {
+  aws_region: string;
+  ecs_cluster_name: string;
+  ecs_cluster_arn: string;
+  subnet_ids: string;
+  security_group_id: string;
+  file_manager_security_group_id: string;
+  efs_file_system_id: string;
+  efs_access_points: Record<string, string>;
+  domain_name: string;
+  game_names: string[];
+  alb_dns_name: string | null;
+  acm_certificate_arn: string | null;
+  discord_table_name: string;
+  audit_table_name: string;
+  discord_bot_token_secret_arn: string;
+  discord_public_key_secret_arn: string;
+  interactions_invoke_url: string | null;
+  discord_interactions_url: string | null;
+  /**
+   * Full per-game `game_servers` configuration as last applied by Terraform
+   * (the `applied_game_servers` sensitive output — see `terraform/aws/outputs.tf`),
+   * keyed by game name. `null` when the output is absent (e.g. state predates
+   * this output, or `terraform apply` hasn't run since it was added).
+   */
+  applied_game_servers: Record<string, Omit<GameServer, 'name'>> | null;
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace sub-interfaces
 // ---------------------------------------------------------------------------
@@ -683,6 +717,14 @@ export interface GsdTerraformApi {
    * `terraform init` process was ever spawned.
    */
   init: (config: TerraformInitConfig, signal?: AbortSignal) => AsyncIterable<TerraformRunChunk>;
+  /**
+   * Returns the current Terraform outputs by invoking the `terraform.output`
+   * IPC channel with `{ force }`. `force` defaults to `false`, matching
+   * `TerraformService.output`'s own default; pass `true` to bypass its
+   * in-memory cache and re-spawn `terraform output -json`. Resolves `null`
+   * when Terraform reports no outputs (infra not yet deployed).
+   */
+  output: (force?: boolean) => Promise<TfOutputs | null>;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import type { RemoteFileStore } from '@hyveon/shared';
 import { logger } from '../logger.js';
-import { ConfigService } from './ConfigService.js';
+import { ConfigService, projectTfOutputs, type TfOutputs } from './ConfigService.js';
 import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
 
 const execFileAsync = promisify(execFile);
@@ -357,6 +357,15 @@ export interface TerraformDestroyResult {
 const DESTROY_SUMMARY_PATTERN = /Destroy complete!\s*Resources:\s*(\d+) destroyed\./;
 
 /**
+ * How long a successful {@link TerraformService.output} call's resolved
+ * {@link TfOutputs} stays cached before a subsequent non-`force` call
+ * re-spawns `terraform output -json` — outputs only change after a
+ * successful `apply`/`destroy`, so a caller polling `output()` repeatedly
+ * doesn't shell out to `terraform` on every request.
+ */
+const OUTPUT_CACHE_TTL_MS = 60 * 1000;
+
+/**
  * Describes what {@link TerraformService.destroy} was about to return/throw
  * the moment its spawned process closed — captured before
  * {@link TerraformService.writeRunRecord} is attempted so a persistence
@@ -377,11 +386,13 @@ export type TerraformDestroyOutcome =
  * under `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
  * streaming `terraform apply <planFile>` runner that persists a
  * {@link TerraformRunRecord} to the same per-run directory once the process
- * closes; and {@link TerraformService.destroy}, the streaming
+ * closes; {@link TerraformService.destroy}, the streaming
  * `terraform destroy -auto-approve` runner gated behind a short-lived
- * confirmation token minted via {@link TerraformService.mintDestroyConfirmationToken}.
- * A later child issue of Epic D adds `output` — see the "Terraform
- * orchestrator" section of the electron-desktop-pivot design spec.
+ * confirmation token minted via {@link TerraformService.mintDestroyConfirmationToken};
+ * and {@link TerraformService.output}, which runs `terraform output -json`
+ * and projects the result through the same {@link projectTfOutputs} helper
+ * `ConfigService.getTfOutputs()` uses, caching the resolved value for 60s
+ * (bypassable via `force: true`).
  *
  * Construction is synchronous and never throws — the binary lookup +
  * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
@@ -426,6 +437,17 @@ export class TerraformService {
    * superseded by a newer one.
    */
   private pendingDestroyConfirmation: { token: string; expiresAt: number } | null = null;
+
+  /**
+   * Memoized result of the most recent successful {@link output} call,
+   * alongside the timestamp (`Date.now()`) it resolved at. `value` mirrors
+   * `output()`'s own return type — `null` when `terraform output -json`
+   * reported no outputs. `null` (the whole field, not just `value`) until
+   * the first successful `output()` call. Consulted by {@link output} to
+   * decide whether a non-`force` call can be served from cache instead of
+   * re-spawning `terraform`; see {@link OUTPUT_CACHE_TTL_MS}.
+   */
+  private outputCache: { value: TfOutputs | null; resolvedAt: number } | null = null;
 
   /**
    * `config` resolves the terraform working directory (`getTerraformDir()`)
@@ -1231,6 +1253,54 @@ export class TerraformService {
       }
       this.workspaceInFlight = null;
     }
+  }
+
+  /**
+   * Runs `terraform output -json` inside the Terraform composer root
+   * (`ConfigService.getTerraformDir()`) and projects the result through the
+   * same {@link projectTfOutputs} helper `ConfigService.getTfOutputs()` uses
+   * against `terraform.tfstate` — so a caller reading outputs via
+   * `TerraformService` sees the identical {@link TfOutputs} shape as one
+   * reading the state file directly. Returns `null` when
+   * `terraform output -json` reports no outputs (mirrors
+   * `projectTfOutputs`'s "infra not yet deployed" case).
+   *
+   * Unlike {@link init}/{@link plan}/{@link apply}/{@link destroy}, this is a
+   * plain buffered call (`execFile`, like {@link resolveVersion}) rather than
+   * a streaming generator — `terraform output` is a fast, read-only query
+   * with no line-by-line progress worth surfacing to a caller, and it
+   * doesn't mutate `backend/.terraform` workspace state, so it isn't gated
+   * behind {@link workspaceInFlight}.
+   *
+   * The resolved value is cached in-memory for {@link OUTPUT_CACHE_TTL_MS}
+   * (60s): outputs only change after a successful `apply`/`destroy`, so a
+   * caller polling `output()` repeatedly (e.g. a future outputs panel)
+   * doesn't spawn a fresh `terraform` process on every call. Pass
+   * `force: true` to bypass the cache and re-spawn regardless of how
+   * recently the last call resolved — e.g. immediately after `apply()`/
+   * `destroy()` complete, where the caller knows the outputs may have
+   * changed.
+   *
+   * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
+   * resolved, or whatever error the spawned `terraform output -json` process
+   * itself raised (e.g. a non-zero exit before any state has ever been
+   * applied). Neither failure updates {@link outputCache}, so the next call
+   * (force or not) retries rather than being stuck serving a stale/expired
+   * cache entry.
+   */
+  async output(force = false): Promise<TfOutputs | null> {
+    if (!force && this.outputCache && Date.now() - this.outputCache.resolvedAt < OUTPUT_CACHE_TTL_MS) {
+      return this.outputCache.value;
+    }
+
+    const binaryPath = await this.getBinaryPath();
+    const cwd = this.config.getTerraformDir();
+    const { stdout } = await execFileAsync(binaryPath, ['output', '-json'], { cwd });
+    const outputs = JSON.parse(stdout) as Record<string, { value: unknown }>;
+    const value = projectTfOutputs({ outputs });
+
+    this.outputCache = { value, resolvedAt: Date.now() };
+    return value;
   }
 
   /**
