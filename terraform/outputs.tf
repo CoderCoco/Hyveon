@@ -123,10 +123,10 @@ output "audit_table_name" {
   value       = module.cloud[0].audit_table_name
 }
 
-# ── Server run history outputs ────────────────────────────────────────────────
+# ── Terraform run history outputs ─────────────────────────────────────────────
 
 output "runs_table_name" {
-  description = "DynamoDB table holding server-run history entries"
+  description = "DynamoDB table holding Terraform plan/apply run records"
   value       = module.cloud[0].runs_table_name
 }
 
