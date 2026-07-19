@@ -1,4 +1,5 @@
 import type { AuditEntry, AuditPageResult } from './audit.js';
+import type { RunRecord } from './runs.js';
 
 /** Options for launching a game workload. Intentionally open/opaque for v1; implementations may accept provider-specific keys or refine this via intersection. */
 export interface StartOpts {
@@ -213,4 +214,45 @@ export interface AuditLogStore {
    * @returns The requested page of entries plus a cursor for the next page.
    */
   listEntries(limit: number, before?: string): Promise<AuditPageResult>;
+}
+
+/**
+ * Cloud-agnostic interface for persisting `terraform` plan/apply/destroy run
+ * history and offloading their captured logs. Implementations may target AWS
+ * DynamoDB + S3, Azure Table Storage + Blob Storage, GCP Firestore + Cloud
+ * Storage, or any other backend — callers depend only on this contract. No
+ * `@aws-sdk/*` shapes appear in this interface or its parameter/return
+ * types. Listing/pagination of persisted runs is deferred to a follow-up
+ * issue (apply-history UI) and intentionally not part of this contract yet.
+ */
+export interface RunRecordStore {
+  /**
+   * Creates or overwrites a run record, keyed on {@link RunRecord.sk}. Called
+   * once the run's process has closed, with `status`/`exitCode`/`completedAt`
+   * (and, if the log was offloaded, `log`) already populated.
+   *
+   * @param record - The record to persist, including its `sk` (see `buildRunSk`).
+   */
+  putRecord(record: RunRecord): Promise<void>;
+
+  /**
+   * Writes a run's captured log to the remote file store, keyed by `runId`.
+   *
+   * @param runId - Unique identifier of the run the log belongs to.
+   * @param body  - The raw log contents to store.
+   * @returns The store-assigned key the log was written under, suitable for
+   *   passing to {@link RunRecordStore.getLogUrl} and for stashing on
+   *   {@link RunRecord.log}.
+   */
+  putLog(runId: string, body: Uint8Array): Promise<string>;
+
+  /**
+   * Resolves a temporary, publicly-fetchable URL for a previously stored log.
+   *
+   * @param logKey - The key returned by a prior {@link RunRecordStore.putLog} call.
+   * @param expiresInSeconds - How long the returned URL should remain valid, in
+   *   seconds. Implementations may apply their own default when omitted.
+   * @returns A presigned/temporary URL the caller can fetch the log from directly.
+   */
+  getLogUrl(logKey: string, expiresInSeconds?: number): Promise<string>;
 }
