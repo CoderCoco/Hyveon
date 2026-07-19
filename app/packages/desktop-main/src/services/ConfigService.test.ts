@@ -136,7 +136,11 @@ describe('ConfigService', () => {
 
     it('should apply the fallback aws_region when outputs omit it', () => {
       mockExists.mockReturnValue(true);
-      mockRead.mockReturnValue(makeState({}));
+      // A non-empty outputs map that simply doesn't include `aws_region` —
+      // distinct from an *empty* `{}` map, which is now treated as "infra
+      // not yet deployed" and short-circuits to `null` before defaults are
+      // ever filled in.
+      mockRead.mockReturnValue(makeState({ ecs_cluster_name: { value: 'my-cluster' } }));
       expect(service.getTfOutputs()!.aws_region).toBe('us-east-1');
     });
 

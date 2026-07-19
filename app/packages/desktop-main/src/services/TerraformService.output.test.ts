@@ -266,3 +266,19 @@ describe('TerraformService.output null-outputs case', () => {
     expect(execFileMock).toHaveBeenCalledTimes(3);
   });
 });
+
+describe('TerraformService.output empty-outputs case', () => {
+  it('should resolve to null when terraform output -json reports an empty outputs map', async () => {
+    queueSuccessfulResolution();
+    // `terraform output -json` reports `{}` when nothing has been deployed
+    // yet — `projectTfOutputs({ outputs: {} })` must hit the same "no
+    // outputs" branch as the `null` case above, not fall through to a
+    // default-filled TfOutputs object.
+    queueExecFileSuccess('{}');
+
+    const service = new TerraformService(stubOutputConfigService(), stubRemoteFileStore());
+
+    const result = await service.output();
+    expect(result).toBeNull();
+  });
+});
