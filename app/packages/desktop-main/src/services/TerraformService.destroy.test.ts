@@ -27,17 +27,23 @@ vi.mock('node:fs', () => ({
   copyFileSync: vi.fn(),
 }));
 
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 import {
   TerraformService,
   TerraformNotFoundError,
   TerraformDestroyError,
   DestroyNotConfirmedError,
+  TerraformRunPersistError,
   type TerraformRunChunk,
   type TerraformDestroyResult,
   type TerraformRunRecord,
 } from './TerraformService.js';
 import type { ConfigService } from './ConfigService.js';
 import type { RemoteFileStore } from '@hyveon/shared';
+import { logger } from '../logger.js';
 
 /**
  * How long a minted destroy-confirmation token stays valid before
@@ -83,17 +89,24 @@ function queueSuccessfulResolution(binaryPath = '/usr/local/bin/terraform', vers
 /**
  * `ConfigService` stub for `destroy()` tests: exposes `getTerraformDir` and
  * `getRunsDir` — the only accessors `destroy()` (directly, or via
- * {@link TerraformService.writeRunRecord}) reads.
+ * {@link TerraformService.writeRunRecord}) reads. Also exposes
+ * `getTfvarsBucket`/`getTfvarsPath` (defaulting to local-file mode) purely so
+ * the cross-subcommand lock tests below can exercise a real `plan()`/`apply()`
+ * call — `destroy()` itself never touches either accessor.
  */
 function stubDestroyConfigService(
   opts: {
     terraformDir?: string;
     runsDir?: string;
+    tfvarsBucket?: string | null;
+    tfvarsPath?: string;
   } = {},
 ): ConfigService {
   return {
     getTerraformDir: () => opts.terraformDir ?? '/repo/terraform',
     getRunsDir: () => opts.runsDir ?? '/repo/runs',
+    getTfvarsBucket: () => opts.tfvarsBucket ?? null,
+    getTfvarsPath: () => opts.tfvarsPath ?? '/repo/terraform/terraform.tfvars',
   } as ConfigService;
 }
 
@@ -322,5 +335,242 @@ describe('TerraformService.destroy confirmed run', () => {
     await expect(collectDestroyChunks(service.destroy(token))).rejects.toBeInstanceOf(TerraformNotFoundError);
     expect(spawnMock).not.toHaveBeenCalled();
     expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerraformService.destroy concurrency guard', () => {
+  it('should throw a descriptive Error from a second destroy() call while the first is still in flight', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const firstToken = service.mintDestroyConfirmationToken();
+    const firstGen = service.destroy(firstToken);
+    const firstNext = firstGen.next(); // starts the generator body, setting the in-flight flag synchronously
+
+    const secondToken = service.mintDestroyConfirmationToken();
+    const secondGen = service.destroy(secondToken);
+    await expect(secondGen.next()).rejects.toThrow(/already running/i);
+
+    // Let the first call finish so it doesn't leak into other tests.
+    await flushMicrotasks();
+    child.close(0);
+    await firstNext;
+    await firstGen.next();
+  });
+
+  it('should throw a descriptive Error from destroy() when apply() is already running against the same workspace', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    existsSyncMock.mockReturnValue(true);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const applyGen = service.apply('run-1', undefined, '/repo/runs/run-1/run-1.tfplan');
+    const applyNext = applyGen.next(); // starts apply()'s body, setting the shared in-flight flag synchronously
+
+    const token = service.mintDestroyConfirmationToken();
+    const destroyGen = service.destroy(token);
+    await expect(destroyGen.next()).rejects.toThrow(/apply\(\) is already running/i);
+
+    // Let the in-flight apply() finish so it doesn't leak into other tests.
+    await flushMicrotasks();
+    child.close(0);
+    await applyNext;
+    await applyGen.next();
+  });
+
+  it('should throw a descriptive Error from destroy() when plan() is already running against the same workspace', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    // plan() pulls a local-file tfvars snapshot ahead of spawning — stub a
+    // "source file exists" answer so that read succeeds and plan() reaches
+    // spawn (and the shared workspace lock) the same way destroy() would.
+    existsSyncMock.mockReturnValue(true);
+
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const planGen = service.plan();
+    const planNext = planGen.next(); // starts plan()'s body, setting the shared in-flight flag synchronously
+
+    const token = service.mintDestroyConfirmationToken();
+    const destroyGen = service.destroy(token);
+    await expect(destroyGen.next()).rejects.toThrow(/plan\(\) is already running/i);
+
+    // Let the in-flight plan() finish so it doesn't leak into other tests.
+    await flushMicrotasks();
+    child.close(0);
+    await planNext;
+    await planGen.next();
+  });
+});
+
+describe('TerraformService.destroy run.json persistence failure', () => {
+  it('should reject with a TerraformRunPersistError carrying the real (successful) destroy outcome when writeRunRecord fails to persist the run record', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    const persistFailure = new Error('ENOSPC: no space left on device');
+    writeFileSyncMock.mockImplementationOnce(() => {
+      throw persistFailure;
+    });
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const pending = collectDestroyChunks(service.destroy(token), () => {
+      child.emitStdout('Destroy complete! Resources: 2 destroyed.\n');
+      child.close(0);
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(TerraformRunPersistError);
+    // The real destroy outcome (the process succeeded and destroyed 2
+    // resources) must survive the persistence failure rather than being
+    // discarded behind it.
+    await expect(pending).rejects.toMatchObject({
+      runId: expect.any(String),
+      outcome: { kind: 'success', result: { destroyed: 2 } },
+    });
+    // `writeRunRecord` wraps the raw filesystem error in a descriptive
+    // `Error` (with `{ cause }`) before `destroy()` re-wraps *that* as the
+    // `TerraformRunPersistError`'s own `cause` — assert the original
+    // `persistFailure` is still reachable two levels down rather than lost.
+    const rejection = (await pending.catch((err: unknown) => err)) as TerraformRunPersistError;
+    expect(rejection.cause).toBeInstanceOf(Error);
+    expect((rejection.cause as Error).cause).toBe(persistFailure);
+  });
+});
+
+describe('TerraformService.destroy forced early termination', () => {
+  it('should kill the child process and wait for it to close when the generator is force-closed early (e.g. consumer break) before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const token = service.mintDestroyConfirmationToken();
+    const gen = service.destroy(token);
+
+    // Drive the generator to its first yielded chunk, mirroring a consumer
+    // that starts iterating (e.g. a `for await...of` loop) but never reaches
+    // the child process's `close` event before bailing out.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Destroying...\n');
+    await first;
+
+    // Simulate the consumer force-closing the generator early (what a
+    // `for await...of` `break`/`throw` desugars to under the hood). This
+    // should propagate through destroy()'s finally into spawnAndStream's
+    // finally, which must kill the still-running child rather than just
+    // detaching the abort listener.
+    let returnSettled = false;
+    const returnPromise = gen.return(undefined).then((result) => {
+      returnSettled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    // The generator must not resolve its forced return until the child
+    // process actually reports closing — killing it isn't enough on its own.
+    expect(returnSettled).toBe(false);
+
+    child.close(null);
+    const result = await returnPromise;
+
+    expect(returnSettled).toBe(true);
+    expect(result.done).toBe(true);
+  });
+
+  it('should write exactly one run.json record with a null exitCode via the outer finally when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+    const gen = service.destroy(token);
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed. writeRunRecord() lives after the inner try/finally in
+    // destroy()'s body, which a forced completion unwinds straight past; the
+    // persistence must instead happen from the outer finally's `forceKilled`
+    // cleanup path.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Destroying...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.close(null);
+    await returnPromise;
+
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
+    const [path, contents] = writeFileSyncMock.mock.calls[0] as [string, string];
+    expect(path).toMatch(/^\/repo\/runs\/.+\/run\.json$/);
+    const record = JSON.parse(contents) as TerraformRunRecord;
+    expect(record.kind).toBe('destroy');
+    expect(record.exitCode).toBeNull();
+  });
+});
+
+describe('TerraformService.destroy forced-cleanup persistence failure', () => {
+  it('should have already emitted the confirmed-start WARN log, and resolve cleanly, when the outer finally\'s forced-cleanup writeRunRecord call itself throws', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    // Every writeFileSync call (including the outer finally's forced-cleanup
+    // attempt) fails — the run was never persisted, and the failure must not
+    // crash the generator's forced teardown.
+    writeFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ terraformDir: '/repo/terraform' }),
+      stubRemoteFileStore(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+    const gen = service.destroy(token);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Destroying...\n');
+    await first;
+
+    // The "confirmed — spawning" WARN log is emitted unconditionally before
+    // the spawned process is ever streamed, well before the forced-cleanup
+    // path below runs — it must still be on record afterward.
+    expect(logger.warn).toHaveBeenCalledWith(
+      'terraform destroy confirmed — spawning terraform destroy -auto-approve',
+      expect.objectContaining({ cwd: '/repo/terraform' }),
+    );
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.close(null);
+    const result = await returnPromise;
+
+    // The forced-cleanup writeRunRecord attempt is swallowed (best-effort)
+    // rather than crashing the generator's teardown or rejecting return().
+    expect(result.done).toBe(true);
+    expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
   });
 });
