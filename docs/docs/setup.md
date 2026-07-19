@@ -564,8 +564,9 @@ CONFIG + PENDING rows), and two Secrets Manager secrets — all created by
 > when) for game-server configuration changes (add/edit/remove) made via the
 > management app's UI; it does not record Discord bot actions, server
 > start/stop, or credential edits. `runs_table_name` records one row per
-> Terraform plan/apply run (initiator, plan hash, status, approver, and a
-> plan-diff summary) for the dashboard's apply-history view. Both tables are
+> Terraform plan/apply run — `id`, `kind` (`plan` | `apply`), `status`,
+> `initiator`, `approver`, `approvedAt`, `planHash`, `tfvarsVersion`, and a
+> plan-diff `summary` — for the dashboard's apply-history view. Both tables are
 > covered by the existing `dynamodb:*` action in the deploy IAM policy — no
 > policy change is needed. See
 > [`audit_table_name` and `runs_table_name`](/components/terraform#variables)
