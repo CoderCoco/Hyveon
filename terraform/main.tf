@@ -89,4 +89,5 @@ module "cloud" {
   discord_public_key     = var.discord_public_key
 
   audit_table_name = var.audit_table_name
+  runs_table_name  = var.runs_table_name
 }
