@@ -78,19 +78,32 @@ describe('AwsRunRecordStore', () => {
       });
     });
 
-    it('should include tfvarsVersionId and log on the written item when present on the record', async () => {
+    it('should include tfvarsVersionId and logS3Key on the written item when present on the record', async () => {
       ddbMock.on(PutCommand).resolves({});
 
       const store = makeStore();
-      const record = makeRecord({ tfvarsVersionId: 'v-1', log: 'runs/run-123.log' });
+      const record = makeRecord({ tfvarsVersionId: 'v-1', logS3Key: 'runs/run-123.log' });
       await store.putRecord(record);
 
       const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
       expect(input.Item?.['tfvarsVersionId']).toBe('v-1');
-      expect(input.Item?.['log']).toBe('runs/run-123.log');
+      expect(input.Item?.['logS3Key']).toBe('runs/run-123.log');
+      expect(input.Item).not.toHaveProperty('logInline');
     });
 
-    it('should omit tfvarsVersionId and log from the written item when absent on the record', async () => {
+    it('should include logInline (and not logS3Key) on the written item when the log was embedded', async () => {
+      ddbMock.on(PutCommand).resolves({});
+
+      const store = makeStore();
+      const record = makeRecord({ logInline: 'terraform plan output' });
+      await store.putRecord(record);
+
+      const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
+      expect(input.Item?.['logInline']).toBe('terraform plan output');
+      expect(input.Item).not.toHaveProperty('logS3Key');
+    });
+
+    it('should omit tfvarsVersionId, logInline, and logS3Key from the written item when absent on the record', async () => {
       ddbMock.on(PutCommand).resolves({});
 
       const store = makeStore();
@@ -98,7 +111,8 @@ describe('AwsRunRecordStore', () => {
 
       const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
       expect(input.Item).not.toHaveProperty('tfvarsVersionId');
-      expect(input.Item).not.toHaveProperty('log');
+      expect(input.Item).not.toHaveProperty('logInline');
+      expect(input.Item).not.toHaveProperty('logS3Key');
     });
 
     it('should throw a clear error when constructed without a getConfig callback', async () => {

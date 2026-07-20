@@ -149,7 +149,8 @@ export class AwsRunRecordStore implements RunRecordStore {
           completedAt: record.completedAt,
           exitCode: record.exitCode,
           ...(record.tfvarsVersionId !== undefined ? { tfvarsVersionId: record.tfvarsVersionId } : {}),
-          ...(record.log !== undefined ? { log: record.log } : {}),
+          ...(record.logInline !== undefined ? { logInline: record.logInline } : {}),
+          ...(record.logS3Key !== undefined ? { logS3Key: record.logS3Key } : {}),
         },
       }),
     );

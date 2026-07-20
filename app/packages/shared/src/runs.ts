@@ -41,12 +41,23 @@ export interface RunRecord {
   /** The tfvars version id the run was executed against, if the caller supplied one. */
   tfvarsVersionId?: string;
   /**
+   * The run's captured log text, embedded directly on the record because it
+   * was small enough to fit under the caller's inline-size threshold (see
+   * `RunRecordService.INLINE_LOG_LIMIT_BYTES`). Mutually exclusive with
+   * {@link logS3Key} — a record has at most one of the two set, never both.
+   * Absent when the log was offloaded instead, or was never captured.
+   */
+  logInline?: string;
+  /**
    * Key returned by {@link RunRecordStore.putLog} identifying where the run's
    * captured log was written (e.g. `runs/${runId}.log` in the remote file
-   * store) once it exceeded the inline-attribute size threshold. Absent when
-   * the log was small enough to be embedded elsewhere or was never captured.
+   * store) once it exceeded the inline-attribute size threshold. Pass this
+   * value to {@link RunRecordStore.getLogUrl} to resolve a fetchable URL.
+   * Mutually exclusive with {@link logInline} — a record has at most one of
+   * the two set, never both. Absent when the log was small enough to be
+   * embedded inline instead, or was never captured.
    */
-  log?: string;
+  logS3Key?: string;
 }
 
 /**

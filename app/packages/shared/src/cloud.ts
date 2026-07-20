@@ -229,7 +229,8 @@ export interface RunRecordStore {
   /**
    * Creates or overwrites a run record, keyed on {@link RunRecord.sk}. Called
    * once the run's process has closed, with `status`/`exitCode`/`completedAt`
-   * (and, if the log was offloaded, `log`) already populated.
+   * (and, depending on whether the log was embedded or offloaded,
+   * `logInline` or `logS3Key`) already populated.
    *
    * @param record - The record to persist, including its `sk` (see `buildRunSk`).
    */
@@ -242,7 +243,7 @@ export interface RunRecordStore {
    * @param body  - The raw log contents to store.
    * @returns The store-assigned key the log was written under, suitable for
    *   passing to {@link RunRecordStore.getLogUrl} and for stashing on
-   *   {@link RunRecord.log}.
+   *   {@link RunRecord.logS3Key}.
    */
   putLog(runId: string, body: Uint8Array): Promise<string>;
 

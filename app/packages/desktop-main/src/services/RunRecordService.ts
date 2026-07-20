@@ -4,9 +4,11 @@
  * history table (`terraform/aws/runs_store.tf`).
  *
  * `persist()` decides, per call, whether a run's captured log is small
- * enough to embed directly on the `RunRecord.log` attribute or must be
+ * enough to embed directly on the `RunRecord.logInline` attribute or must be
  * offloaded to the store's remote file backend (S3 for AWS) via
- * `RunRecordStore.putLog` — see {@link INLINE_LOG_LIMIT_BYTES}. It is
+ * `RunRecordStore.putLog`, with the resulting key stored on
+ * `RunRecord.logS3Key` instead — see {@link INLINE_LOG_LIMIT_BYTES}. The two
+ * attributes are mutually exclusive; a record never has both set. It is
  * intentionally best-effort: a run-history write failure must never mask
  * (or retroactively fail) an otherwise-successful `terraform` run, so every
  * failure path logs a winston warning and falls back to the least-lossy
@@ -24,8 +26,8 @@ import { RUN_RECORD_STORE } from '../modules/cloud-provider.tokens.js';
 /**
  * Maximum size, in UTF-8 encoded bytes, of a captured run log that
  * {@link RunRecordService.persist} will embed directly on the persisted
- * `RunRecord.log` attribute instead of offloading to the store's remote file
- * backend (S3 for AWS, via {@link RunRecordStore.putLog}). Set to 350KB
+ * `RunRecord.logInline` attribute instead of offloading to the store's
+ * remote file backend (S3 for AWS, via {@link RunRecordStore.putLog}). Set to 350KB
  * (`350 * 1024`) — well under DynamoDB's 400KB item size limit once the
  * record's other attributes are accounted for. This intentionally deviates
  * from the 5MB figure floated in issue #179: 5MB is roughly an order of
@@ -93,19 +95,20 @@ export class RunRecordService {
    *   can't itself be recorded to it), a winston warning is logged and the
    *   method returns without touching `store` at all.
    * - `logFilePath`, when non-`null`, is read via the filesystem and
-   *   embedded on `RunRecord.log` when at or under
+   *   embedded on `RunRecord.logInline` when at or under
    *   {@link INLINE_LOG_LIMIT_BYTES} (UTF-8 encoded), or offloaded first via
    *   `store.putLog` (which, for `AwsRunRecordStore`, lands at
    *   `runs/<runId>.log`) with the store-assigned key stored on
-   *   `RunRecord.log` instead of the raw text. `logFilePath` being `null`
-   *   leaves `RunRecord.log` unset entirely — no read/offload attempt is
-   *   made.
+   *   `RunRecord.logS3Key` instead — `logInline` and `logS3Key` are mutually
+   *   exclusive, so callers (e.g. `getLogUrl`) can tell which one they got
+   *   without guessing. `logFilePath` being `null` leaves both attributes
+   *   unset entirely — no read/offload attempt is made.
    * - If the log file can't be read, or an oversized log fails to offload
    *   (e.g. no remote file store configured, or the offload call fails),
    *   a winston warning is logged and the record is still persisted via
-   *   `store.putRecord` — just without a `log` attribute — rather than
-   *   abandoning the whole write. Losing the log transcript is preferable
-   *   to losing the run's existence/status from history.
+   *   `store.putRecord` — just without a `logInline`/`logS3Key` attribute —
+   *   rather than abandoning the whole write. Losing the log transcript is
+   *   preferable to losing the run's existence/status from history.
    * - If the final `store.putRecord` call itself fails, a winston warning is
    *   logged and the method returns.
    *
@@ -123,7 +126,8 @@ export class RunRecordService {
       return;
     }
 
-    let log: string | undefined;
+    let logInline: string | undefined;
+    let logS3Key: string | undefined;
     if (logFilePath !== null) {
       let logText: string | undefined;
       try {
@@ -141,7 +145,7 @@ export class RunRecordService {
         const byteLength = Buffer.byteLength(logText, 'utf8');
         if (byteLength > INLINE_LOG_LIMIT_BYTES) {
           try {
-            log = await this.store.putLog(params.runId, new TextEncoder().encode(logText));
+            logS3Key = await this.store.putLog(params.runId, new TextEncoder().encode(logText));
           } catch (err) {
             logger.warn(
               'RunRecordService.persist: failed to offload log to remote store, persisting record without log',
@@ -149,7 +153,7 @@ export class RunRecordService {
             );
           }
         } else {
-          log = logText;
+          logInline = logText;
         }
       }
     }
@@ -164,7 +168,8 @@ export class RunRecordService {
         completedAt: params.completedAt,
         exitCode: params.exitCode,
         ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
-        ...(log !== undefined ? { log } : {}),
+        ...(logInline !== undefined ? { logInline } : {}),
+        ...(logS3Key !== undefined ? { logS3Key } : {}),
       };
 
       await this.store.putRecord(record);
@@ -180,10 +185,11 @@ export class RunRecordService {
   /**
    * Resolves a temporary, fetchable URL for a previously stored run log,
    * delegating directly to `store.getLogUrl` — `logKey` is expected to be a
-   * value previously stored on `RunRecord.log` by {@link persist} once a log
-   * was offloaded (embedded logs have no key to resolve a URL for).
+   * value previously stored on `RunRecord.logS3Key` by {@link persist} once a
+   * log was offloaded (embedded logs, stored on `RunRecord.logInline`
+   * instead, have no key to resolve a URL for).
    *
-   * @param logKey - The key returned by a prior offload, as stored on `RunRecord.log`.
+   * @param logKey - The key returned by a prior offload, as stored on `RunRecord.logS3Key`.
    * @param expiresInSeconds - How long the returned URL should remain valid, in
    *   seconds. The underlying store applies its own default when omitted.
    * @returns The store's presigned/temporary URL the caller can fetch the log from directly.

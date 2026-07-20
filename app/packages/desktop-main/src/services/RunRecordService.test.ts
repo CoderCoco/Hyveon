@@ -96,10 +96,10 @@ describe('RunRecordService', () => {
       expect(putLogMock).not.toHaveBeenCalled();
       expect(putRecordMock).toHaveBeenCalledTimes(1);
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record.log).toBe(smallLog);
+      expect(record.logInline).toBe(smallLog);
     });
 
-    it('should offload a log larger than the inline threshold to the store and record the returned key', async () => {
+    it('should offload a log larger than the inline threshold to the store and record the returned key on logS3Key, not log', async () => {
       putRecordMock.mockResolvedValue(undefined);
       putLogMock.mockResolvedValue('runs/run-123.log');
       const service = makeService();
@@ -113,7 +113,8 @@ describe('RunRecordService', () => {
       expect(new TextDecoder().decode(body)).toBe(oversizedLog);
 
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record.log).toBe('runs/run-123.log');
+      expect(record.logS3Key).toBe('runs/run-123.log');
+      expect(record).not.toHaveProperty('logInline');
     });
 
     it('should embed a log exactly at the inline threshold without offloading', async () => {
@@ -125,17 +126,19 @@ describe('RunRecordService', () => {
 
       expect(putLogMock).not.toHaveBeenCalled();
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record.log).toBe(exactLog);
+      expect(record.logInline).toBe(exactLog);
+      expect(record).not.toHaveProperty('logS3Key');
     });
 
-    it('should omit the log attribute entirely when no log was captured', async () => {
+    it('should omit both log attributes entirely when no log was captured', async () => {
       putRecordMock.mockResolvedValue(undefined);
       const service = makeService();
 
       await service.persist(makeParams(), null);
 
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record).not.toHaveProperty('log');
+      expect(record).not.toHaveProperty('logInline');
+      expect(record).not.toHaveProperty('logS3Key');
     });
 
     it('should build the record sk from startedAt and runId, and derive status from exitCode', async () => {
@@ -189,7 +192,8 @@ describe('RunRecordService', () => {
       expect(putLogMock).toHaveBeenCalledTimes(1);
       expect(putRecordMock).toHaveBeenCalledTimes(1);
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record).not.toHaveProperty('log');
+      expect(record).not.toHaveProperty('logInline');
+      expect(record).not.toHaveProperty('logS3Key');
     });
 
     it('should persist the record without a log when the oversized log cannot be offloaded because no remote file store is configured', async () => {
@@ -203,7 +207,8 @@ describe('RunRecordService', () => {
       expect(putLogMock).toHaveBeenCalledTimes(1);
       expect(putRecordMock).toHaveBeenCalledTimes(1);
       const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
-      expect(record).not.toHaveProperty('log');
+      expect(record).not.toHaveProperty('logInline');
+      expect(record).not.toHaveProperty('logS3Key');
     });
 
     it('should skip persistence entirely and log a warning when runs_table_name is not configured', async () => {
