@@ -6,14 +6,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * vi.mock() calls are lifted to the top of the compiled output above regular
  * declarations.
  */
-const { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock } = vi.hoisted(() => {
-  const execFileMock = vi.fn();
-  const spawnMock = vi.fn();
-  const mkdirSyncMock = vi.fn();
-  const writeFileSyncMock = vi.fn();
-  const existsSyncMock = vi.fn();
-  return { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock };
-});
+const { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock, runRecordPersistMock } =
+  vi.hoisted(() => {
+    const execFileMock = vi.fn();
+    const spawnMock = vi.fn();
+    const mkdirSyncMock = vi.fn();
+    const writeFileSyncMock = vi.fn();
+    const existsSyncMock = vi.fn();
+    const runRecordPersistMock = vi.fn();
+    return { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock, runRecordPersistMock };
+  });
 
 vi.mock('node:child_process', () => ({
   execFile: execFileMock,
@@ -42,6 +44,7 @@ import {
   type TerraformRunRecord,
 } from './TerraformService.js';
 import type { ConfigService } from './ConfigService.js';
+import type { RunRecordService } from './RunRecordService.js';
 import type { RemoteFileStore } from '@hyveon/shared';
 import { logger } from '../logger.js';
 
@@ -121,6 +124,16 @@ function stubRemoteFileStore(): RemoteFileStore {
     listVersions: vi.fn(),
   };
   return store as RemoteFileStore;
+}
+
+/**
+ * `RunRecordService` stub for `destroy()` tests: `persist` is backed by the
+ * shared, hoisted `runRecordPersistMock` so tests can assert on the exact
+ * `RunRecord` params and log path `destroy()` persisted, regardless of which
+ * test constructed the `TerraformService` instance under test.
+ */
+function stubRunRecordService(): RunRecordService {
+  return { persist: runRecordPersistMock } as Partial<RunRecordService> as RunRecordService;
 }
 
 /**
@@ -205,11 +218,12 @@ beforeEach(() => {
   mkdirSyncMock.mockReset();
   writeFileSyncMock.mockReset();
   existsSyncMock.mockReset();
+  runRecordPersistMock.mockReset();
 });
 
 describe('TerraformService.destroy confirmation gate', () => {
   it('should reject with a DestroyNotConfirmedError instance and never call spawn when no confirmation token has ever been minted', async () => {
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(collectDestroyChunks(service.destroy('guessed-token'))).rejects.toBeInstanceOf(
       DestroyNotConfirmedError,
@@ -220,7 +234,7 @@ describe('TerraformService.destroy confirmation gate', () => {
   });
 
   it('should reject with a DestroyNotConfirmedError instance and never call spawn when the supplied token does not match the most recently minted token', async () => {
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     service.mintDestroyConfirmationToken();
 
     await expect(collectDestroyChunks(service.destroy('some-other-token'))).rejects.toBeInstanceOf(
@@ -230,7 +244,7 @@ describe('TerraformService.destroy confirmation gate', () => {
   });
 
   it('should reject with a DestroyNotConfirmedError instance when the most recently minted token has expired', async () => {
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     const dateNowSpy = vi.spyOn(Date, 'now');
     dateNowSpy.mockReturnValueOnce(1_000_000);
@@ -244,7 +258,7 @@ describe('TerraformService.destroy confirmation gate', () => {
   });
 
   it('should reject with a DestroyNotConfirmedError instance on a second destroy() call reusing an already-consumed token', async () => {
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const token = service.mintDestroyConfirmationToken();
 
     // Consume the token via a first call whose signal is already aborted —
@@ -269,6 +283,7 @@ describe('TerraformService.destroy confirmed run', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ terraformDir: '/repo/terraform', runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
 
@@ -313,6 +328,7 @@ describe('TerraformService.destroy confirmed run', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
 
@@ -335,7 +351,7 @@ describe('TerraformService.destroy confirmed run', () => {
   it('should reject with a TerraformNotFoundError instance and never call spawn when the binary cannot be resolved, even with a valid confirmation token', async () => {
     queueExecFileFailure();
 
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const token = service.mintDestroyConfirmationToken();
 
     await expect(collectDestroyChunks(service.destroy(token))).rejects.toBeInstanceOf(TerraformNotFoundError);
@@ -350,7 +366,7 @@ describe('TerraformService.destroy concurrency guard', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const firstToken = service.mintDestroyConfirmationToken();
     const firstGen = service.destroy(firstToken);
     const firstNext = firstGen.next(); // starts the generator body, setting the in-flight flag synchronously
@@ -375,6 +391,7 @@ describe('TerraformService.destroy concurrency guard', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const applyGen = service.apply('run-1', undefined, '/repo/runs/run-1/run-1.tfplan');
     const applyNext = applyGen.next(); // starts apply()'s body, setting the shared in-flight flag synchronously
@@ -399,7 +416,7 @@ describe('TerraformService.destroy concurrency guard', () => {
     // spawn (and the shared workspace lock) the same way destroy() would.
     existsSyncMock.mockReturnValue(true);
 
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const planGen = service.plan();
     const planNext = planGen.next(); // starts plan()'s body, setting the shared in-flight flag synchronously
 
@@ -434,6 +451,7 @@ describe('TerraformService.destroy run.json persistence failure', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
 
@@ -466,7 +484,7 @@ describe('TerraformService.destroy forced early termination', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const token = service.mintDestroyConfirmationToken();
     const gen = service.destroy(token);
 
@@ -510,6 +528,7 @@ describe('TerraformService.destroy forced early termination', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
     const gen = service.destroy(token);
@@ -545,6 +564,131 @@ describe('TerraformService.destroy forced early termination', () => {
   });
 });
 
+describe('TerraformService.destroy RunRecordService persistence', () => {
+  it('should call RunRecordService.persist exactly once with a matching RunRecord and the captured terraform.log path when the process exits cleanly', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const { result } = await collectDestroyChunks(service.destroy(token), () => {
+      child.emitStdout('Destroy complete! Resources: 3 destroyed.\n');
+      child.close(0);
+    });
+    const runId = result?.runId as string;
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null },
+      string,
+    ];
+    expect(params).toMatchObject({ runId, kind: 'destroy', exitCode: 0 });
+    expect(logFilePath).toBe(`/repo/runs/${runId}/terraform.log`);
+
+    // The persisted record's timestamps must match the local run.json's own
+    // timestamps — both are written from the same captured values.
+    const [, localContents] = writeFileSyncMock.mock.calls.find(
+      ([callPath]) => callPath === `/repo/runs/${runId}/run.json`,
+    ) as [string, string];
+    const localRecord = JSON.parse(localContents) as TerraformRunRecord;
+    expect((params as { startedAt: string }).startedAt).toBe(localRecord.startedAt);
+    expect((params as { completedAt: string }).completedAt).toBe(localRecord.completedAt);
+  });
+
+  it('should call RunRecordService.persist exactly once with the non-zero exit code when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const pending = collectDestroyChunks(service.destroy(token), () => child.close(1));
+    await expect(pending).rejects.toBeInstanceOf(TerraformDestroyError);
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params] = runRecordPersistMock.mock.calls[0] as [{ runId: string; kind: string; exitCode: number | null }];
+    expect(params).toMatchObject({ kind: 'destroy', exitCode: 1 });
+  });
+
+  it('should call RunRecordService.persist exactly once with a null exit code when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+    const gen = service.destroy(token);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('aws_instance.game: Destroying...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params] = runRecordPersistMock.mock.calls[0] as [{ runId: string; kind: string; exitCode: number | null }];
+    expect(params).toMatchObject({ kind: 'destroy', exitCode: null });
+  });
+
+  it('should never call RunRecordService.persist when the run never spawns (e.g. no confirmation token was minted)', async () => {
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await expect(
+      collectDestroyChunks(service.destroy('guessed-token')),
+    ).rejects.toBeInstanceOf(DestroyNotConfirmedError);
+
+    expect(runRecordPersistMock).not.toHaveBeenCalled();
+  });
+
+  it('should still resolve the generator with the real destroy result when RunRecordService.persist rejects', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockRejectedValue(new Error('DynamoDB unavailable'));
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const { result } = await collectDestroyChunks(service.destroy(token), () => {
+      child.emitStdout('Destroy complete! Resources: 3 destroyed.\n');
+      child.close(0);
+    });
+
+    expect(result).toMatchObject({ destroyed: 3 });
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('TerraformService.destroy run log capture', () => {
   it('should write the accumulated stdout+stderr transcript to <runsDir>/<runId>/terraform.log in a single writeFileSync once the process closes', async () => {
     queueSuccessfulResolution();
@@ -554,6 +698,7 @@ describe('TerraformService.destroy run log capture', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
 
@@ -580,6 +725,7 @@ describe('TerraformService.destroy run log capture', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
 
@@ -606,6 +752,7 @@ describe('TerraformService.destroy run log capture', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
     const gen = service.destroy(token);
@@ -644,6 +791,7 @@ describe('TerraformService.destroy forced-cleanup persistence failure', () => {
     const service = new TerraformService(
       stubDestroyConfigService({ terraformDir: '/repo/terraform' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
     const token = service.mintDestroyConfirmationToken();
     const gen = service.destroy(token);

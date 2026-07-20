@@ -16,6 +16,7 @@ vi.mock('node:child_process', () => ({
 
 import { TerraformService, TerraformNotFoundError, lookupCommandFor } from './TerraformService.js';
 import type { ConfigService } from './ConfigService.js';
+import type { RunRecordService } from './RunRecordService.js';
 import type { RemoteFileStore } from '@hyveon/shared';
 
 /**
@@ -35,6 +36,16 @@ function stubConfigService(): ConfigService {
  */
 function stubRemoteFileStore(): RemoteFileStore {
   return {} as RemoteFileStore;
+}
+
+/**
+ * Minimal `RunRecordService` stub sufficient to satisfy `TerraformService`'s
+ * constructor dependency. None of the tests in this file exercise
+ * `plan()`/`apply()`/`destroy()` (the only methods that call it), so a stub
+ * with a no-op `persist` is enough.
+ */
+function stubRunRecordService(): RunRecordService {
+  return { persist: vi.fn() } as Partial<RunRecordService> as RunRecordService;
 }
 
 /** Error-first callback shape `util.promisify` invokes the mocked `execFile` with. */
@@ -108,12 +119,14 @@ describe('TerraformNotFoundError', () => {
 
 describe('TerraformService construction', () => {
   it('should never throw when constructing the service, even without any execFile mocks queued', () => {
-    expect(() => new TerraformService(stubConfigService(), stubRemoteFileStore())).not.toThrow();
+    expect(
+      () => new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService()),
+    ).not.toThrow();
   });
 
   it('should not shell out to resolve the binary until an accessor is called', () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
     expect(execFileMock).not.toHaveBeenCalled();
   });
 });
@@ -122,7 +135,7 @@ describe('TerraformService binary detection', () => {
   it('should resolve the binary path from the which/where.exe output', async () => {
     queueSuccessfulResolution('/usr/local/bin/terraform', '1.7.0');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).resolves.toBe('/usr/local/bin/terraform');
   });
@@ -131,7 +144,7 @@ describe('TerraformService binary detection', () => {
     queueExecFileSuccess('\n  /opt/homebrew/bin/terraform  \nsome-other-line\n');
     queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.0' }));
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).resolves.toBe('/opt/homebrew/bin/terraform');
   });
@@ -139,7 +152,7 @@ describe('TerraformService binary detection', () => {
   it('should reject getBinaryPath with a TerraformNotFoundError instance on first use when the lookup command fails', async () => {
     queueExecFileFailure();
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
@@ -147,7 +160,7 @@ describe('TerraformService binary detection', () => {
   it('should reject getVersion with a TerraformNotFoundError instance on first use when the lookup command fails', async () => {
     queueExecFileFailure();
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
@@ -155,7 +168,7 @@ describe('TerraformService binary detection', () => {
   it('should reject with a TerraformNotFoundError instance when the lookup command produces no output', async () => {
     queueExecFileSuccess('');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
@@ -163,7 +176,7 @@ describe('TerraformService binary detection', () => {
   it('should reject with a TerraformNotFoundError instance when the lookup command output is only whitespace', async () => {
     queueExecFileSuccess('   \n  \n');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
   });
@@ -173,7 +186,7 @@ describe('TerraformService version parsing', () => {
   it('should parse the terraform_version field from terraform version -json output', async () => {
     queueSuccessfulResolution('/usr/local/bin/terraform', '1.7.5');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).resolves.toBe('1.7.5');
   });
@@ -183,7 +196,7 @@ describe('TerraformService version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('Terraform v1.6.2\non linux_amd64\n');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).resolves.toBe('1.6.2');
   });
@@ -193,7 +206,7 @@ describe('TerraformService version parsing', () => {
     queueExecFileSuccess(JSON.stringify({ some_other_field: true }));
     queueExecFileSuccess('Terraform v1.5.0\n');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).resolves.toBe('1.5.0');
   });
@@ -203,7 +216,7 @@ describe('TerraformService version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('Terraform v1.9.0-beta1\n');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).resolves.toBe('1.9.0-beta1');
   });
@@ -213,7 +226,7 @@ describe('TerraformService version parsing', () => {
     queueExecFileSuccess('not json');
     queueExecFileSuccess('garbage output with no version');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const result = service.getVersion();
 
     await expect(result).rejects.toThrow('Unable to parse terraform version');
@@ -225,7 +238,7 @@ describe('TerraformService instance accessors', () => {
   it('should expose the resolved binary path via getBinaryPath', async () => {
     queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).resolves.toBe('/usr/bin/terraform');
   });
@@ -233,7 +246,7 @@ describe('TerraformService instance accessors', () => {
   it('should expose the resolved version via getVersion', async () => {
     queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getVersion()).resolves.toBe('1.8.1');
   });
@@ -243,7 +256,7 @@ describe('TerraformService resolution memoization', () => {
   it('should only shell out once across multiple getBinaryPath calls', async () => {
     queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await service.getBinaryPath();
     await service.getBinaryPath();
@@ -254,7 +267,7 @@ describe('TerraformService resolution memoization', () => {
   it('should reuse the memoized resolution between getBinaryPath and getVersion', async () => {
     queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await service.getBinaryPath();
     await service.getVersion();
@@ -265,7 +278,7 @@ describe('TerraformService resolution memoization', () => {
   it('should resolve concurrent getBinaryPath calls to the same memoized result with a single lookup', async () => {
     queueSuccessfulResolution('/usr/bin/terraform', '1.8.1');
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     const [first, second] = await Promise.all([service.getBinaryPath(), service.getBinaryPath()]);
 
@@ -277,7 +290,7 @@ describe('TerraformService resolution memoization', () => {
   it('should memoize a TerraformNotFoundError rejection so a second call does not re-invoke execFile', async () => {
     queueExecFileFailure();
 
-    const service = new TerraformService(stubConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
     await expect(service.getBinaryPath()).rejects.toBeInstanceOf(TerraformNotFoundError);
