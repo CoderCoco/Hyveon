@@ -1,5 +1,5 @@
 import type { AuditEntry, AuditPageResult } from './audit.js';
-import type { RunRecord } from './runs.js';
+import type { RunLock, RunRecord } from './runs.js';
 
 /** Options for launching a game workload. Intentionally open/opaque for v1; implementations may accept provider-specific keys or refine this via intersection. */
 export interface StartOpts {
@@ -224,6 +224,12 @@ export interface AuditLogStore {
  * `@aws-sdk/*` shapes appear in this interface or its parameter/return
  * types. Listing/pagination of persisted runs is deferred to a follow-up
  * issue (apply-history UI) and intentionally not part of this contract yet.
+ *
+ * Also owns the apply lock (see {@link RunLock} in `runs.ts`, issue #106):
+ * only one non-terminal run may be in flight at a time, and the lock's
+ * source of truth is this store (e.g. a single well-known DynamoDB item)
+ * rather than an in-memory flag, so it survives an app restart and is
+ * consistent across implementations.
  */
 export interface RunRecordStore {
   /**
@@ -256,4 +262,44 @@ export interface RunRecordStore {
    * @returns A presigned/temporary URL the caller can fetch the log from directly.
    */
   getLogUrl(logKey: string, expiresInSeconds?: number): Promise<string>;
+
+  /**
+   * Attempts to atomically acquire the apply lock on behalf of a new run,
+   * guarding against two simultaneous `terraform` plan/apply/destroy
+   * submissions (`RunService.createRun`, desktop-main, #106). Implementations
+   * must perform the check-and-set atomically (e.g. a DynamoDB conditional
+   * `PutItem` against a single well-known lock item) rather than as a
+   * separate `getRunLock` read followed by a write, which would leave a race
+   * window between two concurrent callers.
+   *
+   * @param lock - The lock to acquire on behalf of the run about to start.
+   * @throws A `RunLockHeldError` (see `errors.ts`) carrying the currently
+   *   held lock when an unexpired lock already exists.
+   */
+  acquireRunLock(lock: RunLock): Promise<void>;
+
+  /**
+   * Reads the apply lock currently on record, if any, without regard to
+   * whether it has expired — callers pass the result through
+   * `isRunLockExpired` (see `runs.ts`) themselves to decide whether a stale
+   * lock (left behind by a crashed/orphaned process) should be treated as
+   * released.
+   *
+   * @returns The current {@link RunLock}, or `undefined` if no run currently
+   *   holds the lock.
+   */
+  getRunLock(): Promise<RunLock | undefined>;
+
+  /**
+   * Releases the apply lock, scoped to the given `runId` so a caller can
+   * never release a lock it doesn't itself hold (e.g. a delayed cleanup from
+   * one run racing another run that has since legitimately acquired the
+   * lock). Implementations should no-op — rather than throw — when no lock
+   * is currently held, or when the held lock's `runId` doesn't match the one
+   * supplied here.
+   *
+   * @param runId - The `runId` of the run releasing the lock (matches
+   *   {@link RunLock.runId}).
+   */
+  releaseRunLock(runId: string): Promise<void>;
 }
