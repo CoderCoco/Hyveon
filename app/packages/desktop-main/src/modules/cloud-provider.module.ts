@@ -1,6 +1,19 @@
 import { Module } from '@nestjs/common';
-import { AwsSecretsStore, AwsRemoteFileStore, AwsDiscordEventReceiver, AwsAuditLogStore } from '@hyveon/cloud-aws';
-import type { CloudProvider, SecretsStore, RemoteFileStore, DiscordEventReceiver, AuditLogStore } from '@hyveon/shared';
+import {
+  AwsSecretsStore,
+  AwsRemoteFileStore,
+  AwsDiscordEventReceiver,
+  AwsAuditLogStore,
+  AwsRunRecordStore,
+} from '@hyveon/cloud-aws';
+import type {
+  CloudProvider,
+  SecretsStore,
+  RemoteFileStore,
+  DiscordEventReceiver,
+  AuditLogStore,
+  RunRecordStore,
+} from '@hyveon/shared';
 import { ConfigModule } from './config.module.js';
 import { ConfigService } from '../services/ConfigService.js';
 import { createAwsCloudProvider } from '../services/EcsService.js';
@@ -10,16 +23,17 @@ import {
   REMOTE_FILE_STORE,
   DISCORD_RECEIVER,
   AUDIT_LOG_STORE,
+  RUN_RECORD_STORE,
 } from './cloud-provider.tokens.js';
 
 /**
- * Per-cloud factories for the five cloud-agnostic contracts (`CloudProvider`,
- * `SecretsStore`, `RemoteFileStore`, `DiscordEventReceiver`, `AuditLogStore` —
- * all from `@hyveon/shared/cloud.js`). Keyed by the `ActiveCloud` value
- * `ConfigService` reports; each `CloudBindings` entry supplies one factory per
- * token so {@link resolveCloudBindings} (and, in turn, `CloudProviderModule`'s
- * `useFactory` providers) can look up the right implementation without
- * duplicating the cloud switch five times.
+ * Per-cloud factories for the six cloud-agnostic contracts (`CloudProvider`,
+ * `SecretsStore`, `RemoteFileStore`, `DiscordEventReceiver`, `AuditLogStore`,
+ * `RunRecordStore` — all from `@hyveon/shared/cloud.js`). Keyed by the
+ * `ActiveCloud` value `ConfigService` reports; each `CloudBindings` entry
+ * supplies one factory per token so {@link resolveCloudBindings} (and, in
+ * turn, `CloudProviderModule`'s `useFactory` providers) can look up the right
+ * implementation without duplicating the cloud switch six times.
  */
 export interface CloudBindings {
   cloudProvider: (config: ConfigService) => CloudProvider;
@@ -27,6 +41,7 @@ export interface CloudBindings {
   remoteFileStore: (config: ConfigService) => RemoteFileStore;
   discordReceiver: (config: ConfigService) => DiscordEventReceiver;
   auditLogStore: (config: ConfigService) => AuditLogStore;
+  runRecordStore: (config: ConfigService) => RunRecordStore;
 }
 
 /**
@@ -59,6 +74,28 @@ export function resolveAuditLogStoreConfig(config: ConfigService): { tableName: 
 }
 
 /**
+ * Resolves the `{ tableName, bucket, region }` config the AWS `RunRecordStore`'s
+ * `getConfig` callback needs to target the runs DynamoDB table and the tfvars
+ * S3 bucket used for offloaded run logs: the table name comes from
+ * `ConfigService.getTfOutputs()?.runs_table_name` (falling back to `''` when
+ * the tfstate hasn't been applied yet), the bucket from
+ * `ConfigService.getTfvarsBucket()` (falling back to `''` when tfvars sync
+ * isn't configured), and the region from `getRegion()` — so `AwsRunRecordStore`
+ * surfaces its own "not configured" errors rather than this factory silently
+ * defaulting somewhere. Exported as a standalone function — see
+ * {@link resolveTfvarsFileStoreConfig} for why.
+ */
+export function resolveRunRecordStoreConfig(
+  config: ConfigService,
+): { tableName: string; bucket: string; region: string } {
+  return {
+    tableName: config.getTfOutputs()?.runs_table_name ?? '',
+    bucket: config.getTfvarsBucket() ?? '',
+    region: config.getRegion(),
+  };
+}
+
+/**
  * Registry of per-cloud bindings, keyed by `ActiveCloud` (or any future cloud
  * string). Today only `'aws'` is populated; adding a new cloud provider
  * package means adding an entry here rather than touching the module's
@@ -72,6 +109,7 @@ export const CLOUD_BINDINGS: Record<string, CloudBindings> = {
     remoteFileStore: (config) => new AwsRemoteFileStore(() => resolveTfvarsFileStoreConfig(config)),
     discordReceiver: () => new AwsDiscordEventReceiver(),
     auditLogStore: (config) => new AwsAuditLogStore(() => resolveAuditLogStoreConfig(config)),
+    runRecordStore: (config) => new AwsRunRecordStore(() => resolveRunRecordStoreConfig(config)),
   },
 };
 
@@ -91,7 +129,7 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
 }
 
 /**
- * Binds the five cloud-agnostic contracts to concrete implementations for
+ * Binds the six cloud-agnostic contracts to concrete implementations for
  * whichever cloud `ConfigService.getActiveCloud()` reports as active, via
  * {@link resolveCloudBindings} and the {@link CLOUD_BINDINGS} registry. Today
  * that's always `'aws'`, so every token resolves to a `@hyveon/cloud-aws`
@@ -131,7 +169,19 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
       useFactory: (config: ConfigService) => resolveCloudBindings(config).auditLogStore(config),
       inject: [ConfigService],
     },
+    {
+      provide: RUN_RECORD_STORE,
+      useFactory: (config: ConfigService) => resolveCloudBindings(config).runRecordStore(config),
+      inject: [ConfigService],
+    },
   ],
-  exports: [CLOUD_PROVIDER, SECRETS_STORE, REMOTE_FILE_STORE, DISCORD_RECEIVER, AUDIT_LOG_STORE],
+  exports: [
+    CLOUD_PROVIDER,
+    SECRETS_STORE,
+    REMOTE_FILE_STORE,
+    DISCORD_RECEIVER,
+    AUDIT_LOG_STORE,
+    RUN_RECORD_STORE,
+  ],
 })
 export class CloudProviderModule {}

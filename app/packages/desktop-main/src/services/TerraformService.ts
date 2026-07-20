@@ -4,10 +4,11 @@ import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
-import type { RemoteFileStore } from '@hyveon/shared';
+import type { RemoteFileStore, RunKind } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService, projectTfOutputs, type TfOutputs } from './ConfigService.js';
 import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
+import { RunRecordService } from './RunRecordService.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -214,19 +215,18 @@ const APPLY_SUMMARY_PATTERN =
   /Apply complete!\s*Resources:\s*(\d+) added,\s*(\d+) changed,\s*(\d+) destroyed\./;
 
 /**
- * Persisted to `<runsDir>/<runId>/run.json` once an {@link TerraformService.apply}
- * or {@link TerraformService.destroy} run's spawned process has closed
- * (whether it exited cleanly, non-zero, or was killed via an abort signal) —
- * a lightweight local run history so a future Apply-history UI can list past
- * runs without a database. `kind` reflects which subcommand produced the
- * record; the union leaves room for a future `plan` record to reuse the same
- * shape without a breaking change later.
+ * Persisted to `<runsDir>/<runId>/run.json` once a {@link TerraformService.plan},
+ * {@link TerraformService.apply}, or {@link TerraformService.destroy} run's
+ * spawned process has closed (whether it exited cleanly, non-zero, or was
+ * killed via an abort signal) — a lightweight local run history so a future
+ * run-history UI can list past runs without a database. `kind` reflects
+ * which subcommand produced the record.
  */
 export interface TerraformRunRecord {
   /** The `runId` this record describes — matches the directory it's written into. */
   runId: string;
   /** Which subcommand produced this record. */
-  kind: 'apply' | 'destroy';
+  kind: 'plan' | 'apply' | 'destroy';
   /** ISO-8601 timestamp captured immediately before the process was spawned. */
   startedAt: string;
   /** ISO-8601 timestamp captured immediately after the process closed. */
@@ -250,21 +250,35 @@ export type TerraformApplyOutcome =
   | { kind: 'failed'; error: TerraformApplyError };
 
 /**
- * Thrown by {@link TerraformService.apply} or {@link TerraformService.destroy}
- * when persisting the {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json`
- * fails (e.g. a filesystem error surfaced from `mkdirSync`/`writeFileSync`
- * inside {@link TerraformService.writeRunRecord}) — distinct from a failure of
- * `terraform apply`/`terraform destroy` itself. Carries the
- * {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome} that had
- * already been computed before the persistence attempt (success, abort, or a
- * subcommand-specific error) so callers can recover the real outcome instead
- * of only seeing an unrelated filesystem exception, plus `cause` — the
- * underlying error `writeRunRecord` raised.
+ * Describes what {@link TerraformService.plan} was about to return/throw the
+ * moment its spawned process closed — captured before
+ * {@link TerraformService.writeRunRecord} is attempted so a persistence
+ * failure (see {@link TerraformRunPersistError}) doesn't discard the real
+ * outcome of the plan run. Mirrors {@link TerraformApplyOutcome}.
+ */
+export type TerraformPlanOutcome =
+  | { kind: 'success'; result: TerraformPlanResult }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; error: TerraformPlanError };
+
+/**
+ * Thrown by {@link TerraformService.plan}, {@link TerraformService.apply}, or
+ * {@link TerraformService.destroy} when persisting the
+ * {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` fails (e.g. a
+ * filesystem error surfaced from `mkdirSync`/`writeFileSync` inside
+ * {@link TerraformService.writeRunRecord}) — distinct from a failure of
+ * `terraform plan`/`terraform apply`/`terraform destroy` itself. Carries the
+ * {@link TerraformPlanOutcome}, {@link TerraformApplyOutcome}, or
+ * {@link TerraformDestroyOutcome} that had already been computed before the
+ * persistence attempt (success, abort, or a subcommand-specific error) so
+ * callers can recover the real outcome instead of only seeing an unrelated
+ * filesystem exception, plus `cause` — the underlying error `writeRunRecord`
+ * raised.
  */
 export class TerraformRunPersistError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly outcome: TerraformApplyOutcome | TerraformDestroyOutcome,
+    public readonly outcome: TerraformPlanOutcome | TerraformApplyOutcome | TerraformDestroyOutcome,
     public readonly cause: unknown,
   ) {
     super(
@@ -276,10 +290,13 @@ export class TerraformRunPersistError extends Error {
   }
 
   /**
-   * Renders a {@link TerraformApplyOutcome} or {@link TerraformDestroyOutcome}
-   * as a short phrase for the error message above.
+   * Renders a {@link TerraformPlanOutcome}, {@link TerraformApplyOutcome}, or
+   * {@link TerraformDestroyOutcome} as a short phrase for the error message
+   * above.
    */
-  private static describeOutcome(outcome: TerraformApplyOutcome | TerraformDestroyOutcome): string {
+  private static describeOutcome(
+    outcome: TerraformPlanOutcome | TerraformApplyOutcome | TerraformDestroyOutcome,
+  ): string {
     switch (outcome.kind) {
       case 'success':
         return 'succeeded';
@@ -382,8 +399,9 @@ export type TerraformDestroyOutcome =
  * and semver version, and orchestrates `terraform` subcommands against it:
  * {@link TerraformService.init}, the streaming/idempotent `terraform init`
  * runner; {@link TerraformService.plan}, the streaming `terraform plan`
- * runner that persists its `.tfplan` artifact and the pulled tfvars snapshot
- * under `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
+ * runner that persists its `.tfplan` artifact, the pulled tfvars snapshot,
+ * and a {@link TerraformRunRecord} (`kind: 'plan'`) under
+ * `ConfigService.getRunsDir()`; {@link TerraformService.apply}, the
  * streaming `terraform apply <planFile>` runner that persists a
  * {@link TerraformRunRecord} to the same per-run directory once the process
  * closes; {@link TerraformService.destroy}, the streaming
@@ -392,7 +410,10 @@ export type TerraformDestroyOutcome =
  * and {@link TerraformService.output}, which runs `terraform output -json`
  * and projects the result through the same {@link projectTfOutputs} helper
  * `ConfigService.getTfOutputs()` uses, caching the resolved value for 60s
- * (bypassable via `force: true`).
+ * (bypassable via `force: true`). Alongside each local {@link TerraformRunRecord}
+ * write, {@link plan}/{@link apply}/{@link destroy} also persist the run to the
+ * cloud-agnostic run-history `RunRecordStore` (DynamoDB for AWS) via the
+ * injected `RunRecordService` — see {@link persistRunRecord}.
  *
  * Construction is synchronous and never throws — the binary lookup +
  * `terraform version` shell-outs are deferred until {@link getBinaryPath} or
@@ -458,11 +479,15 @@ export class TerraformService {
    * tells Nest which concrete provider (bound by `CloudProviderModule` for
    * whichever cloud is active) to resolve for that parameter. Used by
    * {@link plan} to pull the current tfvars snapshot when S3 tfvars sync is
-   * configured (mirrors `TfvarsService`'s local-vs-S3 read).
+   * configured (mirrors `TfvarsService`'s local-vs-S3 read). `runRecordService`
+   * persists the run-history record to the cloud-agnostic `RunRecordStore`
+   * (DynamoDB for AWS) alongside the local `<runsDir>/<runId>/run.json` write
+   * — see {@link persistRunRecord}.
    */
   constructor(
     private readonly config: ConfigService,
     @Inject(REMOTE_FILE_STORE) private readonly remoteFileStore: RemoteFileStore,
+    private readonly runRecordService: RunRecordService,
   ) {}
 
   /**
@@ -655,6 +680,37 @@ export class TerraformService {
    * value alongside `runId`, `artifactPath`, and `varFilePath`. A "no changes"
    * plan (no summary line present) resolves all three counts to `0`.
    *
+   * Every yielded chunk's `line` is also accumulated in-memory as it streams
+   * through, and — once the spawned process has closed, regardless of
+   * whether the run succeeded, failed, or was aborted — written in a single
+   * `writeFileSync` to `<runsDir>/<runId>/terraform.log` (see
+   * {@link writeRunLog}), at the same point the {@link TerraformRunRecord} is
+   * persisted (including the force-killed outer-`finally` fallback below) —
+   * a full stdout+stderr transcript of the run that survives after the
+   * generator itself has been consumed.
+   *
+   * At that same point — once the process has closed, regardless of outcome —
+   * a {@link TerraformRunRecord} (`kind: 'plan'`) is also written to
+   * `<runsDir>/<runId>/run.json` (see {@link writeRunRecord}), capturing
+   * `runId`, `startedAt`/`completedAt` timestamps, the process's `exitCode`
+   * (`null` when aborted), and `tfvarsVersionId`. Mirrors {@link apply}/
+   * {@link destroy}: if persisting that record fails (e.g. a filesystem
+   * error), the already-computed plan outcome (success/abort/
+   * {@link TerraformPlanError}) is wrapped in {@link TerraformRunPersistError}
+   * and thrown instead of being discarded behind the persistence failure. No
+   * record is written if the process never spawned (e.g. `signal` was
+   * already aborted before `getBinaryPath()`/`pullVarFile()`/spawn).
+   *
+   * The same record is also written (with a `null` `exitCode`, mirroring the
+   * abort outcome) if this generator itself is force-closed by its consumer
+   * (`break`/`.return()`/`.throw()`) while the spawned `terraform plan`
+   * process is still genuinely running — the finalization above lives inside
+   * the generator's own body and is skipped when a forced completion unwinds
+   * straight past it, so an outer `finally` persists a cancelled record on
+   * that path instead, ensuring a still-running `terraform plan` killed by
+   * forced cleanup is never left unrecorded. Mirrors {@link apply}'s
+   * `forceKilled` handling.
+   *
    * `signal`, if provided, aborts the run the same way {@link init} does: the
    * spawned child process is killed and the generator ends cleanly — no
    * further chunks, no throw, and the generator resolves to `undefined`
@@ -669,9 +725,11 @@ export class TerraformService {
    *
    * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
    * resolved, a plain `Error` if the configured tfvars source can't be read
-   * or `tfvarsVersionId` is stale (see {@link pullVarFile}), or
-   * {@link TerraformPlanError} if the spawned process exits with a non-zero
-   * status code (and the run wasn't aborted).
+   * or `tfvarsVersionId` is stale (see {@link pullVarFile}), {@link TerraformPlanError}
+   * if the spawned process exits with a non-zero status code (and the run
+   * wasn't aborted), or {@link TerraformRunPersistError} if the process
+   * closed successfully (or was aborted) but the run record couldn't be
+   * persisted afterward.
    */
   async *plan(
     tfvarsVersionId?: string,
@@ -684,6 +742,29 @@ export class TerraformService {
       );
     }
     this.workspaceInFlight = 'plan';
+    // Hoisted above the try block — mirrors apply()/destroy()'s equivalents.
+    // A force-closed generator (consumer break/.return()/.throw()) unwinds
+    // straight from `yield chunk` below, past the writeRunRecord call
+    // further down, to the outer finally, which needs to see these.
+    // `runId` is additionally hoisted here (unlike destroy(), which mints it
+    // before the try) because plan() doesn't create one until after the
+    // signal-aborted / getBinaryPath() guards have already passed.
+    let runId: string | undefined;
+    let startedAt: string | undefined;
+    let runRecordWritten = false;
+    // Set to `true` only from the `onForceKill` callback passed to
+    // `spawnAndStream` below — see apply()'s equivalent comment for why this
+    // is deliberately not inferred from `startedAt !== undefined &&
+    // !runRecordWritten` alone.
+    let forceKilled = false;
+    // Accumulates every yielded chunk's `line` (stdout+stderr, in the order
+    // they were streamed) so the full transcript can be written to
+    // `<runsDir>/<runId>/terraform.log` in a single `writeFileSync` once the
+    // process has closed, rather than one disk write per line. Hoisted
+    // alongside `startedAt`/`runRecordWritten`/`forceKilled` so the outer
+    // `finally`'s force-killed branch can also write whatever was captured
+    // before the forced completion unwound past the normal persistence point.
+    const logLines: string[] = [];
     try {
       if (signal?.aborted) {
         // Already aborted before we even started resolving the binary path —
@@ -698,7 +779,7 @@ export class TerraformService {
         return undefined;
       }
 
-      const runId = randomUUID();
+      runId = randomUUID();
       const runDir = join(this.config.getRunsDir(), runId);
       mkdirSync(runDir, { recursive: true });
 
@@ -722,15 +803,24 @@ export class TerraformService {
       let add = 0;
       let change = 0;
       let destroy = 0;
+      // Captured immediately before the process is spawned so it can be
+      // recorded in the `TerraformRunRecord` written below once the process
+      // closes.
+      startedAt = new Date().toISOString();
 
       // Driven manually (rather than `yield*`) so each stdout line can be
       // scanned for the plan summary as it streams through, in addition to
-      // being forwarded to the caller unmodified.
-      const stream = this.spawnAndStream(binaryPath, args, cwd, signal);
+      // being forwarded to the caller unmodified. The `onForceKill` callback
+      // mirrors apply()/destroy() so a consumer force-closing this generator
+      // while terraform is still running can still be persisted below.
+      const stream = this.spawnAndStream(binaryPath, args, cwd, signal, () => {
+        forceKilled = true;
+      });
       let next = await stream.next();
       try {
         while (!next.done) {
           const chunk = next.value;
+          logLines.push(chunk.line);
           if (chunk.stream === 'stdout') {
             const match = PLAN_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -759,17 +849,93 @@ export class TerraformService {
       }
 
       const result = next.value;
-      if (result.aborted) {
+
+      // Compute the outcome the generator would return/throw *before*
+      // attempting to persist the run record, so a persistence failure below
+      // can still report the real plan outcome instead of losing it behind
+      // an unrelated filesystem exception — mirrors apply()/destroy().
+      const outcome: TerraformPlanOutcome = result.aborted
+        ? { kind: 'aborted' }
+        : result.exitCode === 0
+          ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy } }
+          : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
+
+      // `runRecordWritten` is flipped *before* the write is attempted (not
+      // only on success) so the outer `finally` below never re-attempts a
+      // write this block already tried — whether it succeeded or threw —
+      // mirrors apply()/destroy().
+      runRecordWritten = true;
+      // The process has closed by this point regardless of `aborted` — write
+      // the accumulated transcript now, before branching on the outcome
+      // below, so every exit path (success/failure/abort) leaves a
+      // terraform.log behind.
+      this.writeRunLog(runId, logLines);
+
+      // Same guarantee for the run record: written on every exit path
+      // (success/failure/abort) so a future run-history UI can list this
+      // plan run regardless of its outcome. `exitCode` is recorded as `null`
+      // when the run was aborted, mirroring apply()/destroy(). If persisting
+      // the record fails, the already-computed plan outcome is wrapped in
+      // TerraformRunPersistError and thrown instead of being discarded
+      // behind the persistence failure — mirrors apply()/destroy().
+      const completedAt = new Date().toISOString();
+      const planExitCode = result.aborted ? null : result.exitCode;
+      try {
+        this.writeRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId);
+      } catch (err) {
+        throw new TerraformRunPersistError(runId, outcome, err);
+      }
+      // Persists the same run to the cloud-agnostic RunRecordStore (DynamoDB
+      // for AWS) alongside the local run.json write above — see
+      // persistRunRecord's TSDoc for why this is best-effort and awaited.
+      await this.persistRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId);
+
+      if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
         // the generator cleanly rather than surfacing the resulting
         // error/exit code.
         return undefined;
       }
-      if (result.exitCode === 0) {
-        return { runId, artifactPath, varFilePath, add, change, destroy };
+      if (outcome.kind === 'success') {
+        return outcome.result;
       }
-      throw new TerraformPlanError(result.exitCode);
+      throw outcome.error;
     } finally {
+      // Covers the force-closed generator case (consumer `break` /
+      // `.return()` / `.throw()`): a forced completion unwinds straight from
+      // `yield chunk` above to the inner finally (which drains
+      // `spawnAndStream`, killing the child and waiting for it to actually
+      // close), then continues unwinding *past* the `writeRunRecord` call
+      // above — that statement is never reached — straight to this outer
+      // `finally`. Mirrors apply()/destroy()'s outer finally; see apply()'s
+      // comment for the full rationale of the `forceKilled` gate. `runId`
+      // is also checked here (unlike apply()/destroy(), where it's always
+      // defined by the time the try block starts) because plan() may abort
+      // before a runId is ever minted, in which case there's nothing to
+      // persist.
+      if (runId !== undefined && startedAt !== undefined && !runRecordWritten && forceKilled) {
+        // Mirrors apply()/destroy()'s forceKilled WARN — a cancellation via
+        // forced generator termination is still a plan outcome worth
+        // surfacing.
+        logger.warn('terraform plan cancelled — generator force-closed while running', {
+          runId,
+        });
+        // Persist whatever transcript was captured before the forced
+        // completion unwound past the normal writeRunLog() call above.
+        this.writeRunLog(runId, logLines);
+        const completedAt = new Date().toISOString();
+        try {
+          this.writeRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
+        } catch {
+          // Nothing meaningful to do with a persistence failure while the
+          // generator is already tearing down for an unrelated reason.
+        }
+        // Also persist to the cloud-agnostic RunRecordStore — best-effort,
+        // mirrors the normal-completion path above, so a force-killed run
+        // still shows up in run history even though the generator itself is
+        // already tearing down.
+        await this.persistRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
+      }
       this.workspaceInFlight = null;
     }
   }
@@ -800,6 +966,14 @@ export class TerraformService {
    * plan being applied was generated against tfvars that have since changed
    * underneath the caller. Ignored entirely in local-file mode or when
    * `tfvarsVersionId` is omitted.
+   *
+   * Every yielded chunk's `line` is also accumulated in-memory as it streams
+   * through, and — once the spawned process has closed — written in a
+   * single `writeFileSync` to `<runsDir>/<runId>/terraform.log` (see
+   * {@link writeRunLog}), at the same point the {@link TerraformRunRecord} is
+   * persisted (including the force-killed outer-`finally` fallback below) —
+   * a full stdout+stderr transcript of the run that survives after the
+   * generator itself has been consumed.
    *
    * While streaming, stdout lines are scanned via {@link APPLY_SUMMARY_PATTERN}
    * for Terraform's summary line (`Apply complete! Resources: N added, N changed, N destroyed.`)
@@ -903,6 +1077,14 @@ export class TerraformService {
     // exception occurs after the child already finished successfully or
     // failed, and neither of those is an actual cancellation.
     let forceKilled = false;
+    // Accumulates every yielded chunk's `line` (stdout+stderr, in the order
+    // they were streamed) so the full transcript can be written to
+    // `<runsDir>/<runId>/terraform.log` in a single `writeFileSync` once the
+    // process has closed, rather than one disk write per line. Hoisted
+    // alongside `startedAt`/`runRecordWritten`/`forceKilled` so the outer
+    // `finally`'s force-killed branch can also write whatever was captured
+    // before the forced completion unwound past the normal persistence point.
+    const logLines: string[] = [];
     try {
       if (signal?.aborted) {
         // Already aborted before we even started the stale-plan guard — end
@@ -947,6 +1129,7 @@ export class TerraformService {
       try {
         while (!next.done) {
           const chunk = next.value;
+          logLines.push(chunk.line);
           if (chunk.stream === 'stdout') {
             const match = APPLY_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -997,11 +1180,21 @@ export class TerraformService {
       // only on success) so the outer `finally` below never re-attempts a
       // write this block already tried — whether it succeeded or threw.
       runRecordWritten = true;
+      // Persist the full stdout+stderr transcript accumulated above in the
+      // same spot the run record is written — a single writeFileSync now
+      // that the process has closed, rather than one append per line.
+      this.writeRunLog(runId, logLines);
+      const completedAt = new Date().toISOString();
+      const applyExitCode = result.aborted ? null : result.exitCode;
       try {
-        this.writeRunRecord(runId, 'apply', startedAt, result.aborted ? null : result.exitCode, tfvarsVersionId);
+        this.writeRunRecord(runId, 'apply', startedAt, completedAt, applyExitCode, tfvarsVersionId);
       } catch (err) {
         throw new TerraformRunPersistError(runId, outcome, err);
       }
+      // Persists the same run to the cloud-agnostic RunRecordStore (DynamoDB
+      // for AWS) alongside the local run.json write above — see
+      // persistRunRecord's TSDoc for why this is best-effort and awaited.
+      await this.persistRunRecord(runId, 'apply', startedAt, completedAt, applyExitCode, tfvarsVersionId);
 
       if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
@@ -1042,12 +1235,21 @@ export class TerraformService {
         logger.warn('terraform apply cancelled — generator force-closed while running', {
           runId,
         });
+        // Persist whatever transcript was captured before the forced
+        // completion unwound past the normal writeRunLog() call above.
+        this.writeRunLog(runId, logLines);
+        const completedAt = new Date().toISOString();
         try {
-          this.writeRunRecord(runId, 'apply', startedAt, null, tfvarsVersionId);
+          this.writeRunRecord(runId, 'apply', startedAt, completedAt, null, tfvarsVersionId);
         } catch {
           // Nothing meaningful to do with a persistence failure while the
           // generator is already tearing down for an unrelated reason.
         }
+        // Also persist to the cloud-agnostic RunRecordStore — best-effort,
+        // mirrors the normal-completion path above, so a force-killed run
+        // still shows up in run history even though the generator itself is
+        // already tearing down.
+        await this.persistRunRecord(runId, 'apply', startedAt, completedAt, null, tfvarsVersionId);
       }
       this.workspaceInFlight = null;
     }
@@ -1081,6 +1283,13 @@ export class TerraformService {
    * return value alongside `runId`. A run that never reaches the summary line
    * (e.g. it errors out first) resolves the count to `0`, but in that case
    * the generator throws {@link TerraformDestroyError} instead of returning.
+   *
+   * Every yielded chunk's `line` is also accumulated in-memory as it streams
+   * through, and — once the spawned process has closed — written in a
+   * single `writeFileSync` to `<runsDir>/<runId>/terraform.log` (see
+   * {@link writeRunLog}), at the same point the {@link TerraformRunRecord} is
+   * persisted (including the force-killed outer-`finally` fallback below) —
+   * mirrors {@link apply}'s equivalent handling.
    *
    * `signal`, if provided, aborts the run the same way {@link apply} does:
    * the spawned child process is killed and the generator ends cleanly — no
@@ -1134,6 +1343,11 @@ export class TerraformService {
     let startedAt: string | undefined;
     let runRecordWritten = false;
     let forceKilled = false;
+    // Accumulates every yielded chunk's `line` (stdout+stderr, in the order
+    // they were streamed) so the full transcript can be written to
+    // `<runsDir>/<runId>/terraform.log` in a single `writeFileSync` once the
+    // process has closed — mirrors apply()'s equivalent.
+    const logLines: string[] = [];
     try {
       if (signal?.aborted) {
         // Already aborted before we even started resolving the binary path —
@@ -1174,6 +1388,7 @@ export class TerraformService {
       try {
         while (!next.done) {
           const chunk = next.value;
+          logLines.push(chunk.line);
           if (chunk.stream === 'stdout') {
             const match = DESTROY_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -1216,11 +1431,21 @@ export class TerraformService {
       });
 
       runRecordWritten = true;
+      // Persist the full stdout+stderr transcript accumulated above in the
+      // same spot the run record is written — a single writeFileSync now
+      // that the process has closed, rather than one append per line.
+      this.writeRunLog(runId, logLines);
+      const completedAt = new Date().toISOString();
+      const destroyExitCode = result.aborted ? null : result.exitCode;
       try {
-        this.writeRunRecord(runId, 'destroy', startedAt, result.aborted ? null : result.exitCode, undefined);
+        this.writeRunRecord(runId, 'destroy', startedAt, completedAt, destroyExitCode, undefined);
       } catch (err) {
         throw new TerraformRunPersistError(runId, outcome, err);
       }
+      // Persists the same run to the cloud-agnostic RunRecordStore (DynamoDB
+      // for AWS) alongside the local run.json write above — see
+      // persistRunRecord's TSDoc for why this is best-effort and awaited.
+      await this.persistRunRecord(runId, 'destroy', startedAt, completedAt, destroyExitCode, undefined);
 
       if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
@@ -1244,12 +1469,21 @@ export class TerraformService {
         logger.warn('terraform destroy cancelled — generator force-closed while running', {
           runId,
         });
+        // Persist whatever transcript was captured before the forced
+        // completion unwound past the normal writeRunLog() call above.
+        this.writeRunLog(runId, logLines);
+        const completedAt = new Date().toISOString();
         try {
-          this.writeRunRecord(runId, 'destroy', startedAt, null, undefined);
+          this.writeRunRecord(runId, 'destroy', startedAt, completedAt, null, undefined);
         } catch {
           // Nothing meaningful to do with a persistence failure while the
           // generator is already tearing down for an unrelated reason.
         }
+        // Also persist to the cloud-agnostic RunRecordStore — best-effort,
+        // mirrors the normal-completion path above, so a force-killed run
+        // still shows up in run history even though the generator itself is
+        // already tearing down.
+        await this.persistRunRecord(runId, 'destroy', startedAt, completedAt, null, undefined);
       }
       this.workspaceInFlight = null;
     }
@@ -1344,12 +1578,58 @@ export class TerraformService {
   }
 
   /**
+   * Returns the single filesystem path every subcommand runner
+   * ({@link plan}, {@link apply}, {@link destroy}) writes its captured
+   * stdout/stderr transcript to — `<runsDir>/<runId>/terraform.log`.
+   * Centralized (rather than each caller inlining the equivalent
+   * `join(runDir, 'terraform.log')` expression) so a later consumer (e.g. a
+   * "view full run log" IPC handler) has exactly one place to compute the
+   * same path a given `runId` was logged to.
+   */
+  private getRunLogPath(runId: string): string {
+    return join(this.config.getRunsDir(), runId, 'terraform.log');
+  }
+
+  /**
+   * Writes `lines` (the full stdout+stderr transcript accumulated in-memory
+   * by {@link plan}/{@link apply}/{@link destroy} as they streamed
+   * {@link spawnAndStream}'s chunks) to `<runsDir>/<runId>/terraform.log` in
+   * a single `writeFileSync` call, one line per `\n`-terminated row in the
+   * order they were produced. Called exactly once per run, from the same
+   * point each subcommand runner learns its spawned process has closed —
+   * i.e. immediately alongside the {@link writeRunRecord} call in
+   * `apply()`/`destroy()` (including their force-killed outer-`finally`
+   * fallback), and immediately before `plan()` returns/throws its own
+   * result — rather than appending to disk once per streamed line.
+   *
+   * Creates the run directory if it doesn't already exist (mirrors
+   * {@link writeRunRecord}'s defensive `mkdirSync`). Failures are logged at
+   * WARN and swallowed rather than thrown: losing the on-disk log transcript
+   * must never mask (or retroactively fail) an otherwise-successful
+   * `terraform` run, unlike a `run.json` persistence failure which the
+   * caller does surface via {@link TerraformRunPersistError}.
+   */
+  private writeRunLog(runId: string, lines: string[]): void {
+    const runDir = join(this.config.getRunsDir(), runId);
+    try {
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(this.getRunLogPath(runId), lines.map((line) => `${line}\n`).join(''));
+    } catch (err) {
+      logger.warn('failed to write terraform run log', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Writes a {@link TerraformRunRecord} to `<runsDir>/<runId>/run.json` once
-   * an {@link apply} or {@link destroy} run's spawned process has closed.
-   * Creates the run directory if it doesn't already exist (defensive —
-   * {@link plan} normally creates it ahead of `apply`, and `destroy` creates
-   * its own run directory itself, but nothing prevents a caller from applying
-   * a plan file whose directory was cleaned up in between).
+   * a {@link plan}, {@link apply}, or {@link destroy} run's spawned process
+   * has closed. Creates the run directory if it doesn't already exist
+   * (defensive — {@link plan} normally creates it ahead of `apply`, and
+   * `destroy` creates its own run directory itself, but nothing prevents a
+   * caller from applying a plan file whose directory was cleaned up in
+   * between).
    *
    * `mkdirSync`/`writeFileSync` are wrapped in a try/catch so a filesystem
    * error here (e.g. permissions, disk full, cleaned-up parent directory)
@@ -1363,11 +1643,17 @@ export class TerraformService {
    * `runDir` — both `apply()`/`destroy()` already validate/mint `runId`
    * before this is called, but this guard is repeated here defensively so a
    * future caller can never bypass it by skipping those pre-spawn checks.
+   *
+   * `completedAt` is supplied by the caller (rather than computed here)
+   * so the exact same timestamp can also be handed to
+   * {@link persistRunRecord} — the local `run.json` and the remote
+   * `RunRecordStore` entry for a given run always agree on `completedAt`.
    */
   private writeRunRecord(
     runId: string,
-    kind: 'apply' | 'destroy',
+    kind: 'plan' | 'apply' | 'destroy',
     startedAt: string,
+    completedAt: string,
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
   ): void {
@@ -1377,7 +1663,7 @@ export class TerraformService {
       runId,
       kind,
       startedAt,
-      completedAt: new Date().toISOString(),
+      completedAt,
       exitCode,
       tfvarsVersionId,
     };
@@ -1390,6 +1676,55 @@ export class TerraformService {
           `${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
+    }
+  }
+
+  /**
+   * Persists the cloud-agnostic run-history counterpart of
+   * {@link writeRunRecord}'s local `<runsDir>/<runId>/run.json` write —
+   * delegates to `RunRecordService.persist`, which writes the equivalent
+   * `RunRecord` to the run-history `RunRecordStore` (DynamoDB for AWS),
+   * embedding or offloading the captured `<runsDir>/<runId>/terraform.log`
+   * (see {@link getRunLogPath}) as the run's log.
+   *
+   * Called from the exact same points {@link writeRunRecord} is — once per
+   * completed {@link plan}/{@link apply}/{@link destroy} run, whether it
+   * succeeded, failed, or was aborted — so a run always appears in the
+   * run-history table alongside its local `run.json`.
+   *
+   * `RunRecordService.persist` is documented as best-effort and never
+   * throwing (see its own TSDoc), but this method wraps the call in its own
+   * try/catch anyway as a defense-in-depth guard: should `persist` ever
+   * reject despite that contract, the rejection is logged and swallowed here
+   * rather than propagating out of this `async` method — since every caller
+   * `await`s {@link persistRunRecord} directly inline with (not merely
+   * alongside) its own return/throw statements, an unguarded rejection here
+   * would otherwise replace the already-computed plan/apply/destroy outcome
+   * with this unrelated persistence failure. This method is `async` and
+   * awaited by its callers purely so the write is deterministically
+   * observable (e.g. in tests), not because its outcome affects the
+   * already-computed plan/apply/destroy outcome those callers act on
+   * afterward.
+   */
+  private async persistRunRecord(
+    runId: string,
+    kind: RunKind,
+    startedAt: string,
+    completedAt: string,
+    exitCode: number | null,
+    tfvarsVersionId: string | undefined,
+  ): Promise<void> {
+    try {
+      await this.runRecordService.persist(
+        { runId, kind, startedAt, completedAt, exitCode, tfvarsVersionId },
+        this.getRunLogPath(runId),
+      );
+    } catch (err) {
+      logger.warn('failed to persist run record to RunRecordStore', {
+        runId,
+        kind,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

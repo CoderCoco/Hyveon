@@ -1,0 +1,191 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { RunRecord, RunRecordStore } from '@hyveon/shared';
+import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
+
+/**
+ * The single DynamoDB partition every run record lives under (`pk = RUN`).
+ * The table's sort key (`sk`, see `buildRunSk` in `@hyveon/shared/runs.js`)
+ * is `<ISO startedAt>#<runId>`, matching `terraform/aws/runs_store.tf`.
+ */
+const PARTITION_KEY = 'RUN';
+
+/**
+ * How long a presigned log URL remains valid when the caller doesn't supply
+ * an explicit `expiresInSeconds` to {@link AwsRunRecordStore.getLogUrl}.
+ */
+const DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
+
+/**
+ * Builds the S3 key a run's captured log is stored under, keyed by `runId`
+ * so a run's log is always addressable without consulting the DynamoDB
+ * record first.
+ *
+ * @param runId - Unique identifier of the run the log belongs to.
+ * @returns The `runs/<runId>.log` S3 key.
+ */
+function buildLogKey(runId: string): string {
+  return `runs/${runId}.log`;
+}
+
+/**
+ * AWS implementation of the cloud-agnostic {@link RunRecordStore} contract,
+ * backed by the DynamoDB run-history table provisioned in
+ * `terraform/aws/runs_store.tf` (`pk = RUN`, `sk` = `buildRunSk()`) for
+ * record metadata, and an S3 bucket for offloaded run logs (see
+ * {@link buildLogKey}). No `@aws-sdk/*` shapes appear outside this class's
+ * private fields/method bodies, so callers depend only on
+ * {@link RunRecordStore}.
+ */
+export class AwsRunRecordStore implements RunRecordStore {
+  private dynamoClient: DynamoDBDocumentClient | null = null;
+  private dynamoClientRegion: string | null = null;
+  private s3Client: S3Client | null = null;
+  private s3ClientRegion: string | null = null;
+
+  /**
+   * @param getConfig - Resolves the DynamoDB table and S3 bucket (and
+   *   optional region) this store reads/writes, on every call — so a
+   *   rename picked up between calls (e.g. after a Terraform re-apply)
+   *   isn't stuck targeting a stale table/bucket. Optional so the class
+   *   remains constructible with no arguments, mirroring
+   *   `AwsAuditLogStore`/`AwsRemoteFileStore`'s zero-arg-constructible
+   *   pattern. When omitted (or when it returns no `tableName`/`bucket`),
+   *   the relevant methods throw a clear "not configured" error rather
+   *   than sending a malformed request. When `region` is omitted, it falls
+   *   back to {@link resolveDefaultAwsRegion} — never read from
+   *   `process.env` directly here, per CLAUDE.md's "no raw `process.env`
+   *   in business logic" guideline.
+   */
+  constructor(
+    private readonly getConfig?: () => { tableName: string; bucket: string; region?: string },
+  ) {}
+
+  /**
+   * Resolves the configured table name, throwing a clear error instead of
+   * letting an unconfigured table fall through to a malformed DynamoDB
+   * request.
+   */
+  private getTableName(): string {
+    const tableName = this.getConfig?.()?.tableName;
+    if (!tableName) {
+      throw new Error(
+        'AwsRunRecordStore: table not configured. Supply a getConfig callback that resolves { tableName }.',
+      );
+    }
+    return tableName;
+  }
+
+  /**
+   * Resolves the configured bucket name, throwing a clear error instead of
+   * letting an unconfigured bucket fall through to a malformed S3 request.
+   */
+  private getBucketName(): string {
+    const bucket = this.getConfig?.()?.bucket;
+    if (!bucket) {
+      throw new Error(
+        'AwsRunRecordStore: bucket not configured. Supply a getConfig callback that resolves { bucket }.',
+      );
+    }
+    return bucket;
+  }
+
+  /**
+   * Resolves the region to build clients with, falling back to
+   * {@link resolveDefaultAwsRegion} when `getConfig` omits one.
+   */
+  private getRegion(): string {
+    return this.getConfig?.()?.region ?? resolveDefaultAwsRegion();
+  }
+
+  /**
+   * Lazily constructs the DynamoDB document client, recreating it whenever
+   * the freshly-resolved region differs from the region the cached client
+   * was built with — mirrors `AwsAuditLogStore.getClient`'s
+   * rebuild-on-region-change pattern.
+   */
+  private getDynamoClient(): DynamoDBDocumentClient {
+    const region = this.getRegion();
+    if (!this.dynamoClient || this.dynamoClientRegion !== region) {
+      this.dynamoClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
+      this.dynamoClientRegion = region;
+    }
+    return this.dynamoClient;
+  }
+
+  /**
+   * Lazily constructs the S3 client, recreating it whenever the
+   * freshly-resolved region differs from the region the cached client was
+   * built with — same rebuild-on-region-change pattern as
+   * {@link getDynamoClient}.
+   */
+  private getS3Client(): S3Client {
+    const region = this.getRegion();
+    if (!this.s3Client || this.s3ClientRegion !== region) {
+      this.s3Client = new S3Client({ region });
+      this.s3ClientRegion = region;
+    }
+    return this.s3Client;
+  }
+
+  /**
+   * Creates or overwrites a run record, keyed on `pk = RUN` + {@link RunRecord.sk}.
+   *
+   * @param record - The record to persist, including its `sk` (see `buildRunSk`).
+   */
+  async putRecord(record: RunRecord): Promise<void> {
+    await this.getDynamoClient().send(
+      new PutCommand({
+        TableName: this.getTableName(),
+        Item: {
+          pk: PARTITION_KEY,
+          sk: record.sk,
+          runId: record.runId,
+          kind: record.kind,
+          status: record.status,
+          startedAt: record.startedAt,
+          completedAt: record.completedAt,
+          exitCode: record.exitCode,
+          ...(record.tfvarsVersionId !== undefined ? { tfvarsVersionId: record.tfvarsVersionId } : {}),
+          ...(record.logInline !== undefined ? { logInline: record.logInline } : {}),
+          ...(record.logS3Key !== undefined ? { logS3Key: record.logS3Key } : {}),
+        },
+      }),
+    );
+  }
+
+  /**
+   * Writes a run's captured log to S3 under {@link buildLogKey}'s
+   * `runs/<runId>.log` key.
+   *
+   * @param runId - Unique identifier of the run the log belongs to.
+   * @param body  - The raw log contents to store.
+   * @returns The `runs/<runId>.log` key the log was written under.
+   */
+  async putLog(runId: string, body: Uint8Array): Promise<string> {
+    const key = buildLogKey(runId);
+    await this.getS3Client().send(
+      new PutObjectCommand({ Bucket: this.getBucketName(), Key: key, Body: body }),
+    );
+    return key;
+  }
+
+  /**
+   * Resolves a presigned, temporary `GetObject` URL for a previously stored
+   * log.
+   *
+   * @param logKey - The key returned by a prior {@link putLog} call.
+   * @param expiresInSeconds - How long the returned URL should remain
+   *   valid, in seconds. Defaults to {@link DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS}.
+   * @returns A presigned URL the caller can fetch the log from directly.
+   */
+  async getLogUrl(
+    logKey: string,
+    expiresInSeconds: number = DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS,
+  ): Promise<string> {
+    const command = new GetObjectCommand({ Bucket: this.getBucketName(), Key: logKey });
+    return getSignedUrl(this.getS3Client(), command, { expiresIn: expiresInSeconds });
+  }
+}

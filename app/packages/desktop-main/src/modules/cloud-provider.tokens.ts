@@ -22,3 +22,6 @@ export const DISCORD_RECEIVER = Symbol('DISCORD_RECEIVER');
 
 /** Injection token for the `AuditLogStore` implementation bound by `CloudProviderModule`. */
 export const AUDIT_LOG_STORE = Symbol('AUDIT_LOG_STORE');
+
+/** Injection token for the `RunRecordStore` implementation bound by `CloudProviderModule`. */
+export const RUN_RECORD_STORE = Symbol('RUN_RECORD_STORE');

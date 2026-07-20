@@ -14,6 +14,7 @@ const {
   writeFileSyncMock,
   copyFileSyncMock,
   randomUUIDMock,
+  runRecordPersistMock,
 } = vi.hoisted(() => {
   const execFileMock = vi.fn();
   const spawnMock = vi.fn();
@@ -22,6 +23,7 @@ const {
   const writeFileSyncMock = vi.fn();
   const copyFileSyncMock = vi.fn();
   const randomUUIDMock = vi.fn();
+  const runRecordPersistMock = vi.fn();
   return {
     execFileMock,
     spawnMock,
@@ -30,6 +32,7 @@ const {
     writeFileSyncMock,
     copyFileSyncMock,
     randomUUIDMock,
+    runRecordPersistMock,
   };
 });
 
@@ -53,10 +56,12 @@ import {
   TerraformService,
   TerraformNotFoundError,
   TerraformPlanError,
+  TerraformRunPersistError,
   type TerraformRunChunk,
   type TerraformPlanResult,
 } from './TerraformService.js';
 import type { ConfigService } from './ConfigService.js';
+import type { RunRecordService } from './RunRecordService.js';
 import type { RemoteFileStore } from '@hyveon/shared';
 
 /** Error-first callback shape `util.promisify` invokes the mocked `execFile` with. */
@@ -130,6 +135,16 @@ function stubRemoteFileStore(): RemoteFileStore & {
     get: ReturnType<typeof vi.fn>;
     listVersions: ReturnType<typeof vi.fn>;
   };
+}
+
+/**
+ * `RunRecordService` stub for `plan()` tests: `persist` is backed by the
+ * shared, hoisted `runRecordPersistMock` so tests can assert on the exact
+ * `RunRecord` params and log path `plan()` persisted, regardless of which
+ * test constructed the `TerraformService` instance under test.
+ */
+function stubRunRecordService(): RunRecordService {
+  return { persist: runRecordPersistMock } as Partial<RunRecordService> as RunRecordService;
 }
 
 /**
@@ -217,6 +232,7 @@ beforeEach(() => {
   copyFileSyncMock.mockReset();
   randomUUIDMock.mockReset();
   randomUUIDMock.mockReturnValue('run-123');
+  runRecordPersistMock.mockReset();
 });
 
 describe('TerraformService.plan spawning and artifact persistence', () => {
@@ -234,6 +250,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
         tfvarsPath: '/repo/terraform/terraform.tfvars',
       }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
 
     await collectPlanChunks(service.plan(), () => child.close(0));
@@ -271,6 +288,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     const service = new TerraformService(
       stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars', tfvarsPath: '/repo/terraform/terraform.tfvars' }),
       remoteFileStore,
+      stubRunRecordService(),
     );
 
     await collectPlanChunks(service.plan(), () => child.close(0));
@@ -302,6 +320,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     const service = new TerraformService(
       stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars', tfvarsPath: '/repo/terraform/terraform.tfvars' }),
       remoteFileStore,
+      stubRunRecordService(),
     );
 
     await collectPlanChunks(service.plan('v2'), () => child.close(0));
@@ -323,6 +342,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     const service = new TerraformService(
       stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars', tfvarsPath: '/repo/terraform/terraform.tfvars' }),
       remoteFileStore,
+      stubRunRecordService(),
     );
 
     await expect(collectPlanChunks(service.plan('v1'))).rejects.toThrow(/stale/i);
@@ -340,6 +360,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     const service = new TerraformService(
       stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars', tfvarsPath: '/repo/terraform/terraform.tfvars' }),
       remoteFileStore,
+      stubRunRecordService(),
     );
 
     await expect(collectPlanChunks(service.plan())).rejects.toThrow(/not found in S3 bucket/i);
@@ -350,7 +371,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
     queueSuccessfulResolution();
     existsSyncMock.mockReturnValue(false);
 
-    const service = new TerraformService(stubPlanConfigService({ tfvarsBucket: null }), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService({ tfvarsBucket: null }), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(collectPlanChunks(service.plan())).rejects.toThrow(/tfvars file not found/i);
     expect(spawnMock).not.toHaveBeenCalled();
@@ -359,7 +380,7 @@ describe('TerraformService.plan spawning and artifact persistence', () => {
   it('should reject with a TerraformNotFoundError instance and never call spawn when the binary cannot be resolved', async () => {
     queueExecFileFailure();
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     await expect(collectPlanChunks(service.plan())).rejects.toBeInstanceOf(TerraformNotFoundError);
     expect(spawnMock).not.toHaveBeenCalled();
@@ -372,7 +393,7 @@ describe('TerraformService.plan streaming', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const { chunks } = await collectPlanChunks(service.plan(), () => {
       child.emitStdout('Refreshing state...\n');
       child.emitStderr('Warning: something\n');
@@ -388,7 +409,7 @@ describe('TerraformService.plan streaming', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const { chunks } = await collectPlanChunks(service.plan(), () => {
       child.emitStdout('line one\nline two\nline three\n');
       child.close(0);
@@ -402,6 +423,486 @@ describe('TerraformService.plan streaming', () => {
   });
 });
 
+describe('TerraformService.plan run log capture', () => {
+  it('should write the accumulated stdout+stderr transcript to <runsDir>/<runId>/terraform.log in a single writeFileSync once the process closes', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-1');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Refreshing state...\n');
+      child.emitStderr('Warning: something\n');
+      child.close(0);
+    });
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-1/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\nWarning: something\n');
+  });
+
+  it('should still write the accumulated transcript to terraform.log when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-2');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await expect(
+      collectPlanChunks(service.plan(), () => {
+        child.emitStdout('Error: something went wrong\n');
+        child.close(1);
+      }),
+    ).rejects.toBeInstanceOf(TerraformPlanError);
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-2/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Error: something went wrong\n');
+  });
+
+  it('should still write whatever transcript was captured to terraform.log when the run is aborted mid-flight', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-3');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const controller = new AbortController();
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan(undefined, controller.signal);
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    const firstResult = await first;
+    expect(firstResult.done).toBe(false);
+
+    controller.abort();
+    // The fake child doesn't auto-emit `close` on `kill()` — simulate the
+    // real process actually terminating in response to the kill signal.
+    child.close(null);
+
+    const secondResult = await gen.next();
+    expect(secondResult.done).toBe(true);
+    expect(secondResult.value).toBeUndefined();
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-3/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\n');
+  });
+
+  it('should write whatever transcript was captured to terraform.log when the generator is force-closed early', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-4');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan();
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-4/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\n');
+  });
+});
+
+describe('TerraformService.plan run record persistence', () => {
+  it('should write a TerraformRunRecord with kind "plan", exitCode 0, and the propagated tfvarsVersionId to <runsDir>/<runId>/run.json when the process exits successfully', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-1');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await collectPlanChunks(service.plan('tfvars-version-abc'), () => child.close(0));
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-1/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record).toMatchObject({
+      runId: 'run-record-1',
+      kind: 'plan',
+      exitCode: 0,
+      tfvarsVersionId: 'tfvars-version-abc',
+    });
+    expect(typeof record.startedAt).toBe('string');
+    expect(typeof record.completedAt).toBe('string');
+  });
+
+  it('should write a TerraformRunRecord with kind "plan" and the non-zero exit code when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-2');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await expect(
+      collectPlanChunks(service.plan(), () => child.close(1)),
+    ).rejects.toBeInstanceOf(TerraformPlanError);
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-2/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record).toMatchObject({ runId: 'run-record-2', kind: 'plan', exitCode: 1 });
+  });
+
+  it('should write a TerraformRunRecord with kind "plan" and a null exit code when the run is aborted mid-flight', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-3');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const controller = new AbortController();
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan(undefined, controller.signal);
+
+    const pendingNext = gen.next();
+    await flushMicrotasks();
+
+    controller.abort();
+    // The fake child doesn't auto-emit `close` on `kill()` — simulate the
+    // real process actually terminating in response to the kill signal.
+    child.close(null);
+
+    const result = await pendingNext;
+    expect(result.done).toBe(true);
+    expect(result.value).toBeUndefined();
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-3/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record).toMatchObject({ runId: 'run-record-3', kind: 'plan', exitCode: null });
+  });
+
+  it('should throw TerraformRunPersistError carrying the real outcome when the run record write fails', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-4');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    const persistFailure = new Error('ENOSPC: no space left on device');
+    // Only the run.json write fails — the terraform.log write (which also
+    // happens once the process closes) uses the default no-op mock, so this
+    // targets the specific writeFileSync call the assertions below care
+    // about regardless of the order the two writes happen in.
+    writeFileSyncMock.mockImplementation((path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('run.json')) {
+        throw persistFailure;
+      }
+    });
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const pending = collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Plan: 3 to add, 1 to change, 2 to destroy.\n');
+      child.close(0);
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(TerraformRunPersistError);
+    // The real plan outcome (the process succeeded and planned changes) must
+    // survive the persistence failure rather than being discarded behind it.
+    await expect(pending).rejects.toMatchObject({
+      runId: 'run-record-4',
+      outcome: { kind: 'success', result: { runId: 'run-record-4', add: 3, change: 1, destroy: 2 } },
+    });
+    // `writeRunRecord` wraps the raw filesystem error in a descriptive
+    // `Error` (with `{ cause }`) before `plan()` re-wraps *that* as the
+    // `TerraformRunPersistError`'s own `cause` — assert the original
+    // `persistFailure` is still reachable two levels down rather than lost.
+    const rejection = (await pending.catch((err: unknown) => err)) as TerraformRunPersistError;
+    expect(rejection.cause).toBeInstanceOf(Error);
+    expect((rejection.cause as Error).cause).toBe(persistFailure);
+  });
+
+  it('should write exactly one run.json record with a null exitCode when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-5');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan('v1');
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed. writeRunRecord() lives after the inner try/finally in
+    // plan()'s body, which a forced completion unwinds straight past; the
+    // persistence must instead happen from the outer finally's
+    // `forceKilled` branch.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.close(null);
+    await returnPromise;
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-5/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record.runId).toBe('run-record-5');
+    expect(record.kind).toBe('plan');
+    expect(record.exitCode).toBeNull();
+    expect(record.tfvarsVersionId).toBe('v1');
+  });
+});
+
+describe('TerraformService.plan RunRecordService persistence', () => {
+  it('should call RunRecordService.persist exactly once with a matching RunRecord and the captured terraform.log path when the process exits successfully', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-1');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await collectPlanChunks(service.plan('tfvars-version-abc'), () => child.close(0));
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string },
+      string,
+    ];
+    expect(params).toMatchObject({
+      runId: 'run-store-1',
+      kind: 'plan',
+      exitCode: 0,
+      tfvarsVersionId: 'tfvars-version-abc',
+    });
+    expect(logFilePath).toBe('/repo/runs/run-store-1/terraform.log');
+
+    // The persisted record's completedAt must match the local run.json's own
+    // completedAt — both are written from the same captured timestamp.
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-store-1/run.json',
+    );
+    const [, localContents] = recordCalls[0] as [string, string];
+    const localRecord = JSON.parse(localContents);
+    expect((params as { completedAt: string }).completedAt).toBe(localRecord.completedAt);
+    expect((params as { startedAt: string }).startedAt).toBe(localRecord.startedAt);
+  });
+
+  it('should call RunRecordService.persist exactly once with the non-zero exit code when the process exits non-zero', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-2');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await expect(
+      collectPlanChunks(service.plan(), () => child.close(1)),
+    ).rejects.toBeInstanceOf(TerraformPlanError);
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-store-2', kind: 'plan', exitCode: 1 });
+    expect(logFilePath).toBe('/repo/runs/run-store-2/terraform.log');
+  });
+
+  it('should call RunRecordService.persist exactly once with a null exit code when the run is aborted mid-flight', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-3');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const controller = new AbortController();
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan(undefined, controller.signal);
+
+    const pendingNext = gen.next();
+    await flushMicrotasks();
+    controller.abort();
+    child.close(null);
+    await pendingNext;
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-store-3', kind: 'plan', exitCode: null });
+    expect(logFilePath).toBe('/repo/runs/run-store-3/terraform.log');
+  });
+
+  it('should never call RunRecordService.persist when the local run.json write fails', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-4');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    writeFileSyncMock.mockImplementation((path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('run.json')) {
+        throw new Error('ENOSPC: no space left on device');
+      }
+    });
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await expect(
+      collectPlanChunks(service.plan(), () => child.close(0)),
+    ).rejects.toBeInstanceOf(TerraformRunPersistError);
+
+    expect(runRecordPersistMock).not.toHaveBeenCalled();
+  });
+
+  it('should still resolve the generator with the real plan result when RunRecordService.persist rejects', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-5');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockRejectedValue(new Error('DynamoDB unavailable'));
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const { result } = await collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Plan: 3 to add, 1 to change, 2 to destroy.\n');
+      child.close(0);
+    });
+
+    expect(result).toMatchObject({ runId: 'run-store-5', add: 3, change: 1, destroy: 2 });
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call RunRecordService.persist exactly once with a null exit code when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-6');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan('v1');
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-store-6', kind: 'plan', exitCode: null, tfvarsVersionId: 'v1' });
+    expect(logFilePath).toBe('/repo/runs/run-store-6/terraform.log');
+  });
+});
+
 describe('TerraformService.plan summary parsing and return value', () => {
   it('should parse the add/change/destroy counts from the Plan: summary line and return them alongside the artifact/var-file paths', async () => {
     queueSuccessfulResolution();
@@ -412,6 +913,7 @@ describe('TerraformService.plan summary parsing and return value', () => {
     const service = new TerraformService(
       stubPlanConfigService({ runsDir: '/repo/runs' }),
       stubRemoteFileStore(),
+      stubRunRecordService(),
     );
 
     const { result } = await collectPlanChunks(service.plan(), () => {
@@ -435,7 +937,7 @@ describe('TerraformService.plan summary parsing and return value', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     const { result } = await collectPlanChunks(service.plan(), () => {
       child.emitStdout('No changes. Your infrastructure matches the configuration.\n');
@@ -452,7 +954,7 @@ describe('TerraformService.plan exit handling', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     const result = collectPlanChunks(service.plan(), () => child.close(1));
 
@@ -465,7 +967,7 @@ describe('TerraformService.plan exit handling', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
 
     const result = collectPlanChunks(service.plan(), () => child.emit('error', new Error('spawn ENOENT')));
 
@@ -480,7 +982,7 @@ describe('TerraformService.plan abort handling', () => {
     queueSpawn(child);
 
     const controller = new AbortController();
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const gen = service.plan(undefined, controller.signal);
 
     const pendingNext = gen.next();
@@ -502,7 +1004,7 @@ describe('TerraformService.plan abort handling', () => {
     const controller = new AbortController();
     controller.abort();
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const gen = service.plan(undefined, controller.signal);
 
     const result = await gen.next();
@@ -521,7 +1023,7 @@ describe('TerraformService.plan abort handling', () => {
     });
     queueExecFileSuccess(JSON.stringify({ terraform_version: '1.7.0' }));
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const gen = service.plan(undefined, controller.signal);
 
     const result = await gen.next();
@@ -544,6 +1046,7 @@ describe('TerraformService.plan abort handling', () => {
     const service = new TerraformService(
       stubPlanConfigService({ tfvarsBucket: 'hyveon-tfvars' }),
       remoteFileStore,
+      stubRunRecordService(),
     );
     const gen = service.plan(undefined, controller.signal);
 
@@ -559,7 +1062,7 @@ describe('TerraformService.plan abort handling', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const gen = service.plan();
 
     // Drive the generator to its first yielded chunk, mirroring a consumer
@@ -601,7 +1104,7 @@ describe('TerraformService.plan concurrency guard', () => {
     const child = new FakeChildProcess();
     queueSpawn(child);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     const firstGen = service.plan();
     const firstNext = firstGen.next(); // starts the generator body, setting the in-flight flag synchronously
 
@@ -620,7 +1123,7 @@ describe('TerraformService.plan concurrency guard', () => {
     const firstChild = new FakeChildProcess();
     queueSpawn(firstChild);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     await collectPlanChunks(service.plan(), () => firstChild.close(0));
 
     const secondChild = new FakeChildProcess();
@@ -635,7 +1138,7 @@ describe('TerraformService.plan concurrency guard', () => {
     const firstChild = new FakeChildProcess();
     queueSpawn(firstChild);
 
-    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore());
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
     await expect(
       collectPlanChunks(service.plan(), () => firstChild.close(1)),
     ).rejects.toBeInstanceOf(TerraformPlanError);
