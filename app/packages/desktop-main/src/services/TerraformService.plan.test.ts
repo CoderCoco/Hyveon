@@ -513,6 +513,40 @@ describe('TerraformService.plan run log capture', () => {
     const [, contents] = logCalls[0] as [string, string];
     expect(contents).toBe('Refreshing state...\n');
   });
+
+  it('should write whatever transcript was captured to terraform.log when the generator is force-closed early', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-log-4');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan();
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-log-4/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+    const [, contents] = logCalls[0] as [string, string];
+    expect(contents).toBe('Refreshing state...\n');
+  });
 });
 
 describe('TerraformService.plan run record persistence', () => {
@@ -647,6 +681,49 @@ describe('TerraformService.plan run record persistence', () => {
     const rejection = (await pending.catch((err: unknown) => err)) as TerraformRunPersistError;
     expect(rejection.cause).toBeInstanceOf(Error);
     expect((rejection.cause as Error).cause).toBe(persistFailure);
+  });
+
+  it('should write exactly one run.json record with a null exitCode when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-5');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan('v1');
+
+    // Drive the generator to its first yielded chunk, then force-close it —
+    // as `for await...of` `break`/`throw` would — before the child process
+    // has closed. writeRunRecord() lives after the inner try/finally in
+    // plan()'s body, which a forced completion unwinds straight past; the
+    // persistence must instead happen from the outer finally's
+    // `forceKilled` branch.
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.close(null);
+    await returnPromise;
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-5/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record.runId).toBe('run-record-5');
+    expect(record.kind).toBe('plan');
+    expect(record.exitCode).toBeNull();
+    expect(record.tfvarsVersionId).toBe('v1');
   });
 });
 
@@ -790,6 +867,39 @@ describe('TerraformService.plan RunRecordService persistence', () => {
 
     expect(result).toMatchObject({ runId: 'run-store-5', add: 3, change: 1, destroy: 2 });
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call RunRecordService.persist exactly once with a null exit code when the generator is force-closed before the process exits', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-6');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const gen = service.plan('v1');
+
+    const first = gen.next();
+    await flushMicrotasks();
+    child.emitStdout('Refreshing state...\n');
+    await first;
+
+    const returnPromise = gen.return(undefined);
+    await flushMicrotasks();
+    child.close(null);
+    await returnPromise;
+
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-store-6', kind: 'plan', exitCode: null, tfvarsVersionId: 'v1' });
+    expect(logFilePath).toBe('/repo/runs/run-store-6/terraform.log');
   });
 });
 
