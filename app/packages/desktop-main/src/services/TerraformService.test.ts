@@ -250,6 +250,12 @@ describe('TerraformService instance accessors', () => {
 
     await expect(service.getVersion()).resolves.toBe('1.8.1');
   });
+
+  it('should report null from getWorkspaceInFlight when no init/plan/apply/destroy call is running', () => {
+    const service = new TerraformService(stubConfigService(), stubRemoteFileStore(), stubRunRecordService());
+
+    expect(service.getWorkspaceInFlight()).toBeNull();
+  });
 });
 
 describe('TerraformService resolution memoization', () => {
