@@ -968,6 +968,86 @@ describe('preload dispatcher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // terraform.plan
+  // -------------------------------------------------------------------------
+
+  describe('terraform.plan', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.plan channel with the opts payload and resolve the started ack with a runId', async () => {
+        const ack = { started: true, runId: 'run-001' };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          plan: (opts?: { tfvarsVersionId?: string }) => Promise<unknown>;
+        };
+        const opts = { tfvarsVersionId: 'v-123' };
+
+        const result = await terraform.plan(opts);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.plan', opts);
+        expect(result).toEqual(ack);
+      });
+
+      it('should invoke the terraform.plan channel with no opts when omitted', async () => {
+        ipcInvoke.mockResolvedValue({ started: true, runId: 'run-002' });
+        const terraform = bridge['terraform'] as {
+          plan: (opts?: { tfvarsVersionId?: string }) => Promise<unknown>;
+        };
+
+        await terraform.plan();
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.plan', undefined);
+      });
+
+      it('should resolve conflict details when the shared workspace is already busy', async () => {
+        const ack = {
+          started: false,
+          error: 'terraform plan refused: apply is already in flight',
+          conflict: 'apply' as const,
+        };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          plan: (opts?: { tfvarsVersionId?: string }) => Promise<unknown>;
+        };
+
+        const result = await terraform.plan();
+
+        expect(result).toEqual(ack);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.plan is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const ack = { started: true, runId: 'run-mock' };
+        const mockHandler = vi.fn().mockResolvedValue(ack);
+        testApi.mock('terraform.plan', mockHandler);
+
+        const terraform = bridge['terraform'] as {
+          plan: (opts?: { tfvarsVersionId?: string }) => Promise<unknown>;
+        };
+        const opts = { tfvarsVersionId: 'v-456' };
+        const result = await terraform.plan(opts);
+
+        expect(mockHandler).toHaveBeenCalledWith(opts);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(ack);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // terraform.output
   // -------------------------------------------------------------------------
 
