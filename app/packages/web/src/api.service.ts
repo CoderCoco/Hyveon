@@ -338,12 +338,13 @@ export interface DriftReport {
 }
 
 /**
- * The kind of mutation an {@link AuditEntry} records.
+ * The kind of mutation an {@link AuditEntry} records, plus `plan` for a
+ * dry-run `terraform plan` invocation that touched no infrastructure.
  *
  * Mirrors `AuditAction` in `@hyveon/shared/src/audit.ts` — that file is the
  * source of truth; keep this copy in sync with it.
  */
-export type AuditAction = 'add' | 'edit' | 'remove';
+export type AuditAction = 'add' | 'edit' | 'remove' | 'plan';
 
 /**
  * A single row in the DynamoDB audit log, recording who changed a game

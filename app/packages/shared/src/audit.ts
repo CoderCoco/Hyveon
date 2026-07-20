@@ -3,9 +3,11 @@ import type { GameServer } from './tfvars.js';
 
 /**
  * The kind of mutation an {@link AuditEntry} records. Mirrors the CRUD verbs
- * exposed by the `game_servers` write endpoints in `@hyveon/desktop-main`.
+ * exposed by the `game_servers` write endpoints in `@hyveon/desktop-main`,
+ * plus `plan` for a dry-run `terraform plan` invocation that touched no
+ * infrastructure.
  */
-export type AuditAction = 'add' | 'edit' | 'remove';
+export type AuditAction = 'add' | 'edit' | 'remove' | 'plan';
 
 /**
  * A single row in the DynamoDB audit log (`${project_name}-audit` table,
