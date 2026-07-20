@@ -216,6 +216,9 @@ describe('AwsRunRecordStore', () => {
         expiresAt: lock.expiresAt,
       });
       expect(input.ConditionExpression).toBe('attribute_not_exists(pk) OR expiresAt < :now');
+      expect(input.ExpressionAttributeValues).toEqual({
+        ':now': expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      });
     });
 
     it('should resolve without throwing when the existing lock item has already expired', async () => {
