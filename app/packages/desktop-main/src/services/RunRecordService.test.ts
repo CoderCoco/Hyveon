@@ -45,9 +45,16 @@ const putLogMock = vi.fn<RunRecordStore['putLog']>();
 const getLogUrlMock = vi.fn<RunRecordStore['getLogUrl']>();
 const releaseRunMock = vi.fn<RunService['releaseRun']>();
 
-/** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above. */
+/** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above; the lock methods are unused no-ops here since `RunRecordService`'s lock release goes through the injected `RunService`, not the store directly. */
 function makeStore(): RunRecordStore {
-  return { putRecord: putRecordMock, putLog: putLogMock, getLogUrl: getLogUrlMock };
+  return {
+    putRecord: putRecordMock,
+    putLog: putLogMock,
+    getLogUrl: getLogUrlMock,
+    acquireRunLock: vi.fn<RunRecordStore['acquireRunLock']>(),
+    getRunLock: vi.fn<RunRecordStore['getRunLock']>(),
+    releaseRunLock: vi.fn<RunRecordStore['releaseRunLock']>(),
+  };
 }
 
 /** Builds a `RunService`-shaped stub exposing just `releaseRun`, backed by the shared mock above. */
