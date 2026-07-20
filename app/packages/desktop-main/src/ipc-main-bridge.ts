@@ -14,8 +14,15 @@ import { ElectronIPCTransport } from 'nestjs-electron-ipc-transport';
  *   handler streams progress events over a side channel for the duration of
  *   a long-running `terraform init` invocation, the same self-bridging
  *   pattern `logs.stream` uses.
+ * - `terraform.plan`: bridged manually by the same controller for the same
+ *   reason as `terraform.init` — it streams `terraform plan` progress over a
+ *   side channel for the duration of a long-running run.
  */
-export const SELF_BRIDGED_PATTERNS: ReadonlySet<string> = new Set(['logs.stream', 'terraform.init']);
+export const SELF_BRIDGED_PATTERNS: ReadonlySet<string> = new Set([
+  'logs.stream',
+  'terraform.init',
+  'terraform.plan',
+]);
 
 /**
  * `ElectronIPCTransport` (from `nestjs-electron-ipc-transport`) only exposes
