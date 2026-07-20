@@ -763,9 +763,12 @@ export interface GsdTerraformApi {
    * `TerraformService.plan`'s staleness check against the current head
    * version of the tfvars object. The resolved ack reports whether the run
    * started (`{ started: true, runId }`) or was rejected before starting —
-   * either because the shared Terraform workspace was already busy running
-   * `init`/`plan`/`apply`/`destroy` (`{ started: false, error, conflict }`)
-   * or for any other validation/staleness failure (`{ started: false, error }`).
+   * the only rejection path is the shared Terraform workspace already being
+   * busy running `init`/`plan`/`apply`/`destroy`
+   * (`{ started: false, error, conflict }`). Any other failure — including a
+   * stale-tfvars rejection — still resolves `{ started: true, runId }`; the
+   * error arrives afterwards on the `terraform.plan.end` side channel
+   * (`exitCode: null`) rather than on this ack.
    *
    * This call only resolves the initial acknowledgement — it does not itself
    * stream the run's output; consume `terraform.plan.chunk` /
