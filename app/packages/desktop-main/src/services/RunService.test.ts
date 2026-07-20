@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunLockHeldError } from '@hyveon/shared';
 import type { RunLock, RunRecordStore } from '@hyveon/shared';
-import { RunService } from './RunService.js';
+import { DEFAULT_LOCK_TTL_MS, RunService } from './RunService.js';
 import { ConfigService, type TfOutputs } from './ConfigService.js';
 
 /** Minimal `TfOutputs` stub exposing just `runs_table_name`. */
@@ -140,6 +140,27 @@ describe('RunService', () => {
       expect(second.initiator).toBe('bob');
       expect(service.getCurrentLock()).toEqual(second);
     });
+
+    it('should take over an expired in-memory lock instead of throwing RunLockHeldError', async () => {
+      const service = makeService();
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'));
+        const first = await service.createRun('apply', 'alice');
+
+        // Advance past DEFAULT_LOCK_TTL_MS without releasing the first lock
+        // (simulates a crashed run that never called releaseRun).
+        vi.setSystemTime(new Date(Date.parse(first.acquiredAt) + DEFAULT_LOCK_TTL_MS + 1));
+
+        const second = await service.createRun('plan', 'bob');
+
+        expect(second.initiator).toBe('bob');
+        expect(service.getCurrentLock()).toEqual(second);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('getCurrentLock', () => {
@@ -155,6 +176,23 @@ describe('RunService', () => {
       const lock = await service.createRun('apply', 'alice');
 
       expect(service.getCurrentLock()).toEqual(lock);
+    });
+
+    it('should return undefined once the held lock has expired, without releaseRun being called', async () => {
+      const service = makeService();
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'));
+        const lock = await service.createRun('apply', 'alice');
+        expect(service.getCurrentLock()).toEqual(lock);
+
+        vi.setSystemTime(new Date(Date.parse(lock.acquiredAt) + DEFAULT_LOCK_TTL_MS + 1));
+
+        expect(service.getCurrentLock()).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
