@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import type { RunRecord } from '@hyveon/shared';
+import { RunLockHeldError } from '@hyveon/shared';
+import type { RunLock, RunRecord } from '@hyveon/shared';
 import { AwsRunRecordStore } from './AwsRunRecordStore.js';
 
 /** Stub replacing `@aws-sdk/s3-request-presigner`'s `getSignedUrl` so tests
@@ -43,6 +45,18 @@ function makeRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     startedAt: '2026-07-17T00:00:00.000Z',
     completedAt: '2026-07-17T00:05:00.000Z',
     exitCode: 0,
+    ...overrides,
+  };
+}
+
+/** Builds a sample {@link RunLock}, overridable per-test. */
+function makeLock(overrides: Partial<RunLock> = {}): RunLock {
+  return {
+    runId: 'run-123',
+    kind: 'apply',
+    initiator: 'alice',
+    acquiredAt: '2026-07-17T00:00:00.000Z',
+    expiresAt: '2026-07-17T01:00:00.000Z',
     ...overrides,
   };
 }
@@ -177,6 +191,140 @@ describe('AwsRunRecordStore', () => {
       await expect(store.getLogUrl('runs/run-123.log')).rejects.toThrow(
         'AwsRunRecordStore: bucket not configured. Supply a getConfig callback that resolves { bucket }.',
       );
+    });
+  });
+
+  describe('acquireRunLock', () => {
+    it('should resolve without throwing when no lock item currently exists', async () => {
+      ddbMock.on(PutCommand).resolves({});
+
+      const store = makeStore();
+      const lock = makeLock();
+      await expect(store.acquireRunLock(lock)).resolves.toBeUndefined();
+
+      const calls = ddbMock.commandCalls(PutCommand);
+      expect(calls).toHaveLength(1);
+      const input = calls[0]!.args[0].input;
+      expect(input.TableName).toBe('hyveon-runs');
+      expect(input.Item).toEqual({
+        pk: 'LOCK',
+        sk: 'CURRENT',
+        runId: lock.runId,
+        kind: lock.kind,
+        initiator: lock.initiator,
+        acquiredAt: lock.acquiredAt,
+        expiresAt: lock.expiresAt,
+      });
+      expect(input.ConditionExpression).toBe('attribute_not_exists(pk) OR expiresAt < :now');
+    });
+
+    it('should resolve without throwing when the existing lock item has already expired', async () => {
+      // The conditional PutItem's ExpressionAttributeValues comparison is
+      // evaluated server-side by DynamoDB; from the client's perspective an
+      // expired stale lock is indistinguishable from no lock at all — both
+      // let the conditional write through, so this test exercises the same
+      // "the condition passed" path as the empty-lock case above.
+      ddbMock.on(PutCommand).resolves({});
+
+      const store = makeStore();
+      await expect(store.acquireRunLock(makeLock())).resolves.toBeUndefined();
+    });
+
+    it('should throw RunLockHeldError carrying the current lock holder when an unexpired lock is already held', async () => {
+      ddbMock.on(PutCommand).rejects(
+        new ConditionalCheckFailedException({ message: 'conditional check failed', $metadata: {} }),
+      );
+      const holder = makeLock({ runId: 'run-999', initiator: 'bob', kind: 'destroy' });
+      ddbMock.on(GetCommand).resolves({
+        Item: {
+          pk: 'LOCK',
+          sk: 'CURRENT',
+          runId: holder.runId,
+          kind: holder.kind,
+          initiator: holder.initiator,
+          acquiredAt: holder.acquiredAt,
+          expiresAt: holder.expiresAt,
+        },
+      });
+
+      const store = makeStore();
+      const error = await store.acquireRunLock(makeLock({ runId: 'run-new' })).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(RunLockHeldError);
+      expect((error as RunLockHeldError).lock).toEqual(holder);
+    });
+
+    it('should re-throw any error that is not a ConditionalCheckFailedException', async () => {
+      const boom = new Error('boom');
+      ddbMock.on(PutCommand).rejects(boom);
+
+      const store = makeStore();
+      await expect(store.acquireRunLock(makeLock())).rejects.toThrow('boom');
+    });
+  });
+
+  describe('getRunLock', () => {
+    it('should return undefined when no lock item exists', async () => {
+      ddbMock.on(GetCommand).resolves({});
+
+      const store = makeStore();
+      await expect(store.getRunLock()).resolves.toBeUndefined();
+
+      const input = ddbMock.commandCalls(GetCommand)[0]!.args[0].input;
+      expect(input.TableName).toBe('hyveon-runs');
+      expect(input.Key).toEqual({ pk: 'LOCK', sk: 'CURRENT' });
+    });
+
+    it('should return the parsed lock when a lock item exists', async () => {
+      const lock = makeLock();
+      ddbMock.on(GetCommand).resolves({
+        Item: {
+          pk: 'LOCK',
+          sk: 'CURRENT',
+          runId: lock.runId,
+          kind: lock.kind,
+          initiator: lock.initiator,
+          acquiredAt: lock.acquiredAt,
+          expiresAt: lock.expiresAt,
+        },
+      });
+
+      const store = makeStore();
+      await expect(store.getRunLock()).resolves.toEqual(lock);
+    });
+  });
+
+  describe('releaseRunLock', () => {
+    it('should send a DeleteCommand scoped to the given runId', async () => {
+      ddbMock.on(DeleteCommand).resolves({});
+
+      const store = makeStore();
+      await expect(store.releaseRunLock('run-123')).resolves.toBeUndefined();
+
+      const calls = ddbMock.commandCalls(DeleteCommand);
+      expect(calls).toHaveLength(1);
+      const input = calls[0]!.args[0].input;
+      expect(input.TableName).toBe('hyveon-runs');
+      expect(input.Key).toEqual({ pk: 'LOCK', sk: 'CURRENT' });
+      expect(input.ConditionExpression).toBe('runId = :runId');
+      expect(input.ExpressionAttributeValues).toEqual({ ':runId': 'run-123' });
+    });
+
+    it('should no-op instead of throwing when the held lock belongs to a different runId', async () => {
+      ddbMock.on(DeleteCommand).rejects(
+        new ConditionalCheckFailedException({ message: 'conditional check failed', $metadata: {} }),
+      );
+
+      const store = makeStore();
+      await expect(store.releaseRunLock('some-other-run')).resolves.toBeUndefined();
+    });
+
+    it('should re-throw any error that is not a ConditionalCheckFailedException', async () => {
+      const boom = new Error('boom');
+      ddbMock.on(DeleteCommand).rejects(boom);
+
+      const store = makeStore();
+      await expect(store.releaseRunLock('run-123')).rejects.toThrow('boom');
     });
   });
 });
