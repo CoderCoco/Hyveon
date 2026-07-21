@@ -560,7 +560,8 @@ describe('TerraformController', () => {
             resolveAudit = resolve;
           }),
       );
-      const audit = { record } as unknown as AuditService;
+      const auditStub: Partial<AuditService> = { record };
+      const audit = auditStub as AuditService;
       const { ctx: ctxA, sender: senderA } = makeCtx();
       const { ctx: ctxB, sender: senderB } = makeCtx();
       const controller = new TerraformController(terraform, audit);
