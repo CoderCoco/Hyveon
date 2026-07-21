@@ -528,6 +528,19 @@ export class TerraformService {
   }
 
   /**
+   * Public read-only accessor for {@link workspaceInFlight} — reports the
+   * name of whichever subcommand ({@link init}, {@link plan}, {@link apply},
+   * or {@link destroy}) is actively running against `getTerraformDir()`, or
+   * `null` when none is. Intended for a future `gsd.terraform.plan` (and
+   * sibling) IPC handler to report the live lock state to the renderer (e.g.
+   * to disable a "Plan" button while a run is already in flight) without
+   * needing its own duplicate bookkeeping.
+   */
+  getWorkspaceInFlight(): 'init' | 'plan' | 'apply' | 'destroy' | null {
+    return this.workspaceInFlight;
+  }
+
+  /**
    * Mints a fresh, single-use confirmation token for a subsequent
    * {@link destroy} call, valid for {@link DESTROY_CONFIRMATION_TTL_MS}.
    * Intended to be called the moment the renderer shows its destroy
@@ -653,13 +666,16 @@ export class TerraformService {
    * yielding a {@link TerraformRunChunk} per line of output as the process
    * produces it — mirrors {@link init}'s streaming shape.
    *
-   * Before spawning: mints a fresh `runId` (`randomUUID()`), creates its
-   * per-run directory `<runsDir>/<runId>/` (`ConfigService.getRunsDir()`),
-   * and pulls a snapshot of the current tfvars into that directory via
-   * {@link pullVarFile} — so the persisted plan artifact and the exact tfvars
-   * it was planned against are captured together for a later `apply()` to
-   * consume (see the "Terraform run cache" row of the electron-desktop-pivot
-   * design spec).
+   * Before spawning: resolves the `runId` for this run — either a caller-
+   * supplied `preMintedRunId` (validated via {@link assertValidRunId}, so a
+   * future `gsd.terraform.plan` IPC handler can mint the id up-front and hand
+   * it back to the renderer before streaming starts) or, when omitted, a
+   * freshly minted `randomUUID()` — creates its per-run directory
+   * `<runsDir>/<runId>/` (`ConfigService.getRunsDir()`), and pulls a snapshot
+   * of the current tfvars into that directory via {@link pullVarFile} — so
+   * the persisted plan artifact and the exact tfvars it was planned against
+   * are captured together for a later `apply()` to consume (see the
+   * "Terraform run cache" row of the electron-desktop-pivot design spec).
    *
    * `tfvarsVersionId`, when provided and the tfvars source is S3-backed
    * (`ConfigService.getTfvarsBucket()` resolves one), is enforced as a
@@ -721,7 +737,11 @@ export class TerraformService {
    * if another `plan()` *or* `init()` call is already in flight on this
    * instance — both subcommands share a single {@link workspaceInFlight} lock
    * because `plan` reads the `backend/.terraform` state that `init` mutates;
-   * overlapping runs against the same working directory would race.
+   * overlapping runs against the same working directory would race — or if
+   * `preMintedRunId` is supplied but isn't a bare path segment matching
+   * {@link RUN_ID_PATTERN} (mirrors {@link apply}'s `runId` validation, since
+   * this value is joined directly into filesystem paths under
+   * `ConfigService.getRunsDir()`).
    *
    * Throws {@link TerraformNotFoundError} if the `terraform` binary can't be
    * resolved, a plain `Error` if the configured tfvars source can't be read
@@ -734,12 +754,16 @@ export class TerraformService {
   async *plan(
     tfvarsVersionId?: string,
     signal?: AbortSignal,
+    preMintedRunId?: string,
   ): AsyncGenerator<TerraformRunChunk, TerraformPlanResult | undefined> {
     if (this.workspaceInFlight) {
       throw new Error(
         `TerraformService.plan() cannot run while ${this.workspaceInFlight}() is already ` +
           'running; wait for it to finish before calling plan() again.',
       );
+    }
+    if (preMintedRunId !== undefined) {
+      TerraformService.assertValidRunId(preMintedRunId);
     }
     this.workspaceInFlight = 'plan';
     // Hoisted above the try block — mirrors apply()/destroy()'s equivalents.
@@ -779,7 +803,7 @@ export class TerraformService {
         return undefined;
       }
 
-      runId = randomUUID();
+      runId = preMintedRunId ?? randomUUID();
       const runDir = join(this.config.getRunsDir(), runId);
       mkdirSync(runDir, { recursive: true });
 
