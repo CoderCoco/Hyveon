@@ -444,12 +444,13 @@ export interface DriftReport {
 }
 
 /**
- * The kind of mutation an {@link AuditEntry} records.
+ * The kind of mutation an {@link AuditEntry} records, plus `plan` for a
+ * dry-run `terraform plan` invocation that touched no infrastructure.
  *
  * Mirrors `AuditAction` in `@hyveon/shared/src/audit.ts` — that file is the
  * source of truth; keep this copy in sync with it.
  */
-export type AuditAction = 'add' | 'edit' | 'remove';
+export type AuditAction = 'add' | 'edit' | 'remove' | 'plan';
 
 /**
  * A single row in the DynamoDB audit log, recording who changed a game
@@ -515,6 +516,43 @@ export interface TerraformInitConfig {
   bucket: string;
   region: string;
   dynamodbTable: string;
+}
+
+/**
+ * Payload accepted by the `terraform.plan` IPC channel. `tfvarsVersionId`,
+ * when the configured tfvars source is S3-backed, is forwarded verbatim to
+ * `TerraformService.plan`'s pre-spawn staleness check against the current
+ * head version of the tfvars object.
+ *
+ * Mirrors `TerraformPlanPayload` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformPlanPayload {
+  tfvarsVersionId?: string;
+}
+
+/**
+ * Immediate acknowledgement the `terraform.plan` IPC channel resolves with.
+ * `started: true` means a `runId` was minted and the `terraform plan` run
+ * was kicked off in the background — the streamed progress/final result
+ * (`TerraformPlanResult`) are delivered separately over the
+ * `terraform.plan.chunk` / `terraform.plan.end` side channels, tagged with
+ * this same `runId`. `started: false` means the submission was rejected
+ * before any run was attempted (no `runId` is present): `error` is a
+ * human-readable description of why, and `conflict` additionally names the
+ * already-running subcommand (`init` / `plan` / `apply` / `destroy`) when the
+ * rejection was specifically because the shared Terraform workspace was busy.
+ *
+ * Mirrors `TerraformPlanAck` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformPlanAck {
+  started: boolean;
+  runId?: string;
+  error?: string;
+  conflict?: 'init' | 'plan' | 'apply' | 'destroy';
 }
 
 /**
@@ -717,6 +755,27 @@ export interface GsdTerraformApi {
    * `terraform init` process was ever spawned.
    */
   init: (config: TerraformInitConfig, signal?: AbortSignal) => AsyncIterable<TerraformRunChunk>;
+  /**
+   * Submits a `terraform plan` run by invoking the `terraform.plan` IPC
+   * channel and resolves its immediate {@link TerraformPlanAck}.
+   *
+   * `opts.tfvarsVersionId`, when supplied, is forwarded to
+   * `TerraformService.plan`'s staleness check against the current head
+   * version of the tfvars object. The resolved ack reports whether the run
+   * started (`{ started: true, runId }`) or was rejected before starting —
+   * the only rejection path is the shared Terraform workspace already being
+   * busy running `init`/`plan`/`apply`/`destroy`
+   * (`{ started: false, error, conflict }`). Any other failure — including a
+   * stale-tfvars rejection — still resolves `{ started: true, runId }`; the
+   * error arrives afterwards on the `terraform.plan.end` side channel
+   * (`exitCode: null`) rather than on this ack.
+   *
+   * This call only resolves the initial acknowledgement — it does not itself
+   * stream the run's output; consume `terraform.plan.chunk` /
+   * `terraform.plan.end` (tagged with the returned `runId`) separately for
+   * progress and the final `TerraformPlanResult`.
+   */
+  plan: (opts?: TerraformPlanPayload) => Promise<TerraformPlanAck>;
   /**
    * Returns the current Terraform outputs by invoking the `terraform.output`
    * IPC channel with `{ force }`. `force` defaults to `false`, matching

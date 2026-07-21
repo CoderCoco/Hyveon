@@ -25,6 +25,13 @@
  * never resolve/terminate a different call's generator. There is no dedicated
  * cancel channel — aborting simply stops the generator from consuming further
  * chunks, since the main process has nothing to tear down early.
+ *
+ * `terraform.plan(opts)` is a plain `invoke` — unlike `terraform.init`, it does
+ * not itself stream progress. It resolves the immediate `TerraformPlanAck`
+ * `TerraformController.plan` returns: `{ started: true, runId }` once the run
+ * has been kicked off in the background, or `{ started: false, error, conflict? }`
+ * when the submission was rejected outright (e.g. the shared Terraform
+ * workspace was already busy running another subcommand).
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
@@ -36,6 +43,8 @@ import type {
   GsdTestApi,
   LogChunk,
   TerraformInitConfig,
+  TerraformPlanAck,
+  TerraformPlanPayload,
   TerraformRunChunk,
   TfOutputs,
   UpdateGamePayload,
@@ -416,6 +425,7 @@ const api: GsdApi = {
 
   terraform: {
     init: streamTerraformInit,
+    plan: (opts?: TerraformPlanPayload) => invoke<TerraformPlanAck>('terraform.plan', opts),
     output: (force?: boolean) => invoke<TfOutputs | null>('terraform.output', { force }),
   },
 };

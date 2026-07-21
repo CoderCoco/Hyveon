@@ -1098,6 +1098,114 @@ describe('TerraformService.plan abort handling', () => {
   });
 });
 
+describe('TerraformService.plan pre-minted runId', () => {
+  it('should use a caller-supplied preMintedRunId instead of minting a fresh one via randomUUID', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const { result } = await collectPlanChunks(service.plan(undefined, undefined, 'pre-minted-run-id'), () =>
+      child.close(0),
+    );
+
+    expect(randomUUIDMock).not.toHaveBeenCalled();
+    expect(mkdirSyncMock).toHaveBeenCalledWith('/repo/runs/pre-minted-run-id', { recursive: true });
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/usr/local/bin/terraform',
+      expect.arrayContaining([
+        '-out=/repo/runs/pre-minted-run-id/pre-minted-run-id.tfplan',
+        '-var-file=/repo/runs/pre-minted-run-id/terraform.tfvars',
+      ]),
+      { cwd: '/repo/terraform' },
+    );
+    expect(result).toMatchObject({ runId: 'pre-minted-run-id' });
+  });
+
+  it('should fall back to randomUUID for the runId when preMintedRunId is omitted', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-default-1');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const { result } = await collectPlanChunks(service.plan(), () => child.close(0));
+
+    expect(randomUUIDMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ runId: 'run-default-1' });
+  });
+
+  it('should throw a descriptive Error synchronously and never call spawn when preMintedRunId is malformed', async () => {
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const gen = service.plan(undefined, undefined, '../escape');
+
+    await expect(gen.next()).rejects.toThrow(/not a valid run id/i);
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    // The workspace lock must not be left held after a synchronous rejection.
+    expect(service.getWorkspaceInFlight()).toBeNull();
+  });
+
+  it('should reject a preMintedRunId containing a path separator', async () => {
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const gen = service.plan(undefined, undefined, 'run/id');
+
+    await expect(gen.next()).rejects.toThrow(/not a valid run id/i);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerraformService.getWorkspaceInFlight', () => {
+  it('should report null when no subcommand is running', () => {
+    const service = new TerraformService(
+      stubPlanConfigService(),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    expect(service.getWorkspaceInFlight()).toBeNull();
+  });
+
+  it('should report "plan" while a plan() run is in flight and null again once it completes', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(stubPlanConfigService(), stubRemoteFileStore(), stubRunRecordService());
+    const gen = service.plan();
+    const pendingNext = gen.next();
+
+    await flushMicrotasks();
+    expect(service.getWorkspaceInFlight()).toBe('plan');
+
+    child.close(0);
+    await pendingNext;
+    await gen.next();
+
+    expect(service.getWorkspaceInFlight()).toBeNull();
+  });
+});
+
 describe('TerraformService.plan concurrency guard', () => {
   it('should throw a descriptive Error from a second plan() call while the first is still in flight', async () => {
     queueSuccessfulResolution();
