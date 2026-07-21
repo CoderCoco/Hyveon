@@ -6,6 +6,8 @@
  * check against the same class.
  */
 
+import type { RunLock } from './runs.js';
+
 /**
  * Thrown by tfvars write helpers (e.g. `TfvarsService.updateGameServer`)
  * when an optimistic-concurrency check fails: the caller supplied the etag
@@ -37,5 +39,30 @@ export class OptimisticLockError extends Error {
     this.expectedEtag = expectedEtag;
     this.currentEtag = currentEtag;
     Object.setPrototypeOf(this, OptimisticLockError.prototype);
+  }
+}
+
+/**
+ * Thrown by `RunService.createRun()` (desktop-main, #106) when a caller
+ * tries to start a new `terraform` plan/apply/destroy while another
+ * non-terminal run is already holding the apply lock. Carries the current
+ * {@link RunLock} so the HTTP layer can respond `409 Conflict` with details
+ * of who holds the lock (initiator, kind, when it was acquired) instead of a
+ * generic failure.
+ */
+export class RunLockHeldError extends Error {
+  /** The lock currently held by another in-flight run. */
+  readonly lock: RunLock;
+
+  /**
+   * @param lock - The lock currently held by another in-flight run.
+   * @param message - Optional human-readable message; defaults to a message
+   *   derived from the lock's initiator and kind.
+   */
+  constructor(lock: RunLock, message?: string) {
+    super(message ?? `Run lock already held by "${lock.initiator}" (${lock.kind}, runId "${lock.runId}").`);
+    this.name = 'RunLockHeldError';
+    this.lock = lock;
+    Object.setPrototypeOf(this, RunLockHeldError.prototype);
   }
 }

@@ -3,7 +3,9 @@
  * cloud-agnostic `RunRecordStore` (a stub here; the real `AwsRunRecordStore`
  * has its own tests under `@hyveon/cloud-aws`). Covers the inline-vs-offload
  * log decision, the missing-table no-op, the swallow-on-error persistence
- * contract, and the `getLogUrl` delegation.
+ * contract, the `getLogUrl` delegation, and (issue #106) that `persist()`
+ * always releases the apply lock for its `runId` via the injected
+ * `RunService`, regardless of which persistence path is taken.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunRecord, RunRecordStore } from '@hyveon/shared';
 import { INLINE_LOG_LIMIT_BYTES, RunRecordService, type PersistRunRecordParams } from './RunRecordService.js';
 import { ConfigService, type TfOutputs } from './ConfigService.js';
+import { RunService } from './RunService.js';
 
 /** Minimal `TfOutputs` stub exposing just `runs_table_name`. */
 const TF: TfOutputs = {
@@ -40,16 +43,33 @@ const TF: TfOutputs = {
 const putRecordMock = vi.fn<RunRecordStore['putRecord']>();
 const putLogMock = vi.fn<RunRecordStore['putLog']>();
 const getLogUrlMock = vi.fn<RunRecordStore['getLogUrl']>();
+const releaseRunMock = vi.fn<RunService['releaseRun']>();
 
-/** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above. */
+/** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above; the lock methods are unused no-ops here since `RunRecordService`'s lock release goes through the injected `RunService`, not the store directly. */
 function makeStore(): RunRecordStore {
-  return { putRecord: putRecordMock, putLog: putLogMock, getLogUrl: getLogUrlMock };
+  return {
+    putRecord: putRecordMock,
+    putLog: putLogMock,
+    getLogUrl: getLogUrlMock,
+    acquireRunLock: vi.fn<RunRecordStore['acquireRunLock']>(),
+    getRunLock: vi.fn<RunRecordStore['getRunLock']>(),
+    releaseRunLock: vi.fn<RunRecordStore['releaseRunLock']>(),
+  };
 }
 
-/** Builds a `RunRecordService` with a `ConfigService` stub returning `outputs` and the given (or default) store stub. */
-function makeService(outputs: TfOutputs | null = TF, store: RunRecordStore = makeStore()): RunRecordService {
+/** Builds a `RunService`-shaped stub exposing just `releaseRun`, backed by the shared mock above. */
+function makeRunService(): RunService {
+  return { releaseRun: releaseRunMock } as Partial<RunService> as RunService;
+}
+
+/** Builds a `RunRecordService` with a `ConfigService` stub returning `outputs` and the given (or default) store/run-service stubs. */
+function makeService(
+  outputs: TfOutputs | null = TF,
+  store: RunRecordStore = makeStore(),
+  runService: RunService = makeRunService(),
+): RunRecordService {
   const config = { getTfOutputs: () => outputs } as Partial<ConfigService> as ConfigService;
-  return new RunRecordService(config, store);
+  return new RunRecordService(config, store, runService);
 }
 
 /** Builds a sample {@link PersistRunRecordParams}, overridable per-test. */
@@ -77,6 +97,8 @@ beforeEach(() => {
   putRecordMock.mockReset();
   putLogMock.mockReset();
   getLogUrlMock.mockReset();
+  releaseRunMock.mockReset();
+  releaseRunMock.mockResolvedValue(undefined);
   workDir = mkdtempSync(join(tmpdir(), 'run-record-service-test-'));
 });
 
@@ -218,6 +240,48 @@ describe('RunRecordService', () => {
 
       expect(putRecordMock).not.toHaveBeenCalled();
       expect(putLogMock).not.toHaveBeenCalled();
+    });
+
+    it('should release the apply lock for the run after a successful persist', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.persist(makeParams({ runId: 'run-abc' }), null);
+
+      expect(releaseRunMock).toHaveBeenCalledTimes(1);
+      expect(releaseRunMock).toHaveBeenCalledWith('run-abc');
+    });
+
+    it('should release the apply lock even when runs_table_name is not configured and persistence is skipped', async () => {
+      const service = makeService(null);
+
+      await service.persist(makeParams({ runId: 'run-no-table' }), null);
+
+      expect(putRecordMock).not.toHaveBeenCalled();
+      expect(releaseRunMock).toHaveBeenCalledTimes(1);
+      expect(releaseRunMock).toHaveBeenCalledWith('run-no-table');
+    });
+
+    it('should release the apply lock even when store.putRecord fails', async () => {
+      putRecordMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await service.persist(makeParams({ runId: 'run-failed-record' }), null);
+
+      expect(releaseRunMock).toHaveBeenCalledTimes(1);
+      expect(releaseRunMock).toHaveBeenCalledWith('run-failed-record');
+    });
+
+    it('should release the apply lock even when the log offload fails', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      putLogMock.mockRejectedValue(new Error('S3 is down'));
+      const service = makeService();
+      const oversizedLog = 'x'.repeat(INLINE_LOG_LIMIT_BYTES + 1);
+
+      await service.persist(makeParams({ runId: 'run-failed-log' }), writeLogFile(oversizedLog));
+
+      expect(releaseRunMock).toHaveBeenCalledTimes(1);
+      expect(releaseRunMock).toHaveBeenCalledWith('run-failed-log');
     });
   });
 

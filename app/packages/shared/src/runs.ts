@@ -109,3 +109,45 @@ export function deriveRunStatus(exitCode: number | null): RunStatus {
   }
   return exitCode === 0 ? 'success' : 'failed';
 }
+
+/**
+ * Describes the single non-terminal run currently holding the apply lock —
+ * the value returned by `RunService.getCurrentLock()` (desktop-main, #106).
+ * Only one {@link RunLock} can be outstanding at a time: `RunService.createRun`
+ * checks for an existing, unexpired lock before starting a new `terraform`
+ * subcommand and rejects with a {@link RunLockHeldError} (see `errors.ts`) if
+ * one is found, mirroring CodeBuild's `concurrent_build_limit = 1`.
+ *
+ * `expiresAt` exists so a crashed/orphaned process (one that started a run
+ * but never wrote a terminal {@link RunStatus}) doesn't wedge the lock
+ * forever — {@link isRunLockExpired} treats such locks as released once
+ * `expiresAt` has passed, even though no terminal status was ever recorded.
+ */
+export interface RunLock {
+  /** Unique identifier of the run holding the lock — matches {@link RunRecord.runId}. */
+  runId: string;
+  /** Which `terraform` subcommand holds the lock. */
+  kind: RunKind;
+  /** Opaque identifier (e.g. username or API caller) of who started the run, surfaced to the UI as the current lock holder. */
+  initiator: string;
+  /** ISO-8601 timestamp the lock was acquired — matches {@link RunRecord.startedAt}. */
+  acquiredAt: string;
+  /** ISO-8601 timestamp after which the lock is considered stale even without a terminal status being recorded. */
+  expiresAt: string;
+}
+
+/**
+ * Determines whether a {@link RunLock} is stale and should be treated as
+ * released, based on whether `now` has passed the lock's `expiresAt`.
+ *
+ * Pure: takes `now` as an argument (defaulting to the current time) rather
+ * than reading the clock internally, so tests can pass a fixed value for
+ * deterministic assertions.
+ *
+ * @param lock - The lock to check.
+ * @param now - The instant to check the lock against. Defaults to `new Date()`.
+ * @returns `true` if `now` is at or after {@link RunLock.expiresAt}, `false` otherwise.
+ */
+export function isRunLockExpired(lock: RunLock, now: Date = new Date()): boolean {
+  return now.getTime() >= new Date(lock.expiresAt).getTime();
+}

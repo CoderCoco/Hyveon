@@ -14,6 +14,13 @@
  * failure path logs a winston warning and falls back to the least-lossy
  * option it can rather than throwing — mirrors `AuditService.record`'s
  * swallow-on-error contract.
+ *
+ * `persist()` also owns releasing the apply lock (issue #106) that
+ * `RunService.createRun` acquired for `params.runId`: the release is wrapped
+ * in a `finally` so it happens unconditionally — whether the table-not-
+ * deployed guard short-circuits the method, the write succeeds, or any of
+ * the best-effort log/record writes fails — since a lock left held after its
+ * run has finished would wedge every subsequent `terraform` submission.
  */
 import { readFileSync } from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
@@ -21,6 +28,7 @@ import { buildRunSk, deriveRunStatus } from '@hyveon/shared';
 import type { RunKind, RunRecord, RunRecordStore } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
+import { RunService } from './RunService.js';
 import { RUN_RECORD_STORE } from '../modules/cloud-provider.tokens.js';
 
 /**
@@ -79,6 +87,7 @@ export class RunRecordService {
   constructor(
     private readonly config: ConfigService,
     @Inject(RUN_RECORD_STORE) private readonly store: RunRecordStore,
+    private readonly runService: RunService,
   ) {}
 
   /**
@@ -112,73 +121,84 @@ export class RunRecordService {
    * - If the final `store.putRecord` call itself fails, a winston warning is
    *   logged and the method returns.
    *
+   * Regardless of which of the above paths is taken (including the
+   * table-not-deployed early return), the apply lock `RunService.createRun`
+   * acquired for `params.runId` is always released via
+   * `RunService.releaseRun` before `persist` returns — the release runs in a
+   * `finally` block so a run-history write failure can never leave the lock
+   * held.
+   *
    * @param params - Everything about the finished run except its log.
    * @param logFilePath - Path to the run's captured stdout+stderr transcript
    *   on disk, or `null` when no log was captured for this run.
    */
   async persist(params: PersistRunRecordParams, logFilePath: string | null): Promise<void> {
-    const tableName = this.config.getTfOutputs()?.runs_table_name;
-    if (!tableName) {
-      logger.warn('RunRecordService.persist: runs_table_name not configured, skipping run record persistence', {
-        runId: params.runId,
-        kind: params.kind,
-      });
-      return;
-    }
+    try {
+      const tableName = this.config.getTfOutputs()?.runs_table_name;
+      if (!tableName) {
+        logger.warn('RunRecordService.persist: runs_table_name not configured, skipping run record persistence', {
+          runId: params.runId,
+          kind: params.kind,
+        });
+        return;
+      }
 
-    let logInline: string | undefined;
-    let logS3Key: string | undefined;
-    if (logFilePath !== null) {
-      let logText: string | undefined;
+      let logInline: string | undefined;
+      let logS3Key: string | undefined;
+      if (logFilePath !== null) {
+        let logText: string | undefined;
+        try {
+          logText = readFileSync(logFilePath, 'utf8');
+        } catch (err) {
+          logger.warn('RunRecordService.persist: failed to read captured log file, persisting record without log', {
+            err,
+            runId: params.runId,
+            kind: params.kind,
+            logFilePath,
+          });
+        }
+
+        if (logText !== undefined) {
+          const byteLength = Buffer.byteLength(logText, 'utf8');
+          if (byteLength > INLINE_LOG_LIMIT_BYTES) {
+            try {
+              logS3Key = await this.store.putLog(params.runId, new TextEncoder().encode(logText));
+            } catch (err) {
+              logger.warn(
+                'RunRecordService.persist: failed to offload log to remote store, persisting record without log',
+                { err, runId: params.runId, kind: params.kind },
+              );
+            }
+          } else {
+            logInline = logText;
+          }
+        }
+      }
+
       try {
-        logText = readFileSync(logFilePath, 'utf8');
+        const record: RunRecord = {
+          sk: buildRunSk(params.startedAt, params.runId),
+          runId: params.runId,
+          kind: params.kind,
+          status: deriveRunStatus(params.exitCode),
+          startedAt: params.startedAt,
+          completedAt: params.completedAt,
+          exitCode: params.exitCode,
+          ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
+          ...(logInline !== undefined ? { logInline } : {}),
+          ...(logS3Key !== undefined ? { logS3Key } : {}),
+        };
+
+        await this.store.putRecord(record);
       } catch (err) {
-        logger.warn('RunRecordService.persist: failed to read captured log file, persisting record without log', {
+        logger.warn('RunRecordService.persist: failed to persist run record', {
           err,
           runId: params.runId,
           kind: params.kind,
-          logFilePath,
         });
       }
-
-      if (logText !== undefined) {
-        const byteLength = Buffer.byteLength(logText, 'utf8');
-        if (byteLength > INLINE_LOG_LIMIT_BYTES) {
-          try {
-            logS3Key = await this.store.putLog(params.runId, new TextEncoder().encode(logText));
-          } catch (err) {
-            logger.warn(
-              'RunRecordService.persist: failed to offload log to remote store, persisting record without log',
-              { err, runId: params.runId, kind: params.kind },
-            );
-          }
-        } else {
-          logInline = logText;
-        }
-      }
-    }
-
-    try {
-      const record: RunRecord = {
-        sk: buildRunSk(params.startedAt, params.runId),
-        runId: params.runId,
-        kind: params.kind,
-        status: deriveRunStatus(params.exitCode),
-        startedAt: params.startedAt,
-        completedAt: params.completedAt,
-        exitCode: params.exitCode,
-        ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
-        ...(logInline !== undefined ? { logInline } : {}),
-        ...(logS3Key !== undefined ? { logS3Key } : {}),
-      };
-
-      await this.store.putRecord(record);
-    } catch (err) {
-      logger.warn('RunRecordService.persist: failed to persist run record', {
-        err,
-        runId: params.runId,
-        kind: params.kind,
-      });
+    } finally {
+      await this.runService.releaseRun(params.runId);
     }
   }
 

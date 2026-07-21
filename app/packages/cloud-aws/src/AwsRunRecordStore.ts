@@ -1,8 +1,9 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { RunRecord, RunRecordStore } from '@hyveon/shared';
+import { RunLockHeldError } from '@hyveon/shared';
+import type { RunLock, RunRecord, RunRecordStore } from '@hyveon/shared';
 import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
 
 /**
@@ -11,6 +12,16 @@ import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
  * is `<ISO startedAt>#<runId>`, matching `terraform/aws/runs_store.tf`.
  */
 const PARTITION_KEY = 'RUN';
+
+/**
+ * The single, well-known item the apply lock lives under: a dedicated
+ * partition (`pk = "LOCK"`) separate from the `pk = "RUN"` partition ordinary
+ * {@link RunRecord} items live in, with a fixed sort key (`sk = "CURRENT"`)
+ * since there is ever only one outstanding lock (see `terraform/aws/runs_store.tf`
+ * and `RunRecordStore.acquireRunLock` in `@hyveon/shared/cloud.js`).
+ */
+const LOCK_PK = 'LOCK';
+const LOCK_SK = 'CURRENT';
 
 /**
  * How long a presigned log URL remains valid when the caller doesn't supply
@@ -187,5 +198,99 @@ export class AwsRunRecordStore implements RunRecordStore {
   ): Promise<string> {
     const command = new GetObjectCommand({ Bucket: this.getBucketName(), Key: logKey });
     return getSignedUrl(this.getS3Client(), command, { expiresIn: expiresInSeconds });
+  }
+
+  /**
+   * Attempts to atomically acquire the apply lock item (`pk = LOCK`,
+   * `sk = CURRENT`) via a conditional `PutItem`: the write succeeds when no
+   * lock item exists yet, or when the currently stored item's `expiresAt`
+   * has already passed (a stale lock left behind by a crashed/orphaned
+   * process). Any other in-flight, unexpired lock causes the condition to
+   * fail, at which point the current lock is re-read and surfaced via a
+   * {@link RunLockHeldError}.
+   *
+   * @param lock - The lock to acquire on behalf of the run about to start.
+   * @throws {@link RunLockHeldError} carrying the currently held lock when an
+   *   unexpired lock already exists.
+   */
+  async acquireRunLock(lock: RunLock): Promise<void> {
+    try {
+      await this.getDynamoClient().send(
+        new PutCommand({
+          TableName: this.getTableName(),
+          Item: {
+            pk: LOCK_PK,
+            sk: LOCK_SK,
+            runId: lock.runId,
+            kind: lock.kind,
+            initiator: lock.initiator,
+            acquiredAt: lock.acquiredAt,
+            expiresAt: lock.expiresAt,
+          },
+          ConditionExpression: 'attribute_not_exists(pk) OR expiresAt < :now',
+          ExpressionAttributeValues: { ':now': new Date().toISOString() },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        const currentLock = await this.getRunLock();
+        throw new RunLockHeldError(currentLock ?? lock);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Reads the apply lock item (`pk = LOCK`, `sk = CURRENT`) currently on
+   * record, if any, without regard to whether it has expired.
+   *
+   * @returns The current {@link RunLock}, or `undefined` if no run currently
+   *   holds the lock.
+   */
+  async getRunLock(): Promise<RunLock | undefined> {
+    const result = await this.getDynamoClient().send(
+      new GetCommand({
+        TableName: this.getTableName(),
+        Key: { pk: LOCK_PK, sk: LOCK_SK },
+      }),
+    );
+    const item = result.Item;
+    if (!item) {
+      return undefined;
+    }
+    return {
+      runId: item['runId'] as string,
+      kind: item['kind'] as RunLock['kind'],
+      initiator: item['initiator'] as string,
+      acquiredAt: item['acquiredAt'] as string,
+      expiresAt: item['expiresAt'] as string,
+    };
+  }
+
+  /**
+   * Releases the apply lock item, scoped to `runId` via a conditional
+   * `DeleteItem` so a caller can never release a lock it doesn't itself
+   * hold. No-ops (rather than throwing) both when no lock item exists and
+   * when the held lock's `runId` doesn't match the one supplied here.
+   *
+   * @param runId - The `runId` of the run releasing the lock (matches
+   *   {@link RunLock.runId}).
+   */
+  async releaseRunLock(runId: string): Promise<void> {
+    try {
+      await this.getDynamoClient().send(
+        new DeleteCommand({
+          TableName: this.getTableName(),
+          Key: { pk: LOCK_PK, sk: LOCK_SK },
+          ConditionExpression: 'runId = :runId',
+          ExpressionAttributeValues: { ':runId': runId },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return;
+      }
+      throw error;
+    }
   }
 }

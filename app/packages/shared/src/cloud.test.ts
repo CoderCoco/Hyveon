@@ -10,11 +10,13 @@ import type {
   DiscordEventReceiver,
   LogChunk,
   RemoteFileStore,
+  RunRecordStore,
   SecretsStore,
   StartOpts,
   WorkloadHandle,
   WorkloadStatus,
 } from './cloud.js';
+import type { RunLock, RunRecord } from './runs.js';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 
@@ -130,6 +132,41 @@ describe('RemoteFileConflictError', () => {
     );
 
     expect(error.ifMatch).toBe('stale-etag-123');
+  });
+});
+
+describe('RunRecordStore', () => {
+  it('should be implementable with a plain object satisfying all six methods, including the apply-lock methods', () => {
+    /**
+     * Compile-time check: this object must satisfy RunRecordStore (including
+     * the acquireRunLock/getRunLock/releaseRunLock apply-lock methods added
+     * for #106) or tsc/vitest will fail. The runtime assertion just confirms
+     * the object is truthy.
+     */
+    const sampleLock: RunLock = {
+      runId: 'run-1',
+      kind: 'plan',
+      initiator: 'alice',
+      acquiredAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-01-01T00:10:00.000Z',
+    };
+
+    const store = {
+      async putRecord(_record: RunRecord): Promise<void> {},
+      async putLog(_runId: string, _body: Uint8Array): Promise<string> {
+        return 'runs/run-1.log';
+      },
+      async getLogUrl(_logKey: string, _expiresInSeconds?: number): Promise<string> {
+        return 'https://example.com/runs/run-1.log';
+      },
+      async acquireRunLock(_lock: RunLock): Promise<void> {},
+      async getRunLock(): Promise<RunLock | undefined> {
+        return sampleLock;
+      },
+      async releaseRunLock(_runId: string): Promise<void> {},
+    } satisfies RunRecordStore;
+
+    expect(store).toBeDefined();
   });
 });
 
