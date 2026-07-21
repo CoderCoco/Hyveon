@@ -9,6 +9,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunLockHeldError } from '@hyveon/shared';
 import type { RunLock, RunRecordStore } from '@hyveon/shared';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 import { DEFAULT_LOCK_TTL_MS, RunService } from './RunService.js';
 import { ConfigService, type TfOutputs } from './ConfigService.js';
 
@@ -224,6 +229,19 @@ describe('RunService', () => {
       await service.releaseRun(lock.runId);
 
       expect(releaseRunLockMock).not.toHaveBeenCalled();
+      expect(service.getCurrentLock()).toBeUndefined();
+    });
+
+    it('should resolve rather than throw when the DynamoDB release call rejects with a transient error', async () => {
+      const service = makeService();
+      const lock = await service.createRun('apply', 'alice');
+      releaseRunLockMock.mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
+
+      // Must not reject: RunRecordService.persist() releases the lock from a
+      // `finally` block, so a non-conflict DynamoDB error here must be
+      // swallowed (with a warning logged) rather than propagated — the lock
+      // self-heals via TTL expiry regardless.
+      await expect(service.releaseRun(lock.runId)).resolves.toBeUndefined();
       expect(service.getCurrentLock()).toBeUndefined();
     });
   });

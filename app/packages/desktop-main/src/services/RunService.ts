@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { isRunLockExpired, RunLockHeldError } from '@hyveon/shared';
 import type { RunKind, RunLock, RunRecordStore } from '@hyveon/shared';
+import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { RUN_RECORD_STORE } from '../modules/cloud-provider.tokens.js';
 
@@ -156,7 +157,18 @@ export class RunService {
 
     const tableName = this.config.getTfOutputs()?.runs_table_name;
     if (tableName) {
-      await this.store.releaseRunLock(runId);
+      try {
+        await this.store.releaseRunLock(runId);
+      } catch (err) {
+        // Never rethrow: RunRecordService.persist() releases the lock from a
+        // `finally` block and must never throw itself. A transient DynamoDB
+        // error here is safe to swallow — the lock self-heals once
+        // `expiresAt` passes (see `isRunLockExpired`).
+        logger.warn('RunService.releaseRun: failed to release DynamoDB apply lock, relying on TTL self-heal', {
+          err,
+          runId,
+        });
+      }
     }
   }
 }
