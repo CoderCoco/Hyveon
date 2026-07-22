@@ -185,9 +185,15 @@ export type RunDetailStatus = RunStatus | 'running' | 'awaiting_approval';
  *    `.tfplan` artifact still exists on disk — because the epic's design
  *    (#83) gates `apply` behind an explicit operator approval (#109), a
  *    successful plan alone hasn't reached a terminal state from the
- *    operator's point of view. Once `TerraformService.apply` consumes the
- *    `.tfplan` artifact, `planArtifactExists` becomes `false` and this rule
- *    no longer applies, so the plan falls through to rule 3.
+ *    operator's point of view. `planArtifactExists` is plumbed in for that
+ *    future approval flow (#109), which is expected to delete the `.tfplan`
+ *    file once consumed; as of this writing nothing does, so this rule's
+ *    actual escape hatch is rule ordering, not artifact deletion —
+ *    `TerraformService.apply` writes its own {@link TerraformRunRecord}
+ *    (`kind: 'apply'`) to the same `<runsDir>/<runId>/run.json` that the
+ *    plan run used, so once an apply has run for this `runId` the caller
+ *    observes `kind === 'apply'` (not `'plan'`) and this rule no longer
+ *    matches, falling through to rule 3.
  * 3. Otherwise, the status is derived from `exitCode` via
  *    {@link deriveRunStatus}.
  *
