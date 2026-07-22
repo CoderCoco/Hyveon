@@ -41,6 +41,28 @@ export interface RunRecord {
   /** The tfvars version id the run was executed against, if the caller supplied one. */
   tfvarsVersionId?: string;
   /**
+   * Hash of the plan artifact this record's `terraform` invocation produced
+   * (for a `plan` run) or was gated against (for an `apply` run) — see #109.
+   * The apply IPC handler compares the caller-supplied `planHash` against the
+   * plan run's stored value before allowing the apply to proceed, ensuring
+   * the tfvars/plan an admin approved is exactly what gets applied.
+   */
+  planHash?: string;
+  /**
+   * Opaque identifier (e.g. username) of the admin who approved this plan
+   * run for apply. Set only by the approve endpoint
+   * (`POST /api/terraform/runs/:id/approve`, #109) and only ever on `plan`
+   * records — an unapproved plan has this unset.
+   */
+  approvedBy?: string;
+  /**
+   * ISO-8601 timestamp captured when {@link approvedBy} approved this plan
+   * run. Paired with {@link isApprovalExpired} to enforce that apply only
+   * proceeds while the approval is still within {@link APPROVAL_WINDOW_MS} of
+   * being granted, so a stale approval can't be used to apply drifted state.
+   */
+  approvedAt?: string;
+  /**
    * The run's captured log text, embedded directly on the record because it
    * was small enough to fit under the caller's inline-size threshold (see
    * `RunRecordService.INLINE_LOG_LIMIT_BYTES`). Mutually exclusive with
@@ -150,4 +172,30 @@ export interface RunLock {
  */
 export function isRunLockExpired(lock: RunLock, now: Date = new Date()): boolean {
   return now.getTime() >= new Date(lock.expiresAt).getTime();
+}
+
+/**
+ * Duration (in milliseconds) an admin's approval of a plan run remains valid
+ * before the apply IPC handler (#109) must reject it and require
+ * re-approval. Fixed at 15 minutes — long enough to review a plan and click
+ * apply, short enough that a stale approval can't be used to apply against
+ * drifted tfvars long after the reviewer looked at it.
+ */
+export const APPROVAL_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * Determines whether a plan {@link RunRecord}'s approval has expired, based
+ * on whether `now` has passed {@link RunRecord.approvedAt} plus
+ * {@link APPROVAL_WINDOW_MS}.
+ *
+ * Pure: takes `now` as an argument (defaulting to the current time) rather
+ * than reading the clock internally, so tests can pass a fixed value for
+ * deterministic assertions.
+ *
+ * @param approvedAt - ISO-8601 timestamp the run was approved at (see {@link RunRecord.approvedAt}).
+ * @param now - The instant to check the approval against. Defaults to `new Date()`.
+ * @returns `true` if `now` is at or after `approvedAt + APPROVAL_WINDOW_MS`, `false` otherwise.
+ */
+export function isApprovalExpired(approvedAt: string, now: Date = new Date()): boolean {
+  return now.getTime() >= new Date(approvedAt).getTime() + APPROVAL_WINDOW_MS;
 }
