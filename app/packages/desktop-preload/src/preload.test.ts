@@ -1076,6 +1076,124 @@ describe('preload dispatcher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // terraform.approve
+  // -------------------------------------------------------------------------
+
+  describe('terraform.approve', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.approve channel with the opts payload', async () => {
+        const result = { runId: 'run-001', approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
+        ipcInvoke.mockResolvedValue(result);
+        const terraform = bridge['terraform'] as { approve: (opts: { planRunId: string }) => Promise<unknown> };
+        const opts = { planRunId: 'run-001' };
+
+        const response = await terraform.approve(opts);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.approve', opts);
+        expect(response).toEqual(result);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.approve is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const result = { runId: 'run-mock', approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
+        const mockHandler = vi.fn().mockResolvedValue(result);
+        testApi.mock('terraform.approve', mockHandler);
+
+        const terraform = bridge['terraform'] as { approve: (opts: { planRunId: string }) => Promise<unknown> };
+        const opts = { planRunId: 'run-mock' };
+        const response = await terraform.approve(opts);
+
+        expect(mockHandler).toHaveBeenCalledWith(opts);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(response).toEqual(result);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // terraform.apply
+  // -------------------------------------------------------------------------
+
+  describe('terraform.apply', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.apply channel with the payload and resolve the started ack with a runId', async () => {
+        const ack = { started: true, runId: 'run-002' };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          apply: (payload: { planRunId: string; planHash: string }) => Promise<unknown>;
+        };
+        const payload = { planRunId: 'run-001', planHash: 'sha256:abc123' };
+
+        const result = await terraform.apply(payload);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.apply', payload);
+        expect(result).toEqual(ack);
+      });
+
+      it('should resolve conflict details when the shared workspace is already busy', async () => {
+        const ack = {
+          started: false,
+          error: 'terraform apply refused: plan is already in flight',
+          conflict: 'plan' as const,
+        };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          apply: (payload: { planRunId: string; planHash: string }) => Promise<unknown>;
+        };
+
+        const result = await terraform.apply({ planRunId: 'run-001', planHash: 'sha256:abc123' });
+
+        expect(result).toEqual(ack);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.apply is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const ack = { started: true, runId: 'run-mock' };
+        const mockHandler = vi.fn().mockResolvedValue(ack);
+        testApi.mock('terraform.apply', mockHandler);
+
+        const terraform = bridge['terraform'] as {
+          apply: (payload: { planRunId: string; planHash: string }) => Promise<unknown>;
+        };
+        const payload = { planRunId: 'run-001', planHash: 'sha256:def456' };
+        const result = await terraform.apply(payload);
+
+        expect(mockHandler).toHaveBeenCalledWith(payload);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(ack);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // terraform.output
   // -------------------------------------------------------------------------
 
