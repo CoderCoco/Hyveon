@@ -66,6 +66,12 @@ export interface PersistRunRecordParams {
   exitCode: number | null;
   /** The tfvars version id the run was executed against, if the caller supplied one. */
   tfvarsVersionId?: string;
+  /**
+   * SHA-256 hex digest of the `.tfplan` artifact this run produced (a
+   * successful `plan` run only — see `TerraformService.computePlanHash` and
+   * issue #109), if the caller supplied one.
+   */
+  planHash?: string;
 }
 
 /**
@@ -185,6 +191,7 @@ export class RunRecordService {
           completedAt: params.completedAt,
           exitCode: params.exitCode,
           ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
+          ...(params.planHash !== undefined ? { planHash: params.planHash } : {}),
           ...(logInline !== undefined ? { logInline } : {}),
           ...(logS3Key !== undefined ? { logS3Key } : {}),
         };

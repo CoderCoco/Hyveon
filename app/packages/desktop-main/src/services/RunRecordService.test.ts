@@ -194,6 +194,26 @@ describe('RunRecordService', () => {
       expect(record.tfvarsVersionId).toBe('v-1');
     });
 
+    it('should include planHash on the record when present on params', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.persist(makeParams({ planHash: 'a'.repeat(64) }), null);
+
+      const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
+      expect(record.planHash).toBe('a'.repeat(64));
+    });
+
+    it('should omit planHash from the record when absent from params', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.persist(makeParams(), null);
+
+      const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
+      expect(record).not.toHaveProperty('planHash');
+    });
+
     it('should swallow a store.putRecord failure and log a warning instead of throwing', async () => {
       putRecordMock.mockRejectedValue(new Error('DynamoDB is down'));
       const service = makeService();
