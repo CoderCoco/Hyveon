@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import * as os from 'node:os';
 import { Controller, OnModuleInit } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron';
@@ -12,6 +13,7 @@ import {
 } from '../services/TerraformService.js';
 import type { TfOutputs } from '../services/ConfigService.js';
 import { AuditService } from '../services/AuditService.js';
+import { RunRecordService } from '../services/RunRecordService.js';
 import { logger } from '../logger.js';
 
 /** Fixed side-channel `TerraformController.init` pushes streamed output on. */
@@ -133,6 +135,38 @@ interface TerraformPlanAck {
 }
 
 /**
+ * Payload accepted by {@link TerraformController.approve}. `planRunId`
+ * identifies the successful `plan` run to approve. Unlike the previous shape
+ * of this payload, there is no client-supplied approver identity — the
+ * approver is always resolved server-side (see
+ * {@link TerraformController.resolveApprover}) so an IPC caller can never
+ * spoof who approved a run.
+ *
+ * Mirrors `approve: (opts: { planRunId: string }) => ...` in
+ * `@hyveon/desktop-preload/src/gsd-api.ts` — keep this shape in sync with
+ * that sibling contract.
+ */
+interface TerraformApprovePayload {
+  planRunId: string;
+}
+
+/**
+ * Result `approve()` resolves with. `approved: true` means
+ * `RunRecordService.approveRun` succeeded — `approvedBy`/`approvedAt` mirror
+ * the values now stamped onto the persisted `RunRecord`. `approved: false`
+ * means no write was attempted (payload failed validation) or the write was
+ * attempted and rejected (table not configured, no matching record, record
+ * isn't a successful `plan` run) — `error` is always a human-readable
+ * description of why, and `approvedBy`/`approvedAt` are omitted.
+ */
+interface TerraformApproveAck {
+  approved: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  error?: string;
+}
+
+/**
  * IPC-only Terraform controller. Handles Electron main-process messages via
  * `@MessagePattern` — no HTTP routes are registered here.
  *
@@ -142,19 +176,25 @@ interface TerraformPlanAck {
  * {@link plan} mirrors the same bridging shape for `terraform plan`, plus a
  * pre-flight `TerraformService.getWorkspaceInFlight()` conflict check and a
  * persisted `AuditService.record()` entry for every accepted submission.
+ * {@link approve} needs no such bridging — it resolves a single value, so
+ * the generic `ipcMain.handle` bridge in `../ipc-main-bridge.ts` wires it
+ * automatically — and delegates the actual write to
+ * `RunRecordService.approveRun` (see issue #109).
  */
 @Controller()
 export class TerraformController implements OnModuleInit {
   /**
-   * `audit` is typed optional (`?`) purely so existing test call sites that
-   * construct `new TerraformController(terraform)` directly (bypassing Nest's
-   * DI container) keep compiling without also stubbing it — every real
-   * bootstrap through `AppModule` still resolves a concrete `AuditService`
-   * instance regardless of this TS-level optionality.
+   * `audit`/`runRecord` are typed optional (`?`) purely so existing test call
+   * sites that construct `new TerraformController(terraform)` directly
+   * (bypassing Nest's DI container) keep compiling without also stubbing
+   * them — every real bootstrap through `AppModule` still resolves concrete
+   * `AuditService`/`RunRecordService` instances regardless of this
+   * TS-level optionality.
    */
   constructor(
     private readonly terraform: TerraformService,
     private readonly audit?: AuditService,
+    private readonly runRecord?: RunRecordService,
   ) {}
 
   /**
@@ -491,6 +531,89 @@ export class TerraformController implements OnModuleInit {
   }
 
   /**
+   * Approves a successful `plan` run for a later apply, delegating the
+   * actual write to `RunRecordService.approveRun` (see issue #109).
+   *
+   * Validates `payload` first: `planRunId` must be a non-empty string. If
+   * validation fails, neither `RunRecordService.approveRun` nor
+   * `AuditService.record` is ever called and the method resolves immediately
+   * with `{ approved: false, error }`.
+   *
+   * The approver identity is never taken from the client — it's resolved
+   * server-side via {@link resolveApprover} (the local OS username), so an
+   * IPC caller can't spoof who approved a run. `RunRecordService.approveRun`
+   * is then awaited directly (unlike {@link init}/{@link plan}, there is no
+   * streaming output to bridge — this resolves a single value):
+   *
+   * - On success, a best-effort `AuditService.record()` entry (action
+   *   `'approve'`) is recorded — mirroring {@link plan}'s audit shape, this
+   *   never throws and never blocks/fails the response — and the method
+   *   resolves `{ approved: true, approvedBy, approvedAt }` with the values
+   *   `RunRecordService.approveRun` stamped onto the persisted `RunRecord`.
+   * - On failure (the run-history table isn't configured, no record exists
+   *   for `planRunId`, the record isn't a `plan` run, or the record's status
+   *   isn't `success`), the thrown error's `message` — one of
+   *   `RunRecordTableNotConfiguredError` / `RunRecordNotFoundError` /
+   *   `RunRecordNotPlanError` / `RunRecordNotSuccessfulError`, each already
+   *   descriptive — is surfaced as `{ approved: false, error }`. Nothing is
+   *   written in this case: `RunRecordService.approveRun` only calls
+   *   `store.putRecord` after all of its validation has passed, and no audit
+   *   entry is recorded for a rejected approval.
+   *
+   * Reachable via the Electron IPC transport (`terraform.approve`), bridged
+   * automatically by the generic `ipcMain.handle` bridge in
+   * `../ipc-main-bridge.ts` since (unlike `terraform.init`/`terraform.plan`)
+   * it resolves a single value rather than streaming progress.
+   */
+  @MessagePattern('terraform.approve')
+  async approve(@Payload() payload: TerraformApprovePayload): Promise<TerraformApproveAck> {
+    const validationError = TerraformController.validateApprovePayload(payload);
+    if (validationError) {
+      logger.error('terraform approve rejected: invalid payload', { error: validationError });
+      return { approved: false, error: validationError };
+    }
+
+    if (!this.runRecord) {
+      const error = 'terraform.approve requires a configured RunRecordService';
+      logger.error('terraform approve rejected: no RunRecordService available', { planRunId: payload.planRunId });
+      return { approved: false, error };
+    }
+
+    try {
+      const approvedBy = TerraformController.resolveApprover();
+      const record = await this.runRecord.approveRun(payload.planRunId, approvedBy);
+
+      // Best-effort: AuditService.record() never throws (failures are logged
+      // and swallowed internally), mirroring the audit entry recorded by
+      // plan() for its own accepted submissions.
+      await this.audit?.record({
+        action: 'approve',
+        game: '',
+        before: null,
+        after: null,
+      });
+
+      return { approved: true, approvedBy: record.approvedBy, approvedAt: record.approvedAt };
+    } catch (err) {
+      logger.error('terraform approve error', { err, planRunId: payload.planRunId });
+      const error = err instanceof Error ? err.message : String(err);
+      return { approved: false, error };
+    }
+  }
+
+  /**
+   * Resolves the identity of the local operator approving a plan run, as the
+   * OS username reported by `node:os`'s `userInfo()`. Wrapped in its own
+   * method (rather than calling `os.userInfo().username` inline in
+   * {@link approve}) so it's a single, stubbable seam for tests — and so the
+   * approver identity is always derived server-side, never trusted from a
+   * client-supplied field.
+   */
+  private static resolveApprover(): string {
+    return os.userInfo().username;
+  }
+
+  /**
    * Validates that `config.bucket`, `config.region`, and
    * `config.dynamodbTable` are all non-empty strings. Returns a descriptive
    * error message when validation fails, or `null` when `config` is valid.
@@ -505,6 +628,21 @@ export class TerraformController implements OnModuleInit {
       !isNonEmptyString(config?.dynamodbTable)
     ) {
       return 'terraform.init requires non-empty bucket, region, and dynamodbTable strings';
+    }
+    return null;
+  }
+
+  /**
+   * Validates that `payload.planRunId` is a non-empty string. Returns a
+   * descriptive error message when validation fails, or `null` when
+   * `payload` is valid.
+   */
+  private static validateApprovePayload(payload: TerraformApprovePayload): string | null {
+    const isNonEmptyString = (value: unknown): value is string =>
+      typeof value === 'string' && value.length > 0;
+
+    if (!isNonEmptyString(payload?.planRunId)) {
+      return 'terraform.approve requires a non-empty planRunId string';
     }
     return null;
   }

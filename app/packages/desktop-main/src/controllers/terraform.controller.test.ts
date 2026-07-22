@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import * as os from 'node:os';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TerraformController } from './terraform.controller.js';
 import {
@@ -11,6 +12,14 @@ import {
 import type { TfOutputs } from '../services/ConfigService.js';
 import type { TerraformService } from '../services/TerraformService.js';
 import type { AuditService, RecordAuditEntryParams } from '../services/AuditService.js';
+import {
+  RunRecordNotFoundError,
+  RunRecordNotPlanError,
+  RunRecordNotSuccessfulError,
+  RunRecordTableNotConfiguredError,
+  type RunRecordService,
+} from '../services/RunRecordService.js';
+import type { RunRecord } from '@hyveon/shared';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state — must be declared before any vi.mock() factory runs.
@@ -36,6 +45,18 @@ vi.mock('electron', () => ({
 vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+
+// `TerraformController.approve` resolves the approver identity via
+// `os.userInfo().username` rather than trusting a client-supplied field —
+// stub it the same way `AuditService.test.ts` does so tests can assert on a
+// deterministic resolved username.
+vi.mock('node:os', async () => {
+  const actual = await vi.importActual<typeof import('node:os')>('node:os');
+  return {
+    ...actual,
+    userInfo: vi.fn(() => ({ username: 'test-operator' })),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -122,6 +143,31 @@ function makeAudit(): { audit: AuditService; record: ReturnType<typeof vi.fn> } 
 }
 
 /**
+ * Build a `RunRecordService` stub whose `approveRun` resolves with the
+ * approved record (`approvedBy`/`approvedAt` matching whatever it was called
+ * with) by default. Tests can override `approveRun`'s implementation to
+ * simulate any of `RunRecordService.approveRun`'s documented failure modes.
+ */
+function makeRunRecord(): { runRecord: RunRecordService; approveRun: ReturnType<typeof vi.fn> } {
+  const approveRun = vi.fn().mockImplementation(async (runId: string, approvedBy: string) => {
+    const record: RunRecord = {
+      sk: `2026-07-21T00:00:00.000Z#${runId}`,
+      runId,
+      kind: 'plan',
+      status: 'success',
+      startedAt: '2026-07-21T00:00:00.000Z',
+      completedAt: '2026-07-21T00:00:05.000Z',
+      exitCode: 0,
+      approvedBy,
+      approvedAt: '2026-07-21T00:05:00.000Z',
+    };
+    return record;
+  });
+  const stub: Partial<RunRecordService> = { approveRun };
+  return { runRecord: stub as RunRecordService, approveRun };
+}
+
+/**
  * Build a minimal `IpcMainInvokeEvent` stub with a controlled `sender`
  * (WebContents). Tests can inspect calls on `sender.send` and control the
  * return value of `sender.isDestroyed()`.
@@ -160,6 +206,7 @@ const PATTERN_METADATA_KEY = 'microservices:pattern';
 describe('TerraformController', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(os.userInfo).mockReturnValue({ username: 'test-operator' } as ReturnType<typeof os.userInfo>);
   });
 
   // -------------------------------------------------------------------------
@@ -180,6 +227,11 @@ describe('TerraformController', () => {
     it('should register plan on the "terraform.plan" IPC channel', () => {
       const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.plan);
       expect(pattern).toEqual(['terraform.plan']);
+    });
+
+    it('should register approve on the "terraform.approve" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.approve);
+      expect(pattern).toEqual(['terraform.approve']);
     });
   });
 
@@ -649,6 +701,122 @@ describe('TerraformController', () => {
       vi.mocked(terraform.output).mockRejectedValue(error);
 
       await expect(new TerraformController(terraform).output({})).rejects.toThrow(error);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // approve
+  // -------------------------------------------------------------------------
+
+  describe('approve', () => {
+    it('should write approvedBy/approvedAt to the run record, using the OS-resolved username, and return them on a successful plan run', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: 'run-123',
+      });
+
+      // The approver identity is always resolved server-side from
+      // os.userInfo() — never taken from the (now nonexistent) client
+      // payload field — so approveRun must be called with the stubbed OS
+      // username rather than anything the caller supplied.
+      expect(approveRun).toHaveBeenCalledWith('run-123', 'test-operator');
+      expect(result).toEqual({
+        approved: true,
+        approvedBy: 'test-operator',
+        approvedAt: expect.any(String),
+      });
+      expect(record).toHaveBeenCalledTimes(1);
+      const recordedEntry = record.mock.calls[0][0] as RecordAuditEntryParams;
+      expect(recordedEntry).toMatchObject({ action: 'approve' });
+    });
+
+    it('should return { approved: false, error } and never call RunRecordService.approveRun or AuditService.record when planRunId is missing', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: '',
+      });
+
+      expect(result.approved).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(approveRun).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should return { approved: false, error } when the run-history table is not configured, without writing anything or recording an audit entry', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+      const error = new RunRecordTableNotConfiguredError('run-123');
+      approveRun.mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: 'run-123',
+      });
+
+      expect(result).toEqual({ approved: false, error: error.message });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should return { approved: false, error } when no run record exists for planRunId, without writing anything or recording an audit entry', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+      const error = new RunRecordNotFoundError('run-123');
+      approveRun.mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: 'run-123',
+      });
+
+      expect(result).toEqual({ approved: false, error: error.message });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should return { approved: false, error } when the run record is not a plan run, without writing anything or recording an audit entry', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+      const error = new RunRecordNotPlanError('run-123', 'apply');
+      approveRun.mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: 'run-123',
+      });
+
+      expect(result).toEqual({ approved: false, error: error.message });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should return { approved: false, error } when the plan run did not succeed, without writing anything or recording an audit entry', async () => {
+      const terraform = makeTerraform();
+      const { runRecord, approveRun } = makeRunRecord();
+      const { audit, record } = makeAudit();
+      const error = new RunRecordNotSuccessfulError('run-123', 'failed');
+      approveRun.mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform, audit, runRecord).approve({
+        planRunId: 'run-123',
+      });
+
+      expect(result).toEqual({ approved: false, error: error.message });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should return { approved: false, error } when no RunRecordService is available', async () => {
+      const terraform = makeTerraform();
+
+      const result = await new TerraformController(terraform).approve({
+        planRunId: 'run-123',
+      });
+
+      expect(result.approved).toBe(false);
+      expect(typeof result.error).toBe('string');
     });
   });
 });
