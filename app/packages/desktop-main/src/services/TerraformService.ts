@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
@@ -69,6 +69,30 @@ export interface TerraformInitConfig {
 export interface TerraformRunChunk {
   stream: 'stdout' | 'stderr';
   line: string;
+}
+
+/**
+ * In-memory fan-out buffer for a single in-flight {@link TerraformService.plan}/
+ * {@link TerraformService.apply}/{@link TerraformService.destroy} run's
+ * streamed output, keyed by `runId` in `TerraformService`'s private
+ * `activeRuns` map. Populated by `TerraformService`'s private
+ * `recordRunChunk` as the owning subcommand runner's own generator streams
+ * each {@link TerraformRunChunk} through, and consumed by
+ * {@link TerraformService.streamRunOutput} so a second caller (e.g. a
+ * renderer reconnecting to a run-output IPC channel mid-run) can observe the
+ * exact same run's output without being the generator that originally drove
+ * the spawned process — replaying every chunk buffered so far, then being
+ * notified of every subsequent chunk live, until the run settles.
+ */
+interface ActiveRunBuffer {
+  /** Every chunk streamed so far, in production order — replayed in full to a new subscriber before it starts receiving live chunks. */
+  chunks: TerraformRunChunk[];
+  /** Callbacks invoked synchronously, in registration order, each time a new chunk is recorded. */
+  listeners: Set<(chunk: TerraformRunChunk) => void>;
+  /** Flips to `true` once the owning run's spawned process has closed — never flips back. */
+  settled: boolean;
+  /** Callbacks invoked exactly once, when the run is marked settled. */
+  settledListeners: Set<() => void>;
 }
 
 /**
@@ -471,6 +495,18 @@ export class TerraformService {
   private outputCache: { value: TfOutputs | null; resolvedAt: number } | null = null;
 
   /**
+   * Fan-out buffers for every currently in-flight {@link plan}/{@link apply}/
+   * {@link destroy} run, keyed by `runId`. An entry exists from
+   * `beginActiveRun` (called just before the subcommand's process is
+   * spawned) until `endActiveRun` (called once the process has closed and
+   * the run's `terraform.log` has been written), at which point the entry is
+   * removed — a subsequent {@link streamRunOutput} call for the same `runId`
+   * then falls through to replaying the persisted `terraform.log` instead.
+   * See {@link ActiveRunBuffer}.
+   */
+  private readonly activeRuns = new Map<string, ActiveRunBuffer>();
+
+  /**
    * `config` resolves the terraform working directory (`getTerraformDir()`)
    * and the per-run artifacts directory (`getRunsDir()`) for
    * `init`/`plan`/`apply`/`destroy`/`output`. `remoteFileStore` is typed
@@ -831,6 +867,10 @@ export class TerraformService {
       // recorded in the `TerraformRunRecord` written below once the process
       // closes.
       startedAt = new Date().toISOString();
+      // Registers this run as in-flight so a concurrent streamRunOutput()
+      // subscriber observes it immediately, even before its first chunk
+      // arrives — see beginActiveRun's TSDoc.
+      this.beginActiveRun(runId);
 
       // Driven manually (rather than `yield*`) so each stdout line can be
       // scanned for the plan summary as it streams through, in addition to
@@ -845,6 +885,7 @@ export class TerraformService {
         while (!next.done) {
           const chunk = next.value;
           logLines.push(chunk.line);
+          this.recordRunChunk(runId, chunk);
           if (chunk.stream === 'stdout') {
             const match = PLAN_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -894,6 +935,10 @@ export class TerraformService {
       // below, so every exit path (success/failure/abort) leaves a
       // terraform.log behind.
       this.writeRunLog(runId, logLines);
+      // The run has settled — notify any streamRunOutput() subscribers and
+      // drop the in-flight buffer, so a subsequent call for this runId falls
+      // through to replaying the terraform.log just written above.
+      this.endActiveRun(runId);
 
       // Same guarantee for the run record: written on every exit path
       // (success/failure/abort) so a future run-history UI can list this
@@ -947,6 +992,9 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
+        // Mirrors the normal-completion path above — settle any
+        // streamRunOutput() subscribers even on this force-killed path.
+        this.endActiveRun(runId);
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
@@ -1138,6 +1186,10 @@ export class TerraformService {
       const cwd = this.config.getTerraformDir();
       const args = ['apply', '-input=false', '-no-color', planFile];
       startedAt = new Date().toISOString();
+      // Registers this run as in-flight so a concurrent streamRunOutput()
+      // subscriber observes it immediately, even before its first chunk
+      // arrives — see beginActiveRun's TSDoc.
+      this.beginActiveRun(runId);
 
       let added = 0;
       let changed = 0;
@@ -1154,6 +1206,7 @@ export class TerraformService {
         while (!next.done) {
           const chunk = next.value;
           logLines.push(chunk.line);
+          this.recordRunChunk(runId, chunk);
           if (chunk.stream === 'stdout') {
             const match = APPLY_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -1208,6 +1261,10 @@ export class TerraformService {
       // same spot the run record is written — a single writeFileSync now
       // that the process has closed, rather than one append per line.
       this.writeRunLog(runId, logLines);
+      // The run has settled — notify any streamRunOutput() subscribers and
+      // drop the in-flight buffer, so a subsequent call for this runId falls
+      // through to replaying the terraform.log just written above.
+      this.endActiveRun(runId);
       const completedAt = new Date().toISOString();
       const applyExitCode = result.aborted ? null : result.exitCode;
       try {
@@ -1262,6 +1319,9 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
+        // Mirrors the normal-completion path above — settle any
+        // streamRunOutput() subscribers even on this force-killed path.
+        this.endActiveRun(runId);
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'apply', startedAt, completedAt, null, tfvarsVersionId);
@@ -1393,6 +1453,10 @@ export class TerraformService {
       const cwd = this.config.getTerraformDir();
       const args = ['destroy', '-input=false', '-no-color', '-auto-approve'];
       startedAt = new Date().toISOString();
+      // Registers this run as in-flight so a concurrent streamRunOutput()
+      // subscriber observes it immediately, even before its first chunk
+      // arrives — see beginActiveRun's TSDoc.
+      this.beginActiveRun(runId);
 
       logger.warn('terraform destroy confirmed — spawning terraform destroy -auto-approve', {
         runId,
@@ -1413,6 +1477,7 @@ export class TerraformService {
         while (!next.done) {
           const chunk = next.value;
           logLines.push(chunk.line);
+          this.recordRunChunk(runId, chunk);
           if (chunk.stream === 'stdout') {
             const match = DESTROY_SUMMARY_PATTERN.exec(chunk.line);
             if (match) {
@@ -1459,6 +1524,10 @@ export class TerraformService {
       // same spot the run record is written — a single writeFileSync now
       // that the process has closed, rather than one append per line.
       this.writeRunLog(runId, logLines);
+      // The run has settled — notify any streamRunOutput() subscribers and
+      // drop the in-flight buffer, so a subsequent call for this runId falls
+      // through to replaying the terraform.log just written above.
+      this.endActiveRun(runId);
       const completedAt = new Date().toISOString();
       const destroyExitCode = result.aborted ? null : result.exitCode;
       try {
@@ -1496,6 +1565,9 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
+        // Mirrors the normal-completion path above — settle any
+        // streamRunOutput() subscribers even on this force-killed path.
+        this.endActiveRun(runId);
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'destroy', startedAt, completedAt, null, undefined);
@@ -1562,6 +1634,136 @@ export class TerraformService {
   }
 
   /**
+   * Streams every {@link TerraformRunChunk} produced by the {@link plan},
+   * {@link apply}, or {@link destroy} run identified by `runId` — the exact
+   * same chunks the run's own generator yielded to whichever caller
+   * originally drove it, replayed to this independent subscriber instead.
+   * This is the seam a `terraform.run.output`-style IPC channel uses to feed
+   * a renderer that's watching (or re-attaching to) a build's live log.
+   *
+   * Two sources, depending on whether `runId` is currently in flight (see
+   * {@link activeRuns}):
+   *
+   * - **In-flight run**: yields every chunk buffered so far (in production
+   *   order), then every subsequent chunk live as it's recorded, until the
+   *   run settles (its spawned process has closed and `terraform.log` has
+   *   been written), at which point the generator ends cleanly. A caller can
+   *   subscribe at any point during the run — even after it has already
+   *   produced output — and never misses a chunk, since the buffered replay
+   *   and the live subscription are registered atomically (no `await`
+   *   between reading {@link ActiveRunBuffer.chunks} and subscribing to
+   *   {@link ActiveRunBuffer.listeners}).
+   * - **Finished (or unknown) run**: when no {@link ActiveRunBuffer} is
+   *   registered for `runId`, falls through to {@link replayRunLog}, which
+   *   replays the persisted `<runsDir>/<runId>/terraform.log` line-by-line,
+   *   or throws if no such log exists.
+   *
+   * `signal`, if provided, ends the generator cleanly (no further chunks, no
+   * throw) the moment it fires, mirroring {@link init}/{@link plan}/
+   * {@link apply}/{@link destroy} — this only detaches this subscriber; it
+   * has no effect on the underlying `terraform` run itself.
+   *
+   * @throws A plain `Error` synchronously (on the first `.next()` call) if
+   *   `runId` isn't a bare path segment matching {@link RUN_ID_PATTERN}, or —
+   *   via {@link replayRunLog} — if `runId` is neither currently in flight
+   *   nor has a `terraform.log` on disk, i.e. no run by that id was ever
+   *   spawned.
+   */
+  async *streamRunOutput(runId: string, signal?: AbortSignal): AsyncGenerator<TerraformRunChunk, void> {
+    TerraformService.assertValidRunId(runId);
+
+    const active = this.activeRuns.get(runId);
+    if (!active) {
+      yield* this.replayRunLog(runId);
+      return;
+    }
+
+    // Snapshot the buffer and subscribe in the same synchronous tick (no
+    // `await` in between) so no chunk recorded between the snapshot and the
+    // subscription can ever be missed or double-delivered.
+    const queue: TerraformRunChunk[] = [...active.chunks];
+    let settled = active.settled;
+    let wake: (() => void) | null = null;
+
+    const onChunk = (chunk: TerraformRunChunk): void => {
+      queue.push(chunk);
+      wake?.();
+      wake = null;
+    };
+    const onSettled = (): void => {
+      settled = true;
+      wake?.();
+      wake = null;
+    };
+
+    active.listeners.add(onChunk);
+    active.settledListeners.add(onSettled);
+
+    const onAbort = (): void => {
+      wake?.();
+      wake = null;
+    };
+    signal?.addEventListener('abort', onAbort);
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift()!;
+          continue;
+        }
+        if (settled || signal?.aborted) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    } finally {
+      active.listeners.delete(onChunk);
+      active.settledListeners.delete(onSettled);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /**
+   * Reads and parses the persisted {@link TerraformRunRecord} for `runId`
+   * from `<runsDir>/<runId>/run.json` (see {@link writeRunRecord}) — the
+   * run-detail counterpart to {@link streamRunOutput}'s output feed. Returns
+   * `null` (rather than throwing) when no `run.json` exists for `runId` yet
+   * — e.g. the run is still in flight and hasn't closed, or `runId` doesn't
+   * exist at all. Callers that need to distinguish "still running" from
+   * "unknown run" should also consult {@link getWorkspaceInFlight} or attempt
+   * a live {@link streamRunOutput} subscription.
+   *
+   * @throws A plain `Error` synchronously if `runId` isn't a bare path
+   *   segment matching {@link RUN_ID_PATTERN}.
+   */
+  readRunRecord(runId: string): TerraformRunRecord | null {
+    TerraformService.assertValidRunId(runId);
+    const recordPath = join(this.config.getRunsDir(), runId, 'run.json');
+    if (!existsSync(recordPath)) {
+      return null;
+    }
+    return JSON.parse(readFileSync(recordPath, 'utf8')) as TerraformRunRecord;
+  }
+
+  /**
+   * Reports whether {@link plan}'s persisted `.tfplan` artifact exists on
+   * disk for `runId` — `<runsDir>/<runId>/<runId>.tfplan`, the same path
+   * {@link expectedPlanFilePath} computes and {@link apply} validates a
+   * caller-supplied `planFile` against. Intended for a run-detail IPC handler
+   * (or the renderer's "Apply" button) to check whether a given plan run
+   * still has an applyable artifact on disk before offering to apply it.
+   *
+   * @throws A plain `Error` synchronously if `runId` isn't a bare path
+   *   segment matching {@link RUN_ID_PATTERN}.
+   */
+  hasPlanArtifact(runId: string): boolean {
+    TerraformService.assertValidRunId(runId);
+    return existsSync(TerraformService.expectedPlanFilePath(this.config.getRunsDir(), runId));
+  }
+
+  /**
    * Throws {@link DestroyNotConfirmedError} unless `token` matches the most
    * recently minted, not-yet-expired, not-yet-consumed confirmation token
    * (see {@link mintDestroyConfirmationToken}). On success, consumes the
@@ -1612,6 +1814,88 @@ export class TerraformService {
    */
   private getRunLogPath(runId: string): string {
     return join(this.config.getRunsDir(), runId, 'terraform.log');
+  }
+
+  /**
+   * Registers a fresh, empty {@link ActiveRunBuffer} for `runId` — called by
+   * {@link plan}/{@link apply}/{@link destroy} immediately before their
+   * spawned process starts, so a concurrent {@link streamRunOutput} call
+   * observes the run as in-flight (even before its first chunk arrives)
+   * rather than falling through to the "unknown run" / log-replay path.
+   */
+  private beginActiveRun(runId: string): void {
+    this.activeRuns.set(runId, {
+      chunks: [],
+      listeners: new Set(),
+      settled: false,
+      settledListeners: new Set(),
+    });
+  }
+
+  /**
+   * Appends `chunk` to `runId`'s {@link ActiveRunBuffer} (a no-op if no
+   * buffer is currently registered for `runId`) and synchronously notifies
+   * every subscriber registered via {@link streamRunOutput}. Called by
+   * {@link plan}/{@link apply}/{@link destroy} from the same point each
+   * accumulates the chunk into its own `logLines` transcript, so the two
+   * stay in lockstep.
+   */
+  private recordRunChunk(runId: string, chunk: TerraformRunChunk): void {
+    const active = this.activeRuns.get(runId);
+    if (!active) return;
+    active.chunks.push(chunk);
+    for (const listener of active.listeners) {
+      listener(chunk);
+    }
+  }
+
+  /**
+   * Marks `runId`'s {@link ActiveRunBuffer} as settled — notifying every
+   * subscriber registered via {@link streamRunOutput} that no further chunks
+   * are coming, so their generator can end — then removes the entry from
+   * {@link activeRuns}. Called by {@link plan}/{@link apply}/{@link destroy}
+   * immediately after they've written the run's full transcript to
+   * `terraform.log` (see {@link writeRunLog}), on every exit path
+   * (success/failure/abort/force-killed). A no-op if no buffer is currently
+   * registered for `runId` (e.g. the process never actually spawned).
+   */
+  private endActiveRun(runId: string): void {
+    const active = this.activeRuns.get(runId);
+    if (!active) return;
+    active.settled = true;
+    for (const listener of active.settledListeners) {
+      listener();
+    }
+    active.settledListeners.clear();
+    this.activeRuns.delete(runId);
+  }
+
+  /**
+   * Replays a finished run's persisted `<runsDir>/<runId>/terraform.log` (see
+   * {@link getRunLogPath}) line-by-line as `stdout`-tagged {@link TerraformRunChunk}
+   * values — the fallback path {@link streamRunOutput} takes once `runId` is
+   * no longer in flight. Drops a single trailing empty line produced by
+   * `terraform.log`'s trailing newline (see {@link writeRunLog}) so replaying
+   * never yields a spurious empty final chunk. `terraform.log` doesn't retain
+   * which stream (`stdout`/`stderr`) each line originally came from, so every
+   * replayed chunk is tagged `'stdout'` regardless of its original source.
+   *
+   * @throws A plain `Error` when no `terraform.log` exists for `runId` — i.e.
+   *   no run by that id was ever spawned (or its directory was cleaned up).
+   */
+  private async *replayRunLog(runId: string): AsyncGenerator<TerraformRunChunk, void> {
+    const logPath = this.getRunLogPath(runId);
+    if (!existsSync(logPath)) {
+      throw new Error(`TerraformService.streamRunOutput(): no run found for runId "${runId}".`);
+    }
+    const contents = readFileSync(logPath, 'utf8');
+    const lines = contents.split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+    for (const line of lines) {
+      yield { stream: 'stdout', line };
+    }
   }
 
   /**
