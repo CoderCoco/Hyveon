@@ -12,7 +12,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunRecord, RunRecordStore } from '@hyveon/shared';
-import { INLINE_LOG_LIMIT_BYTES, RunRecordService, type PersistRunRecordParams } from './RunRecordService.js';
+import {
+  INLINE_LOG_LIMIT_BYTES,
+  RunRecordNotFoundError,
+  RunRecordNotPlanError,
+  RunRecordNotSuccessfulError,
+  RunRecordService,
+  RunRecordTableNotConfiguredError,
+  type PersistRunRecordParams,
+} from './RunRecordService.js';
 import { ConfigService, type TfOutputs } from './ConfigService.js';
 import { RunService } from './RunService.js';
 
@@ -43,17 +51,33 @@ const TF: TfOutputs = {
 const putRecordMock = vi.fn<RunRecordStore['putRecord']>();
 const putLogMock = vi.fn<RunRecordStore['putLog']>();
 const getLogUrlMock = vi.fn<RunRecordStore['getLogUrl']>();
+const getRecordByRunIdMock = vi.fn<RunRecordStore['getRecordByRunId']>();
 const releaseRunMock = vi.fn<RunService['releaseRun']>();
 
 /** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above; the lock methods are unused no-ops here since `RunRecordService`'s lock release goes through the injected `RunService`, not the store directly. */
 function makeStore(): RunRecordStore {
   return {
     putRecord: putRecordMock,
+    getRecordByRunId: getRecordByRunIdMock,
     putLog: putLogMock,
     getLogUrl: getLogUrlMock,
     acquireRunLock: vi.fn<RunRecordStore['acquireRunLock']>(),
     getRunLock: vi.fn<RunRecordStore['getRunLock']>(),
     releaseRunLock: vi.fn<RunRecordStore['releaseRunLock']>(),
+  };
+}
+
+/** Builds a sample successful `plan` {@link RunRecord}, overridable per-test. */
+function makeRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return {
+    sk: '2026-07-17T00:00:00.000Z#run-123',
+    runId: 'run-123',
+    kind: 'plan',
+    status: 'success',
+    startedAt: '2026-07-17T00:00:00.000Z',
+    completedAt: '2026-07-17T00:05:00.000Z',
+    exitCode: 0,
+    ...overrides,
   };
 }
 
@@ -97,6 +121,7 @@ beforeEach(() => {
   putRecordMock.mockReset();
   putLogMock.mockReset();
   getLogUrlMock.mockReset();
+  getRecordByRunIdMock.mockReset();
   releaseRunMock.mockReset();
   releaseRunMock.mockResolvedValue(undefined);
   workDir = mkdtempSync(join(tmpdir(), 'run-record-service-test-'));
@@ -323,6 +348,86 @@ describe('RunRecordService', () => {
       await service.getLogUrl('runs/run-123.log', 60);
 
       expect(getLogUrlMock).toHaveBeenCalledWith('runs/run-123.log', 60);
+    });
+  });
+
+  describe('getByRunId', () => {
+    it("should return the store's matching record for a known runId", async () => {
+      const record = makeRecord();
+      getRecordByRunIdMock.mockResolvedValue(record);
+      const service = makeService();
+
+      const result = await service.getByRunId('run-123');
+
+      expect(result).toBe(record);
+      expect(getRecordByRunIdMock).toHaveBeenCalledWith('run-123');
+    });
+
+    it('should return undefined when no record exists for the runId', async () => {
+      getRecordByRunIdMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      const result = await service.getByRunId('missing-run');
+
+      expect(result).toBeUndefined();
+    });
+
+    it('should return undefined and not call store.getRecordByRunId when runs_table_name is not configured', async () => {
+      const service = makeService(null);
+
+      const result = await service.getByRunId('run-123');
+
+      expect(result).toBeUndefined();
+      expect(getRecordByRunIdMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('approveRun', () => {
+    it('should persist approvedBy/approvedAt via putRecord and return the updated record for a successful plan run', async () => {
+      const record = makeRecord();
+      getRecordByRunIdMock.mockResolvedValue(record);
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      const result = await service.approveRun('run-123', 'alice');
+
+      expect(putRecordMock).toHaveBeenCalledTimes(1);
+      const persisted = putRecordMock.mock.calls[0]?.[0] as RunRecord;
+      expect(persisted.approvedBy).toBe('alice');
+      expect(typeof persisted.approvedAt).toBe('string');
+      expect(result).toEqual(persisted);
+    });
+
+    it('should reject with RunRecordTableNotConfiguredError when runs_table_name is not configured', async () => {
+      const service = makeService(null);
+
+      await expect(service.approveRun('run-123', 'alice')).rejects.toThrow(RunRecordTableNotConfiguredError);
+      expect(getRecordByRunIdMock).not.toHaveBeenCalled();
+      expect(putRecordMock).not.toHaveBeenCalled();
+    });
+
+    it('should reject with RunRecordNotFoundError when no record exists for the runId', async () => {
+      getRecordByRunIdMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await expect(service.approveRun('missing-run', 'alice')).rejects.toThrow(RunRecordNotFoundError);
+      expect(putRecordMock).not.toHaveBeenCalled();
+    });
+
+    it('should reject with RunRecordNotPlanError when the record is not a plan run', async () => {
+      getRecordByRunIdMock.mockResolvedValue(makeRecord({ kind: 'apply' }));
+      const service = makeService();
+
+      await expect(service.approveRun('run-123', 'alice')).rejects.toThrow(RunRecordNotPlanError);
+      expect(putRecordMock).not.toHaveBeenCalled();
+    });
+
+    it('should reject with RunRecordNotSuccessfulError when the plan run did not succeed', async () => {
+      getRecordByRunIdMock.mockResolvedValue(makeRecord({ status: 'failed', exitCode: 1 }));
+      const service = makeService();
+
+      await expect(service.approveRun('run-123', 'alice')).rejects.toThrow(RunRecordNotSuccessfulError);
+      expect(putRecordMock).not.toHaveBeenCalled();
     });
   });
 });
