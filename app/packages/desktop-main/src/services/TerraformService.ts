@@ -832,6 +832,24 @@ export class TerraformService {
         return undefined;
       }
 
+      // Mint (or adopt the pre-minted) runId and register its active-run
+      // buffer *here* — before the pre-spawn awaits below
+      // (`getBinaryPath()`, then `pullVarFile()`'s S3 round-trip) — rather
+      // than just before the process is spawned. `TerraformController.plan()`
+      // drives this generator's first `.next()` synchronously and hands
+      // `runId` back to the renderer in its ack without waiting for those
+      // awaits to settle, so a `streamRunOutput()`/`terraform.runs.logs`
+      // subscriber can legitimately arrive before either of them resolves.
+      // Registering the buffer immediately means that subscriber finds the
+      // run already in flight (an empty, unsettled buffer it can wait on)
+      // instead of falling through to the "unknown run" log-replay path and
+      // erroring out. Every early-abort `return` below leaves `runId` set,
+      // so the outer `finally`'s unconditional `endActiveRun(runId)` call
+      // still settles the buffer for that subscriber even when the run
+      // never reaches the spawn point — see beginActiveRun's TSDoc.
+      runId = preMintedRunId ?? randomUUID();
+      this.beginActiveRun(runId);
+
       const binaryPath = await this.getBinaryPath();
 
       if (signal?.aborted) {
@@ -839,7 +857,6 @@ export class TerraformService {
         return undefined;
       }
 
-      runId = preMintedRunId ?? randomUUID();
       const runDir = join(this.config.getRunsDir(), runId);
       mkdirSync(runDir, { recursive: true });
 
@@ -865,12 +882,9 @@ export class TerraformService {
       let destroy = 0;
       // Captured immediately before the process is spawned so it can be
       // recorded in the `TerraformRunRecord` written below once the process
-      // closes.
+      // closes. (The active-run buffer itself was already registered above,
+      // ahead of the pre-spawn awaits — see the comment there.)
       startedAt = new Date().toISOString();
-      // Registers this run as in-flight so a concurrent streamRunOutput()
-      // subscriber observes it immediately, even before its first chunk
-      // arrives — see beginActiveRun's TSDoc.
-      this.beginActiveRun(runId);
 
       // Driven manually (rather than `yield*`) so each stdout line can be
       // scanned for the plan summary as it streams through, in addition to
@@ -982,6 +996,19 @@ export class TerraformService {
       // defined by the time the try block starts) because plan() may abort
       // before a runId is ever minted, in which case there's nothing to
       // persist.
+      //
+      // `endActiveRun` itself is called unconditionally below (not gated on
+      // `forceKilled`) — it's the only guarantee that a live
+      // `streamRunOutput()` subscriber never hangs forever, and `forceKilled`
+      // being false doesn't mean the normal-completion path above already
+      // settled the run: e.g. `spawnAndStream` throwing a spawn `error`
+      // (ENOENT/EACCES) unwinds straight past that call too.
+      if (runId !== undefined) {
+        // Idempotent via `endActiveRun`'s `if (!active) return` guard, so
+        // this is a safe no-op on every path where the normal-completion
+        // call above already ran.
+        this.endActiveRun(runId);
+      }
       if (runId !== undefined && startedAt !== undefined && !runRecordWritten && forceKilled) {
         // Mirrors apply()/destroy()'s forceKilled WARN — a cancellation via
         // forced generator termination is still a plan outcome worth
@@ -992,9 +1019,7 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
-        // Mirrors the normal-completion path above — settle any
-        // streamRunOutput() subscribers even on this force-killed path.
-        this.endActiveRun(runId);
+        // endActiveRun() already called unconditionally above.
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
@@ -1310,6 +1335,16 @@ export class TerraformService {
       // persist a cancelled (`exitCode: null`) run record here so the run is
       // never silently lost. Best-effort: a failure here doesn't override
       // whatever completion the generator was already unwinding for.
+      //
+      // `endActiveRun` itself is called unconditionally below (not gated on
+      // `forceKilled`) — it's the only guarantee that a live
+      // `streamRunOutput()` subscriber never hangs forever, and `forceKilled`
+      // being false doesn't mean the normal-completion path above already
+      // settled the run: e.g. `spawnAndStream` throwing a spawn `error`
+      // (ENOENT/EACCES) unwinds straight past that call too. Idempotent via
+      // `endActiveRun`'s `if (!active) return` guard, so this is a safe
+      // no-op on every path where the normal-completion call already ran.
+      this.endActiveRun(runId);
       if (startedAt !== undefined && !runRecordWritten && forceKilled) {
         // Mirrors destroy()'s forceKilled WARN — a cancellation via forced
         // generator termination is still an apply outcome worth surfacing.
@@ -1319,9 +1354,7 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
-        // Mirrors the normal-completion path above — settle any
-        // streamRunOutput() subscribers even on this force-killed path.
-        this.endActiveRun(runId);
+        // endActiveRun() already called unconditionally above.
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'apply', startedAt, completedAt, null, tfvarsVersionId);
@@ -1554,6 +1587,16 @@ export class TerraformService {
       // Covers the force-closed generator case — mirrors apply()'s outer
       // finally; see its comment for the full rationale of the `forceKilled`
       // gate.
+      //
+      // `endActiveRun` itself is called unconditionally below (not gated on
+      // `forceKilled`) — it's the only guarantee that a live
+      // `streamRunOutput()` subscriber never hangs forever, and `forceKilled`
+      // being false doesn't mean the normal-completion path above already
+      // settled the run: e.g. `spawnAndStream` throwing a spawn `error`
+      // (ENOENT/EACCES) unwinds straight past that call too. Idempotent via
+      // `endActiveRun`'s `if (!active) return` guard, so this is a safe
+      // no-op on every path where the normal-completion call already ran.
+      this.endActiveRun(runId);
       if (startedAt !== undefined && !runRecordWritten && forceKilled) {
         // Same WARN-level guarantee as the normal-completion path above:
         // a cancellation via forced generator termination is still a
@@ -1565,9 +1608,7 @@ export class TerraformService {
         // Persist whatever transcript was captured before the forced
         // completion unwound past the normal writeRunLog() call above.
         this.writeRunLog(runId, logLines);
-        // Mirrors the normal-completion path above — settle any
-        // streamRunOutput() subscribers even on this force-killed path.
-        this.endActiveRun(runId);
+        // endActiveRun() already called unconditionally above.
         const completedAt = new Date().toISOString();
         try {
           this.writeRunRecord(runId, 'destroy', startedAt, completedAt, null, undefined);
@@ -1818,10 +1859,15 @@ export class TerraformService {
 
   /**
    * Registers a fresh, empty {@link ActiveRunBuffer} for `runId` — called by
-   * {@link plan}/{@link apply}/{@link destroy} immediately before their
-   * spawned process starts, so a concurrent {@link streamRunOutput} call
-   * observes the run as in-flight (even before its first chunk arrives)
-   * rather than falling through to the "unknown run" / log-replay path.
+   * {@link apply}/{@link destroy} immediately before their spawned process
+   * starts, so a concurrent {@link streamRunOutput} call observes the run as
+   * in-flight (even before its first chunk arrives) rather than falling
+   * through to the "unknown run" / log-replay path. {@link plan} calls this
+   * earlier — as soon as its `runId` is resolved, ahead of its own pre-spawn
+   * awaits (`getBinaryPath()`/`pullVarFile()`) — because
+   * `TerraformController.plan()` hands `runId` back to the renderer in its
+   * ack before those awaits settle; see the inline comment at plan()'s call
+   * site.
    */
   private beginActiveRun(runId: string): void {
     this.activeRuns.set(runId, {
