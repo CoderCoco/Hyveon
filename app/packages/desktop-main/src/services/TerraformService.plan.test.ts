@@ -70,6 +70,7 @@ import {
   TerraformService,
   TerraformNotFoundError,
   TerraformPlanError,
+  TerraformPlanHashError,
   TerraformRunPersistError,
   type TerraformRunChunk,
   type TerraformPlanResult,
@@ -707,6 +708,69 @@ describe('TerraformService.plan run record persistence', () => {
     const rejection = (await pending.catch((err: unknown) => err)) as TerraformRunPersistError;
     expect(rejection.cause).toBeInstanceOf(Error);
     expect((rejection.cause as Error).cause).toBe(persistFailure);
+  });
+
+  it('should still write run.json, terraform.log, and the RunRecordStore entry — and throw TerraformPlanHashError — when the process exits 0 but computePlanHash fails to read the persisted artifact', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-hash-fail');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+    const hashReadFailure = new Error('ENOENT: no such file or directory');
+    // Only the .tfplan artifact read (computePlanHash) fails — every other
+    // readFileSync caller in this test file uses the default mock, so this
+    // targets exactly the call plan() makes once the process has exited 0.
+    readFileSyncMock.mockImplementation((path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('.tfplan')) {
+        throw hashReadFailure;
+      }
+      return Buffer.from('plan-bytes');
+    });
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const pending = collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Plan: 3 to add, 1 to change, 2 to destroy.\n');
+      child.close(0);
+    });
+
+    // The raw fs error must not escape unwrapped — it's surfaced as a
+    // descriptive TerraformPlanHashError instead.
+    await expect(pending).rejects.toBeInstanceOf(TerraformPlanHashError);
+    const rejection = (await pending.catch((err: unknown) => err)) as TerraformPlanHashError;
+    expect(rejection.runId).toBe('run-record-hash-fail');
+    expect(rejection.cause).toBe(hashReadFailure);
+
+    // terraform.log must still have been written despite the hash failure.
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-hash-fail/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+
+    // run.json must still have been written, with exitCode 0 (the process
+    // really did succeed) and no planHash (the hash computation failed).
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-hash-fail/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record).toMatchObject({ runId: 'run-record-hash-fail', kind: 'plan', exitCode: 0 });
+    expect(record).not.toHaveProperty('planHash');
+
+    // The cloud-agnostic RunRecordStore must also still have received this
+    // run, mirroring the local run.json write above.
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null; planHash?: string },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-record-hash-fail', kind: 'plan', exitCode: 0 });
+    expect(params.planHash).toBeUndefined();
   });
 
   it('should write exactly one run.json record with a null exitCode when the generator is force-closed before the process exits', async () => {

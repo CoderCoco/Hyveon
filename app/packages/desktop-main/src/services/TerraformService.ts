@@ -275,7 +275,33 @@ export type TerraformApplyOutcome =
 export type TerraformPlanOutcome =
   | { kind: 'success'; result: TerraformPlanResult }
   | { kind: 'aborted' }
-  | { kind: 'failed'; error: TerraformPlanError };
+  | { kind: 'failed'; error: TerraformPlanError | TerraformPlanHashError };
+
+/**
+ * Thrown by {@link TerraformService.plan} when the spawned `terraform plan`
+ * process exited `0` but {@link TerraformService.computePlanHash} then failed
+ * to read the persisted `.tfplan` artifact back off disk (e.g. it was deleted
+ * or became unreadable in the window between the process closing and the
+ * hash read) — distinct from {@link TerraformPlanError} (the process itself
+ * exiting non-zero). Folded into a `{ kind: 'failed' }` outcome rather than
+ * `'success'` so `plan()` still writes `terraform.log`/`run.json`/the
+ * `RunRecordStore` entry for the run (see the try/catch around
+ * `computePlanHash` in `plan()`) instead of letting the raw filesystem error
+ * unwind past that persistence block and reach the renderer unexplained.
+ */
+export class TerraformPlanHashError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly artifactPath: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `Failed to compute SHA-256 hash of plan artifact "${artifactPath}" for run "${runId}": ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = 'TerraformPlanHashError';
+  }
+}
 
 /**
  * Thrown by {@link TerraformService.plan}, {@link TerraformService.apply}, or
@@ -319,7 +345,12 @@ export class TerraformRunPersistError extends Error {
       case 'aborted':
         return 'aborted';
       case 'failed':
-        return `failed (exit code ${outcome.error.exitCode ?? 'null'})`;
+        // `TerraformPlanHashError` (a plan whose process exited `0` but then
+        // failed to hash the persisted artifact) has no `exitCode` — describe
+        // it by its message instead of an exit code that doesn't apply.
+        return 'exitCode' in outcome.error
+          ? `failed (exit code ${outcome.error.exitCode ?? 'null'})`
+          : `failed (${outcome.error.message})`;
     }
   }
 }
@@ -898,21 +929,42 @@ export class TerraformService {
 
       // Compute the SHA-256 hash of the persisted `.tfplan` artifact once the
       // process has exited cleanly — see {@link computePlanHash}. Only
-      // computed on the success path: a failed or aborted run has no (or an
+      // attempted on the success path: a failed or aborted run has no (or an
       // incomplete) `.tfplan` artifact worth hashing, so `planHash` stays
-      // unset for those outcomes.
-      const planHash =
-        !result.aborted && result.exitCode === 0 ? this.computePlanHash(artifactPath) : undefined;
+      // unset for those outcomes. Wrapped in try/catch (rather than left to
+      // propagate) because `readFileSync` can still throw here even though
+      // `terraform plan` exited `0` — e.g. the artifact was deleted or became
+      // unreadable in the window between the process closing and this read.
+      // Left unwrapped, that exception would unwind straight past the
+      // writeRunLog/writeRunRecord/persistRunRecord calls below, silently
+      // breaking the "a run record is written on every exit path" guarantee
+      // and surfacing an unexplained raw fs error to the renderer instead of
+      // a proper `TerraformPlanHashError`. Captured here and folded into a
+      // 'failed' outcome below so persistence still runs before it's thrown.
+      let planHash: string | undefined;
+      let planHashError: TerraformPlanHashError | undefined;
+      if (!result.aborted && result.exitCode === 0) {
+        try {
+          planHash = this.computePlanHash(artifactPath);
+        } catch (err) {
+          planHashError = new TerraformPlanHashError(runId, artifactPath, err);
+        }
+      }
 
       // Compute the outcome the generator would return/throw *before*
       // attempting to persist the run record, so a persistence failure below
       // can still report the real plan outcome instead of losing it behind
-      // an unrelated filesystem exception — mirrors apply()/destroy().
+      // an unrelated filesystem exception — mirrors apply()/destroy(). A
+      // `terraform plan` process that exited `0` but then failed to hash is
+      // reported as 'failed' (not 'success' with a missing `planHash`) — see
+      // {@link TerraformPlanHashError}.
       const outcome: TerraformPlanOutcome = result.aborted
         ? { kind: 'aborted' }
-        : result.exitCode === 0
-          ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy, planHash: planHash! } }
-          : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
+        : planHashError
+          ? { kind: 'failed', error: planHashError }
+          : result.exitCode === 0
+            ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy, planHash: planHash! } }
+            : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
 
       // `runRecordWritten` is flipped *before* the write is attempted (not
       // only on success) so the outer `finally` below never re-attempts a
