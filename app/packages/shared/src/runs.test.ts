@@ -4,6 +4,8 @@ import {
   computeRunDetailStatus,
   deriveRunStatus,
   isRunLockExpired,
+  isApprovalExpired,
+  APPROVAL_WINDOW_MS,
   type RunLock,
 } from './runs.js';
 
@@ -111,6 +113,36 @@ describe('isRunLockExpired', () => {
 
     expect(isRunLockExpired(pastLock)).toBe(true);
     expect(isRunLockExpired(futureLock)).toBe(false);
+  });
+});
+
+describe('isApprovalExpired', () => {
+  const approvedAt = '2026-07-20T12:00:00.000Z';
+
+  it('should return false when now is before approvedAt plus the approval window', () => {
+    const now = new Date(new Date(approvedAt).getTime() + APPROVAL_WINDOW_MS - 1);
+
+    expect(isApprovalExpired(approvedAt, now)).toBe(false);
+  });
+
+  it('should return true when now is after approvedAt plus the approval window', () => {
+    const now = new Date(new Date(approvedAt).getTime() + APPROVAL_WINDOW_MS + 1);
+
+    expect(isApprovalExpired(approvedAt, now)).toBe(true);
+  });
+
+  it('should return true when now exactly equals approvedAt plus the approval window', () => {
+    const now = new Date(new Date(approvedAt).getTime() + APPROVAL_WINDOW_MS);
+
+    expect(isApprovalExpired(approvedAt, now)).toBe(true);
+  });
+
+  it('should default now to the current time when it is not supplied', () => {
+    const longAgo = new Date(Date.now() - APPROVAL_WINDOW_MS - 1000).toISOString();
+    const justNow = new Date().toISOString();
+
+    expect(isApprovalExpired(longAgo)).toBe(true);
+    expect(isApprovalExpired(justNow)).toBe(false);
   });
 });
 

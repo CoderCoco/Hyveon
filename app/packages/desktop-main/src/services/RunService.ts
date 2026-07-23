@@ -86,19 +86,23 @@ export class RunService {
    * @param kind - Which `terraform` subcommand the caller is about to run.
    * @param initiator - Opaque identifier (e.g. username or API caller) of
    *   who is starting the run, surfaced to the UI as the current lock holder.
+   * @param runId - Optional pre-minted run identifier to use instead of a
+   *   freshly generated `randomUUID()`. Callers that already know the run's
+   *   id (e.g. because they created the `RunRecord` row before acquiring the
+   *   lock) can pass it here so the lock and the record share one id.
    * @returns The newly acquired {@link RunLock}.
    * @throws {@link RunLockHeldError} carrying the currently held lock when
    *   another non-terminal run already holds it, whether that lock was
    *   observed in-memory or in DynamoDB.
    */
-  async createRun(kind: RunKind, initiator: string): Promise<RunLock> {
+  async createRun(kind: RunKind, initiator: string, runId?: string): Promise<RunLock> {
     const now = new Date();
     if (this.currentLock !== null && !isRunLockExpired(this.currentLock, now)) {
       throw new RunLockHeldError(this.currentLock);
     }
 
     const lock: RunLock = {
-      runId: randomUUID(),
+      runId: runId ?? randomUUID(),
       kind,
       initiator,
       acquiredAt: now.toISOString(),

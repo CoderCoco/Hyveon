@@ -6,25 +6,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * vi.mock() calls are lifted to the top of the compiled output above regular
  * declarations.
  */
-const { execFileMock, spawnMock, mkdirSyncMock, existsSyncMock, writeFileSyncMock, copyFileSyncMock, randomUUIDMock } =
-  vi.hoisted(() => {
-    const execFileMock = vi.fn();
-    const spawnMock = vi.fn();
-    const mkdirSyncMock = vi.fn();
-    const existsSyncMock = vi.fn();
-    const writeFileSyncMock = vi.fn();
-    const copyFileSyncMock = vi.fn();
-    const randomUUIDMock = vi.fn();
-    return {
-      execFileMock,
-      spawnMock,
-      mkdirSyncMock,
-      existsSyncMock,
-      writeFileSyncMock,
-      copyFileSyncMock,
-      randomUUIDMock,
-    };
-  });
+const {
+  execFileMock,
+  spawnMock,
+  mkdirSyncMock,
+  existsSyncMock,
+  writeFileSyncMock,
+  copyFileSyncMock,
+  readFileSyncMock,
+  randomUUIDMock,
+} = vi.hoisted(() => {
+  const execFileMock = vi.fn();
+  const spawnMock = vi.fn();
+  const mkdirSyncMock = vi.fn();
+  const existsSyncMock = vi.fn();
+  const writeFileSyncMock = vi.fn();
+  const copyFileSyncMock = vi.fn();
+  const readFileSyncMock = vi.fn();
+  const randomUUIDMock = vi.fn();
+  return {
+    execFileMock,
+    spawnMock,
+    mkdirSyncMock,
+    existsSyncMock,
+    writeFileSyncMock,
+    copyFileSyncMock,
+    readFileSyncMock,
+    randomUUIDMock,
+  };
+});
 
 vi.mock('node:child_process', () => ({
   execFile: execFileMock,
@@ -36,11 +46,20 @@ vi.mock('node:fs', () => ({
   existsSync: existsSyncMock,
   writeFileSync: writeFileSyncMock,
   copyFileSync: copyFileSyncMock,
+  readFileSync: readFileSyncMock,
 }));
 
-vi.mock('node:crypto', () => ({
-  randomUUID: randomUUIDMock,
-}));
+// `createHash` is delegated to the real `node:crypto` implementation (rather
+// than mocked) so `TerraformService.computePlanHash`'s SHA-256 digest is a
+// real, independently-verifiable hash of whatever bytes `readFileSyncMock`
+// returns — only `randomUUID` needs to be deterministically controlled here.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    randomUUID: randomUUIDMock,
+  };
+});
 
 import {
   TerraformService,
@@ -262,6 +281,8 @@ beforeEach(() => {
   existsSyncMock.mockReturnValue(true);
   writeFileSyncMock.mockReset();
   copyFileSyncMock.mockReset();
+  readFileSyncMock.mockReset();
+  readFileSyncMock.mockReturnValue(Buffer.from('fake .tfplan artifact bytes'));
   randomUUIDMock.mockReset();
   randomUUIDMock.mockReturnValue('run-123');
 });
@@ -781,7 +802,7 @@ describe('TerraformService.plan summary parsing and return value', () => {
       child.close(0);
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       runId: 'run-789',
       artifactPath: '/repo/runs/run-789/run-789.tfplan',
       varFilePath: '/repo/runs/run-789/terraform.tfvars',
@@ -789,6 +810,7 @@ describe('TerraformService.plan summary parsing and return value', () => {
       change: 1,
       destroy: 2,
     });
+    expect(typeof (result as { planHash?: string } | undefined)?.planHash).toBe('string');
   });
 
   it('should resolve all three counts to 0 when the plan has no changes', async () => {

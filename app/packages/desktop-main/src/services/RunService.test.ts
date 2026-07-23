@@ -146,6 +146,21 @@ describe('RunService', () => {
       expect(service.getCurrentLock()).toEqual(second);
     });
 
+    it('should acquire the lock under a pre-minted runId when one is passed, and release it by that runId', async () => {
+      const service = makeService();
+
+      const lock = await service.createRun('apply', 'alice', 'some-id');
+
+      expect(lock.runId).toBe('some-id');
+      expect(acquireRunLockMock).toHaveBeenCalledWith(lock);
+      expect(service.getCurrentLock()).toEqual(lock);
+
+      await service.releaseRun('some-id');
+
+      expect(releaseRunLockMock).toHaveBeenCalledWith('some-id');
+      expect(service.getCurrentLock()).toBeUndefined();
+    });
+
     it('should take over an expired in-memory lock instead of throwing RunLockHeldError', async () => {
       const service = makeService();
 

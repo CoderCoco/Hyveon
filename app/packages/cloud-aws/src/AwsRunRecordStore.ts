@@ -1,5 +1,11 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { RunLockHeldError } from '@hyveon/shared';
@@ -165,6 +171,86 @@ export class AwsRunRecordStore implements RunRecordStore {
         },
       }),
     );
+  }
+
+  /**
+   * Looks up a previously persisted run record by its `runId`. The table's
+   * sort key is `<startedAt>#<runId>` (see `buildRunSk`) rather than `runId`
+   * alone, and there is no GSI keyed on `runId` (see `terraform/aws/runs_store.tf`),
+   * so this queries the fixed `pk = RUN` partition and filters on `runId`,
+   * paging through `LastEvaluatedKey` until a match is found or the
+   * partition is exhausted — acceptable at the run-history table's expected
+   * volume; a dedicated `runId`-index can be added later if this becomes a
+   * hot path. `ScanIndexForward: false` walks the partition newest-`sk`-first
+   * (sk is `<startedAt>#<runId>`, so lexicographic descending order is also
+   * chronological descending order), so the first matching item encountered
+   * — whether on the first page or a later one — is always the newest record
+   * for that `runId`.
+   *
+   * @param runId - Unique identifier of the run to look up (matches
+   *   {@link RunRecord.runId}).
+   * @returns The newest matching {@link RunRecord}, or `undefined` if no
+   *   record with that `runId` exists in the store.
+   */
+  async getRecordByRunId(runId: string): Promise<RunRecord | undefined> {
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const result = await this.getDynamoClient().send(
+        new QueryCommand({
+          TableName: this.getTableName(),
+          KeyConditionExpression: 'pk = :pk',
+          FilterExpression: 'runId = :runId',
+          ExpressionAttributeValues: { ':pk': PARTITION_KEY, ':runId': runId },
+          ExclusiveStartKey: exclusiveStartKey,
+          ScanIndexForward: false,
+        }),
+      );
+      const item = result.Items?.[0];
+      if (item) {
+        return this.toRunRecord(item as Record<string, unknown>);
+      }
+      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (exclusiveStartKey);
+    return undefined;
+  }
+
+  /**
+   * Maps a raw DynamoDB item from the `pk = RUN` partition back into a
+   * {@link RunRecord}, restoring the optional fields {@link putRecord} wrote
+   * conditionally.
+   *
+   * @param item - The raw item read back from DynamoDB.
+   * @returns The reconstructed {@link RunRecord}.
+   */
+  private toRunRecord(item: Record<string, unknown>): RunRecord {
+    const record: RunRecord = {
+      sk: item['sk'] as string,
+      runId: item['runId'] as string,
+      kind: item['kind'] as RunRecord['kind'],
+      status: item['status'] as RunRecord['status'],
+      startedAt: item['startedAt'] as string,
+      completedAt: item['completedAt'] as string,
+      exitCode: item['exitCode'] as number | null,
+    };
+    if (item['tfvarsVersionId'] !== undefined) {
+      record.tfvarsVersionId = item['tfvarsVersionId'] as string;
+    }
+    if (item['planHash'] !== undefined) {
+      record.planHash = item['planHash'] as string;
+    }
+    if (item['approvedBy'] !== undefined) {
+      record.approvedBy = item['approvedBy'] as string;
+    }
+    if (item['approvedAt'] !== undefined) {
+      record.approvedAt = item['approvedAt'] as string;
+    }
+    if (item['logInline'] !== undefined) {
+      record.logInline = item['logInline'] as string;
+    }
+    if (item['logS3Key'] !== undefined) {
+      record.logS3Key = item['logS3Key'] as string;
+    }
+    return record;
   }
 
   /**
