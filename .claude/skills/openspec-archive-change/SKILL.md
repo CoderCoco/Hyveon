@@ -20,7 +20,7 @@ Archive a completed change in the experimental workflow.
 
 1. **If no change name provided, prompt for selection**
 
-   Run `openspec list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
+   Run `openspec list --json` (add `--store <id>` if a store was selected) to get available changes. Use the **AskUserQuestion tool** to let the user select.
 
    Show only active changes (not already archived).
    Include the schema used for each change if available.
@@ -29,7 +29,7 @@ Archive a completed change in the experimental workflow.
 
 2. **Check artifact completion status**
 
-   Run `openspec status --change "<name>" --json` to check artifact completion.
+   Run `openspec status --change "<name>" --json` (add `--store <id>` if a store was selected) to check artifact completion.
 
    Parse the JSON to understand:
    - `schemaName`: The workflow being used
@@ -43,7 +43,7 @@ Archive a completed change in the experimental workflow.
 
 3. **Check task completion status**
 
-   Read the tasks file (typically `tasks.md`) to check for incomplete tasks.
+   Resolve the task artifact path from `artifactPaths.tasks.existingOutputPaths` (already fetched in step 2) and read it to check for incomplete tasks.
 
    Count tasks marked with `- [ ]` (incomplete) vs `- [x]` (complete).
 
@@ -52,7 +52,7 @@ Archive a completed change in the experimental workflow.
    - Use **AskUserQuestion tool** to confirm user wants to proceed
    - Proceed if user confirms
 
-   **If no tasks file exists:** Proceed without task-related warning.
+   **If no task artifact path exists:** Proceed without task-related warning.
 
 4. **Assess delta spec sync state**
 
@@ -67,7 +67,11 @@ Archive a completed change in the experimental workflow.
    - If changes needed: "Sync now (recommended)", "Archive without syncing"
    - If already synced: "Archive now", "Sync anyway", "Cancel"
 
-   If user chooses sync, use Task tool (subagent_type: "general-purpose", prompt: "Use Skill tool to invoke openspec-sync-specs for change '<name>'. Delta spec analysis: <include the analyzed delta spec summary>"). Proceed to archive regardless of choice.
+   If user chooses sync, use Task tool (subagent_type: "general-purpose", prompt: "Use Skill tool to invoke openspec-sync-specs for change '<name>'. Delta spec analysis: <include the analyzed delta spec summary>"). Inspect the subagent's result before continuing:
+   - If the subagent confirms the sync succeeded, proceed to step 5.
+   - If the subagent reports failure, or the result can't be verified, STOP — display the error and do not proceed to step 5. Let the user decide how to resolve it.
+
+   If the user chose to archive without syncing (or sync was already up to date), proceed directly to step 5.
 
 5. **Perform the archive**
 
@@ -108,11 +112,28 @@ Archive a completed change in the experimental workflow.
 All artifacts complete. All tasks complete.
 ```
 
+**Output On Success With Warnings**
+
+```
+## Archive Complete (with warnings)
+
+**Change:** <change-name>
+**Schema:** <schema-name>
+**Archived to:** the archive path derived from `planningHome.changesDir`/YYYY-MM-DD-<name>/
+**Specs:** ✓ Synced to main specs (or "No delta specs" or "Sync skipped")
+
+**Warnings:**
+- Archived with <N> incomplete artifacts
+- Archived with <N> incomplete tasks
+
+Review the archive if this was not intentional.
+```
+
 **Guardrails**
 - Always prompt for change selection if not provided
 - Use artifact graph (openspec status --json) for completion checking
 - Don't block archive on warnings - just inform and confirm
 - Preserve .openspec.yaml when moving to archive (it moves with the directory)
 - Show clear summary of what happened
-- If sync is requested, use openspec-sync-specs approach (agent-driven)
+- If sync is requested, use openspec-sync-specs approach (agent-driven), and verify the subagent reports success before moving on to the archive step; stop with an error if it fails or the result can't be verified
 - If delta specs exist, always run the sync assessment and show the combined summary before prompting

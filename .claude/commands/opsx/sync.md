@@ -18,7 +18,7 @@ This is an **agent-driven** operation - you will read delta specs and directly e
 
 1. **If no change name provided, prompt for selection**
 
-   Run `openspec list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
+   Run `openspec list --json` (add `--store <id>` if a store was selected) to get available changes. Use the **AskUserQuestion tool** to let the user select.
 
    Show changes that have delta specs (under `specs/` directory).
 
@@ -26,7 +26,7 @@ This is an **agent-driven** operation - you will read delta specs and directly e
 
 2. **Resolve change context**
 
-   Run:
+   Run (add `--store <id>` if a store was selected):
    ```bash
    openspec status --change "<name>" --json
    ```
@@ -64,6 +64,11 @@ This is an **agent-driven** operation - you will read delta specs and directly e
         - Modifying existing scenarios
         - Changing the requirement description
       - Preserve scenarios/content not mentioned in the delta
+      - **Duplicate detection (required for idempotency)**: before inserting a scenario or other content block under the requirement, check whether a scenario with the same heading/title (or materially the same content) already exists there.
+        - If it already exists and matches the delta → no-op (leave it as-is)
+        - If it already exists but differs → update it in place to match the delta
+        - If it doesn't exist → add it
+        - Never append a second copy of a scenario that's already present — this is what keeps repeated syncs idempotent
 
       **REMOVED Requirements:**
       - Remove the entire requirement block from main spec
