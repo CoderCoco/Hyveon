@@ -13,9 +13,15 @@ export class TerraformPage {
     await this.page.goto('/terraform');
   }
 
-  /** Navigate to `/terraform` by clicking the sidebar link and waiting for the URL to settle. */
+  /**
+   * Navigate to `/terraform` by clicking the sidebar link and waiting for the
+   * URL to settle. Exact-match, since Playwright's default name match is a
+   * case-insensitive substring and other pages link out to
+   * "Edit terraform.tfvars" (a GitHub help link), which would otherwise
+   * collide with the sidebar's "Terraform" nav item.
+   */
   async gotoViaSidebar(): Promise<void> {
-    await this.page.getByRole('link', { name: 'Terraform' }).click();
+    await this.page.getByRole('link', { name: 'Terraform', exact: true }).click();
     await this.page.waitForURL('**/terraform');
   }
 

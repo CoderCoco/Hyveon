@@ -116,6 +116,22 @@ test.describe('terraform page', () => {
     if (app) await app.close();
   });
 
+  // `/terraform` carries its own multi-step run state (planRunId, approval,
+  // applyRunId, ...) that only resets on remount — navigating to it again
+  // while already there is a same-pathname no-op in React Router and leaves
+  // the previous test's state in place, so each test's `gotoViaSidebar()`
+  // call could silently act on a stale plan/apply run. Navigating away first
+  // forces `/terraform` to unmount so the next `gotoViaSidebar()` call is a
+  // real route transition that mounts it fresh. Harmless on the first test,
+  // where the window is already on `/`.
+  test.beforeEach(async () => {
+    if (!win) return;
+    // Exact-match: the apply-success banner's own "View dashboard" link
+    // also links to `/` and would otherwise collide with the sidebar item.
+    await win.getByRole('link', { name: 'Dashboard', exact: true }).click();
+    await win.waitForURL('**/');
+  });
+
   test.afterEach(async () => {
     if (!win) return;
     await win.evaluate(() => {
