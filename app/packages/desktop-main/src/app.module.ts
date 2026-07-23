@@ -26,6 +26,7 @@ import { DriftHttpController } from './controllers/drift-http.controller.js';
 import { AuditController } from './controllers/audit.controller.js';
 import { AuditHttpController } from './controllers/audit-http.controller.js';
 import { TerraformController } from './controllers/terraform.controller.js';
+import { TerraformRunsController } from './controllers/terraform-runs.controller.js';
 import { DiagnosticsService, DIAGNOSTICS_LOG_DIR } from './services/DiagnosticsService.js';
 import { DriftService } from './services/DriftService.js';
 import { GamesWriteService } from './services/GamesWriteService.js';
@@ -60,6 +61,7 @@ import { AuditService } from './services/AuditService.js';
     AuditController,
     AuditHttpController,
     TerraformController,
+    TerraformRunsController,
   ],
   providers: [
     {
