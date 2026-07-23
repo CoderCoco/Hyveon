@@ -1646,7 +1646,7 @@ export class TerraformService {
 
   /**
    * Computes the SHA-256 hex digest of the `.tfplan` artifact at
-   * `artifactPath` — called by {@link plan} exactly once, immediately after
+   * `artifactPath`. Called by {@link plan} exactly once, immediately after
    * the spawned `terraform plan` process has exited `0`, so the returned
    * digest reflects the plan binary actually written to disk for this run.
    * Read via `readFileSync` (rather than streamed) since `.tfplan` artifacts
@@ -1655,8 +1655,18 @@ export class TerraformService {
    * exists: a later `apply()` call compares its caller-supplied `planHash`
    * against this run's stored value before proceeding, so the tfvars/plan an
    * admin approved is exactly what gets applied.
+   *
+   * Public (rather than `private`) so `TerraformController.apply` can also
+   * call it directly, as a pre-flight step, to *re-read and re-hash the
+   * on-disk artifact* right before spawning `terraform apply` — comparing
+   * `payload.planHash`/`record.planHash` alone only proves the two in-memory
+   * values agree with each other, not that the `.tfplan` file actually
+   * sitting on disk still matches either of them. Without this second,
+   * artifact-level re-verification a swapped/tampered `.tfplan` file (with
+   * the stored `RunRecord.planHash` left untouched) would still pass the
+   * plan-hash gate and get applied.
    */
-  private computePlanHash(artifactPath: string): string {
+  computePlanHash(artifactPath: string): string {
     return createHash('sha256').update(readFileSync(artifactPath)).digest('hex');
   }
 

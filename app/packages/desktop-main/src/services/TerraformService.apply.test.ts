@@ -6,16 +6,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * vi.mock() calls are lifted to the top of the compiled output above regular
  * declarations.
  */
-const { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock, runRecordPersistMock } =
-  vi.hoisted(() => {
-    const execFileMock = vi.fn();
-    const spawnMock = vi.fn();
-    const mkdirSyncMock = vi.fn();
-    const writeFileSyncMock = vi.fn();
-    const existsSyncMock = vi.fn();
-    const runRecordPersistMock = vi.fn();
-    return { execFileMock, spawnMock, mkdirSyncMock, writeFileSyncMock, existsSyncMock, runRecordPersistMock };
-  });
+const {
+  execFileMock,
+  spawnMock,
+  mkdirSyncMock,
+  writeFileSyncMock,
+  existsSyncMock,
+  readFileSyncMock,
+  runRecordPersistMock,
+} = vi.hoisted(() => {
+  const execFileMock = vi.fn();
+  const spawnMock = vi.fn();
+  const mkdirSyncMock = vi.fn();
+  const writeFileSyncMock = vi.fn();
+  const existsSyncMock = vi.fn();
+  const readFileSyncMock = vi.fn();
+  const runRecordPersistMock = vi.fn();
+  return {
+    execFileMock,
+    spawnMock,
+    mkdirSyncMock,
+    writeFileSyncMock,
+    existsSyncMock,
+    readFileSyncMock,
+    runRecordPersistMock,
+  };
+});
 
 vi.mock('node:child_process', () => ({
   execFile: execFileMock,
@@ -27,6 +43,12 @@ vi.mock('node:fs', () => ({
   existsSync: existsSyncMock,
   writeFileSync: writeFileSyncMock,
   copyFileSync: vi.fn(),
+  // Backs `TerraformService.computePlanHash`, which the cross-subcommand
+  // lock tests below exercise indirectly (a `plan()` call is driven to a
+  // successful close as part of asserting `apply()`'s workspace lock) —
+  // see #109. Real `createHash` (this file doesn't mock `node:crypto`)
+  // hashes whatever bytes this returns.
+  readFileSync: readFileSyncMock,
 }));
 
 import {
@@ -219,6 +241,8 @@ beforeEach(() => {
   // pre-spawn existsSync(planFile) guard aren't tripped up by it — only the
   // dedicated "missing planFile" test below overrides this.
   existsSyncMock.mockReturnValue(true);
+  readFileSyncMock.mockReset();
+  readFileSyncMock.mockReturnValue(Buffer.from('fake .tfplan artifact bytes'));
   runRecordPersistMock.mockReset();
 });
 

@@ -556,6 +556,35 @@ export interface TerraformPlanAck {
 }
 
 /**
+ * Payload accepted by the `terraform.apply` IPC channel. `planRunId`
+ * identifies the approved plan run to apply; `planHash` is the caller's
+ * expected plan hash, checked against the plan run's stored `planHash` to
+ * catch drift between when the plan was approved and when apply runs.
+ *
+ * Mirrors the `POST /api/terraform/apply` request body described in issue
+ * #109 — the desktop-main apply IPC handler is the source of truth; keep
+ * this copy in sync with it.
+ */
+export interface TerraformApplyPayload {
+  planRunId: string;
+  planHash: string;
+}
+
+/**
+ * Immediate acknowledgement the `terraform.approve` IPC channel resolves
+ * with once the identified plan run has been marked approved. Mirrors
+ * `POST /api/terraform/runs/:id/approve` (#109), which records `approvedBy`
+ * and `approvedAt` on the underlying `RunRecord` — see `RunRecord.approvedBy`
+ * / `RunRecord.approvedAt` in `@hyveon/shared/runs.ts`, the source of truth
+ * for the approval fields this type mirrors.
+ */
+export interface TerraformApproveAck {
+  runId: string;
+  approvedBy: string;
+  approvedAt: string;
+}
+
+/**
  * Shape of the subset of Terraform root outputs the management app consumes.
  *
  * Mirrors `TfOutputs` in `@hyveon/desktop-main/src/services/ConfigService.ts`
@@ -776,6 +805,26 @@ export interface GsdTerraformApi {
    * progress and the final `TerraformPlanResult`.
    */
   plan: (opts?: TerraformPlanPayload) => Promise<TerraformPlanAck>;
+  /**
+   * Approves a completed plan run (identified by `opts.planRunId`, its
+   * `runId`) so `apply` may proceed against it, by invoking the
+   * `terraform.approve` IPC channel with `opts`.
+   *
+   * Mirrors `POST /api/terraform/runs/:id/approve` (#109) — admin-only;
+   * records the approver and approved-at timestamp on the plan run and
+   * resolves the {@link TerraformApproveAck}.
+   */
+  approve: (opts: { planRunId: string }) => Promise<TerraformApproveAck>;
+  /**
+   * Submits a `terraform apply` run gated on plan-hash + approval by
+   * invoking the `terraform.apply` IPC channel, resolving an ack shaped like
+   * {@link TerraformPlanAck}. Mirrors `POST /api/terraform/apply` (#109):
+   * rejects when the plan run isn't approved, the current tfvars has
+   * drifted since the plan, the supplied `planHash` doesn't match the plan
+   * run's stored hash, or another run already holds the shared workspace
+   * lock.
+   */
+  apply: (payload: TerraformApplyPayload) => Promise<TerraformPlanAck>;
   /**
    * Returns the current Terraform outputs by invoking the `terraform.output`
    * IPC channel with `{ force }`. `force` defaults to `false`, matching

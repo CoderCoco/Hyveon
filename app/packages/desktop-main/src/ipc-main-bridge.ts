@@ -17,11 +17,15 @@ import { ElectronIPCTransport } from 'nestjs-electron-ipc-transport';
  * - `terraform.plan`: bridged manually by the same controller for the same
  *   reason as `terraform.init` — it streams `terraform plan` progress over a
  *   side channel for the duration of a long-running run.
+ * - `terraform.apply`: bridged manually by the same controller for the same
+ *   reason as `terraform.plan` — it streams `terraform apply` progress over a
+ *   side channel for the duration of a long-running run (see #109).
  */
 export const SELF_BRIDGED_PATTERNS: ReadonlySet<string> = new Set([
   'logs.stream',
   'terraform.init',
   'terraform.plan',
+  'terraform.apply',
 ]);
 
 /**
