@@ -43,9 +43,10 @@ export const electronEnv: Record<string, string> = {
  *
  * `electron-smoke.spec.ts`, `electron-ipc-roundtrip.spec.ts`, `ipc-mock.spec.ts`,
  * `dashboard.spec.ts`, `costs.spec.ts` (migrated in #193), `logs.spec.ts`
- * (migrated in #191), and `discord.spec.ts` (migrated in #194) are matched
- * only by the `electron` project and ignored by `chromium`; every other spec
- * is the reverse.
+ * (migrated in #191), `discord.spec.ts` (migrated in #194), and
+ * `terraform.spec.ts` (new route, issue #110) are matched only by the
+ * `electron` project and ignored by `chromium`; every other spec is the
+ * reverse.
  */
 const ELECTRON_SPECS = [
   '**/electron-smoke.spec.ts',
@@ -55,6 +56,7 @@ const ELECTRON_SPECS = [
   '**/costs.spec.ts',
   '**/logs.spec.ts',
   '**/discord.spec.ts',
+  '**/terraform.spec.ts',
 ];
 
 export default defineConfig({

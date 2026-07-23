@@ -1,8 +1,15 @@
+import type { ReactElement } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, type RenderResult } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { EditGameForm } from './edit-game-form.component.js';
 import type { GameServer } from '../../api.service.js';
+
+/** Renders `<EditGameForm>` wrapped in a `MemoryRouter` — the "apply this change" hint links to `/terraform`. */
+function renderForm(ui: ReactElement): RenderResult {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 /**
  * Stub for the `@/api.service.js` module: `games()` backs the
@@ -56,7 +63,7 @@ describe('EditGameForm', () => {
   });
 
   it('should prefill every field from the supplied GameServer config', async () => {
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     expect(await screen.findByLabelText('Name')).toHaveValue('mygame');
     expect(screen.getByLabelText('Image')).toHaveValue('itzg/minecraft-server');
@@ -70,20 +77,20 @@ describe('EditGameForm', () => {
   });
 
   it('should render the Name field as not editable', async () => {
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     expect(await screen.findByLabelText('Name')).toBeDisabled();
   });
 
-  it('should show the "make tf-apply" hint', async () => {
-    render(<EditGameForm game={sampleGame()} />);
+  it('should show a hint linking to the Terraform page to apply the change', async () => {
+    renderForm(<EditGameForm game={sampleGame()} />);
 
-    expect(await screen.findByText(/make tf-apply/)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Terraform' })).toHaveAttribute('href', '/terraform');
   });
 
   it('should call api.updateGame with the updated payload after a field edit and Save', async () => {
     apiMock.updateGame.mockResolvedValue({ ok: true, games: [] });
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     const imageField = await screen.findByLabelText('Image');
     await userEvent.clear(imageField);
@@ -101,7 +108,7 @@ describe('EditGameForm', () => {
 
   it('should not call api.updateGame for an unedited, valid draft other than the Save click itself', async () => {
     apiMock.updateGame.mockResolvedValue({ ok: true, games: [] });
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     await screen.findByLabelText('Image');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -117,7 +124,7 @@ describe('EditGameForm', () => {
       code: 'validation',
       issues: [{ path: 'image', message: 'Image is required.' }],
     });
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     const imageField = await screen.findByLabelText('Image');
     await userEvent.clear(imageField);
@@ -134,7 +141,7 @@ describe('EditGameForm', () => {
       code: 'conflict',
       message: 'terraform.tfvars changed since this draft was loaded.',
     });
-    render(<EditGameForm game={sampleGame()} />);
+    renderForm(<EditGameForm game={sampleGame()} />);
 
     const imageField = await screen.findByLabelText('Image');
     await userEvent.clear(imageField);
@@ -150,7 +157,7 @@ describe('EditGameForm', () => {
     const onSaved = vi.fn();
     const result = { ok: true as const, games: [] };
     apiMock.updateGame.mockResolvedValue(result);
-    render(<EditGameForm game={sampleGame()} onSaved={onSaved} />);
+    renderForm(<EditGameForm game={sampleGame()} onSaved={onSaved} />);
 
     await screen.findByLabelText('Image');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));

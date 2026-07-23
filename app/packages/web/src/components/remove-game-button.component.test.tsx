@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -12,12 +13,16 @@ const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 
 /**
- * Stub for `react-router-dom`'s `useNavigate` — the component only ever
- * calls this one hook from the module, so a full mock (no real
- * `MemoryRouter` needed) keeps the test setup minimal.
+ * Stub for `react-router-dom`'s `useNavigate` and `Link` — the component
+ * only ever uses these two exports, so a full mock (no real `MemoryRouter`
+ * needed) keeps the test setup minimal. `Link` renders a plain anchor so the
+ * dialog's "apply the change" hint can be asserted on without routing.
  */
 const navigateMock = vi.hoisted(() => vi.fn());
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigateMock }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => navigateMock,
+  Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
+}));
 
 /** Opens the remove-game dialog via its trigger button and waits for it to render. */
 async function openDialog(game = 'minecraft') {
@@ -87,11 +92,11 @@ describe('RemoveGameButton', () => {
     expect(toastMock.error).toHaveBeenCalledOnce();
   });
 
-  it('should show the terraform.tfvars / make tf-apply hint text in the dialog', async () => {
+  it('should show the terraform.tfvars hint and a link to the Terraform page in the dialog', async () => {
     await openDialog('minecraft');
     const dialog = screen.getByRole('alertdialog');
 
     expect(within(dialog).getByText('terraform.tfvars')).toBeInTheDocument();
-    expect(within(dialog).getByText('make tf-apply')).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'Terraform' })).toHaveAttribute('href', '/terraform');
   });
 });
