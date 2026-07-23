@@ -62,7 +62,7 @@ When ready to implement, run /opsx:apply
         - `resolvedOutputPath`: Resolved path or pattern to write the artifact
         - `dependencies`: Completed artifacts to read for context
       - Read any completed dependency files for context
-      - Resolve `resolvedOutputPath` to a concrete file path: if it contains glob characters (e.g. `*`) or otherwise matches more than one file, expand/enumerate the matches and pick (or confirm with the user) a single concrete target path — never write directly to a glob/pattern
+      - Resolve `resolvedOutputPath` to a concrete file path: if it contains glob characters (e.g. `*`) and matches one or more existing files, expand/enumerate the matches and pick (or confirm with the user) a single concrete target path; if it matches zero files, derive a new concrete path by replacing the glob segment with the artifact id/name — never write directly to a glob/pattern
       - Create the artifact file using `template` as the structure and write it to the resolved concrete path
       - Apply `context` and `rules` as constraints - but do NOT copy them into the file
       - Show brief progress: "Created <artifact-id>"
