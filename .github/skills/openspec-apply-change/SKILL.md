@@ -30,6 +30,7 @@ Implement tasks from an OpenSpec change.
 2. **Check status to understand the schema**
    ```bash
    openspec status --change "<name>" --json
+   # with a store selected: openspec status --change "<name>" --json --store <id>
    ```
    Parse the JSON to understand:
    - `schemaName`: The workflow being used (e.g., "spec-driven")
@@ -40,6 +41,7 @@ Implement tasks from an OpenSpec change.
 
    ```bash
    openspec instructions apply --change "<name>" --json
+   # with a store selected: openspec instructions apply --change "<name>" --json --store <id>
    ```
 
    This returns:
@@ -74,7 +76,7 @@ Implement tasks from an OpenSpec change.
    - Show which task is being worked on
    - Make the code changes required
    - Keep changes minimal and focused
-   - Mark task complete in the tasks file: `- [ ]` → `- [x]`
+   - Mark task complete in the task artifact (its file path comes from `contextFiles` in the apply instructions output, typically `tasks.md`): `- [ ]` → `- [x]`
    - Continue to next task
 
    **Pause if:**
