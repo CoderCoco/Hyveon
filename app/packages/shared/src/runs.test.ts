@@ -1,12 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRunSk,
+  computeRunDetailStatus,
   deriveRunStatus,
   isRunLockExpired,
   isApprovalExpired,
   APPROVAL_WINDOW_MS,
   type RunLock,
 } from './runs.js';
+
+/**
+ * Builds a minimal input for {@link computeRunDetailStatus}, overriding only
+ * the fields a given test cares about. Defaults describe a finished,
+ * successful `apply` run with no plan artifact.
+ */
+function buildStatusInput(
+  overrides: Partial<Parameters<typeof computeRunDetailStatus>[0]> = {},
+): Parameters<typeof computeRunDetailStatus>[0] {
+  return {
+    isInFlight: false,
+    kind: 'apply',
+    exitCode: 0,
+    planArtifactExists: false,
+    ...overrides,
+  };
+}
 
 /**
  * Builds a minimal {@link RunLock} fixture for {@link isRunLockExpired}
@@ -125,5 +143,56 @@ describe('isApprovalExpired', () => {
 
     expect(isApprovalExpired(longAgo)).toBe(true);
     expect(isApprovalExpired(justNow)).toBe(false);
+  });
+});
+
+describe('computeRunDetailStatus', () => {
+  it('should return running when isInFlight is true regardless of the other fields', () => {
+    const input = buildStatusInput({
+      isInFlight: true,
+      kind: 'plan',
+      exitCode: 0,
+      planArtifactExists: true,
+    });
+
+    expect(computeRunDetailStatus(input)).toBe('running');
+  });
+
+  it('should return awaiting_approval for a successful plan whose artifact still exists', () => {
+    const input = buildStatusInput({ kind: 'plan', exitCode: 0, planArtifactExists: true });
+
+    expect(computeRunDetailStatus(input)).toBe('awaiting_approval');
+  });
+
+  it('should not return awaiting_approval for a successful plan whose artifact no longer exists', () => {
+    const input = buildStatusInput({ kind: 'plan', exitCode: 0, planArtifactExists: false });
+
+    expect(computeRunDetailStatus(input)).toBe('success');
+  });
+
+  it('should return success for a successful apply', () => {
+    const input = buildStatusInput({ kind: 'apply', exitCode: 0, planArtifactExists: false });
+
+    expect(computeRunDetailStatus(input)).toBe('success');
+  });
+
+  it('should return failed for a run with a non-zero exit code', () => {
+    const input = buildStatusInput({ kind: 'apply', exitCode: 1, planArtifactExists: false });
+
+    expect(computeRunDetailStatus(input)).toBe('failed');
+  });
+
+  it('should return aborted for a run with a null exit code', () => {
+    const input = buildStatusInput({ kind: 'destroy', exitCode: null, planArtifactExists: false });
+
+    expect(computeRunDetailStatus(input)).toBe('aborted');
+  });
+
+  it('should not rewrite a failed or aborted plan to awaiting_approval', () => {
+    const failedPlan = buildStatusInput({ kind: 'plan', exitCode: 1, planArtifactExists: true });
+    const abortedPlan = buildStatusInput({ kind: 'plan', exitCode: null, planArtifactExists: true });
+
+    expect(computeRunDetailStatus(failedPlan)).toBe('failed');
+    expect(computeRunDetailStatus(abortedPlan)).toBe('aborted');
   });
 });

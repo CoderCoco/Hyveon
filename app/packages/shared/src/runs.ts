@@ -199,3 +199,71 @@ export const APPROVAL_WINDOW_MS = 15 * 60 * 1000;
 export function isApprovalExpired(approvedAt: string, now: Date = new Date()): boolean {
   return now.getTime() >= new Date(approvedAt).getTime() + APPROVAL_WINDOW_MS;
 }
+
+/**
+ * Status surfaced by the run-detail view (`GET /api/terraform/runs/:id`,
+ * issue #108) — a superset of the persisted {@link RunStatus} with two
+ * additional, non-persisted values computed at read time by
+ * {@link computeRunDetailStatus}:
+ *
+ * - `running` — no {@link RunRecord} exists yet for this run, because (per
+ *   {@link RunRecord}'s own doc) a record is only ever persisted once the
+ *   subcommand has finished.
+ * - `awaiting_approval` — a `plan` run finished successfully but, per the
+ *   epic's design (#83), an `apply` may not proceed until an operator
+ *   explicitly approves it (#109), so a bare `success` would be misleading.
+ */
+export type RunDetailStatus = RunStatus | 'running' | 'awaiting_approval';
+
+/**
+ * Derives the {@link RunDetailStatus} the run-detail view should render for
+ * a given run.
+ *
+ * Pure: takes primitive data describing the run's current state as
+ * arguments (mirroring {@link deriveRunStatus} and {@link isRunLockExpired}'s
+ * convention) rather than resolving a {@link RunRecord} internally, so
+ * callers control exactly which state is under test and no I/O happens here.
+ *
+ * Rules, applied in order:
+ * 1. `isInFlight` (the run's id matches the currently held {@link RunLock}
+ *    and hasn't expired) always maps to `running`, since {@link RunRecord} is
+ *    only ever persisted once the subcommand has finished (there is no
+ *    `pending` status to store).
+ * 2. A `plan` run that exited `0` maps to `awaiting_approval` only while its
+ *    `.tfplan` artifact still exists on disk — because the epic's design
+ *    (#83) gates `apply` behind an explicit operator approval (#109), a
+ *    successful plan alone hasn't reached a terminal state from the
+ *    operator's point of view. `planArtifactExists` is plumbed in for that
+ *    future approval flow (#109), which is expected to delete the `.tfplan`
+ *    file once consumed; as of this writing nothing does, so this rule's
+ *    actual escape hatch is rule ordering, not artifact deletion —
+ *    `TerraformService.apply` writes its own {@link TerraformRunRecord}
+ *    (`kind: 'apply'`) to the same `<runsDir>/<runId>/run.json` that the
+ *    plan run used, so once an apply has run for this `runId` the caller
+ *    observes `kind === 'apply'` (not `'plan'`) and this rule no longer
+ *    matches, falling through to rule 3.
+ * 3. Otherwise, the status is derived from `exitCode` via
+ *    {@link deriveRunStatus}.
+ *
+ * @param input - The run's current state:
+ * - `isInFlight` - Whether this run is the one currently holding an unexpired {@link RunLock} (i.e. hasn't produced a persisted {@link RunRecord} yet).
+ * - `kind` - Which `terraform` subcommand the run is/was, or `null` if unknown.
+ * - `exitCode` - The process's exit code, or `null` if it never reported one.
+ * - `planArtifactExists` - Whether the run's `.tfplan` artifact still exists on disk (only meaningful for `plan` runs).
+ * @returns The computed {@link RunDetailStatus}.
+ */
+export function computeRunDetailStatus(input: {
+  isInFlight: boolean;
+  kind: RunKind | null;
+  exitCode: number | null;
+  planArtifactExists: boolean;
+}): RunDetailStatus {
+  const { isInFlight, kind, exitCode, planArtifactExists } = input;
+  if (isInFlight) {
+    return 'running';
+  }
+  if (kind === 'plan' && exitCode === 0 && planArtifactExists) {
+    return 'awaiting_approval';
+  }
+  return deriveRunStatus(exitCode);
+}

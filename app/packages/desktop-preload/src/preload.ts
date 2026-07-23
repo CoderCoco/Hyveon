@@ -32,6 +32,15 @@
  * has been kicked off in the background, or `{ started: false, error, conflict? }`
  * when the submission was rejected outright (e.g. the shared Terraform
  * workspace was already busy running another subcommand).
+ *
+ * `terraform.runs.get(runId)` is a plain `invoke('terraform.runs.get', { runId })`
+ * call — it resolves a single `TerraformRunsGetResult` snapshot with no
+ * streaming involved. `terraform.runs.streamLogs(runId, signal)` mirrors
+ * `terraform.init`'s fixed-side-channel streaming shape: `TerraformRunsController.logs`
+ * pushes chunk/end messages on fixed `terraform.runs.logs.chunk` /
+ * `terraform.runs.logs.end` side channels shared by every call, each tagged
+ * with the `streamId` minted for that call, so overlapping subscriptions to
+ * different runs' log output can never cross-terminate one another.
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
@@ -48,6 +57,7 @@ import type {
   TerraformPlanAck,
   TerraformPlanPayload,
   TerraformRunChunk,
+  TerraformRunsGetResult,
   TfOutputs,
   UpdateGamePayload,
 } from './gsd-api.js';
@@ -57,6 +67,12 @@ const TERRAFORM_INIT_CHUNK_CHANNEL = 'terraform.init.chunk';
 
 /** Fixed side-channel `TerraformController.init` sends its terminal message on. */
 const TERRAFORM_INIT_END_CHANNEL = 'terraform.init.end';
+
+/** Fixed side-channel `TerraformRunsController.logs` pushes streamed run output on. */
+const TERRAFORM_RUNS_LOGS_CHUNK_CHANNEL = 'terraform.runs.logs.chunk';
+
+/** Fixed side-channel `TerraformRunsController.logs` sends its terminal message on. */
+const TERRAFORM_RUNS_LOGS_END_CHANNEL = 'terraform.runs.logs.end';
 
 /**
  * Per-channel mock registry populated by tests via `window.gsd.__test.mock(channel, handler)`.
@@ -349,6 +365,156 @@ async function* streamTerraformInit(config: TerraformInitConfig, signal?: AbortS
   }
 }
 
+/**
+ * Bridges `TerraformRunsController.logs`'s fixed `terraform.runs.logs.chunk` /
+ * `terraform.runs.logs.end` side channels into an {@link AsyncIterable} of
+ * {@link TerraformRunChunk} for a single run identified by `runId`.
+ *
+ * Mirrors {@link streamTerraformInit}'s streaming shape: `TerraformRunsController.logs`
+ * tags every chunk/end payload with the `streamId` it minted for this call and
+ * returned in the invoke ack (`{ streamId }`), so events from an overlapping
+ * subscription to a *different* run's log stream (which share the same fixed
+ * channel names) are filtered out and can never cross-terminate this stream.
+ *
+ * When a mock is registered for the `'terraform.runs.logs'` channel (test mode
+ * only), the mock handler is called with `(runId, signal)` and its return
+ * value is treated as an `AsyncIterable<TerraformRunChunk>` — the real IPC
+ * listener path is never touched.
+ *
+ * In production (no mock registered), the `terraform.runs.logs.chunk` /
+ * `terraform.runs.logs.end` listeners are attached **before**
+ * `ipcRenderer.invoke('terraform.runs.logs', { runId })` is called, so no
+ * chunk sent immediately after the main process acknowledges the call can
+ * ever be dropped. Since this call's own `streamId` isn't known until the
+ * invoke resolves, events observed before then are held in a raw buffer and
+ * replayed (filtered by the now-known `streamId`) once the ack arrives.
+ * Chunks tagged with this call's `streamId` are buffered as they arrive and
+ * yielded in order; the generator completes when a `terraform.runs.logs.end`
+ * event tagged with this call's `streamId` fires with no `error`, or throws
+ * using its `error` field otherwise.
+ *
+ * Following the `logs.stream`/`terraform.init` pattern, an optional `signal`
+ * may be supplied to stop consumption early: aborting (or breaking out of the
+ * `for await` loop) stops the wait loop and the `finally` block detaches the
+ * listeners. There is no per-run cancel side channel — the run itself (and
+ * its log tailing in the main process) keeps going in the background; only
+ * this caller's consumption stops.
+ */
+async function* streamTerraformRunLogs(runId: string, signal?: AbortSignal): AsyncIterable<TerraformRunChunk> {
+  const logsMock = mockRegistry.get('terraform.runs.logs');
+  if (logsMock !== undefined) {
+    const mockIterable = logsMock(runId, signal) as AsyncIterable<TerraformRunChunk>;
+    yield* mockIterable;
+    return;
+  }
+
+  /** Chunks received but not yet yielded. */
+  const buffer: TerraformRunChunk[] = [];
+  let ended = false;
+  let endError: string | undefined;
+  let aborted = false;
+  /**
+   * This call's own `streamId`, known only once the `terraform.runs.logs`
+   * invoke resolves. `null` until then, at which point every raw chunk/end
+   * event buffered so far is replayed through the `streamId` filter below.
+   */
+  let ownStreamId: string | null = null;
+  /** Chunk events observed before `ownStreamId` is known. */
+  const rawChunkBuffer: Array<{ streamId: string; chunk: TerraformRunChunk }> = [];
+  /** End events observed before `ownStreamId` is known. */
+  const rawEndBuffer: Array<{ streamId: string; error?: string }> = [];
+  /** Resolves the pending `await` when a chunk arrives, the stream ends, or the signal aborts. */
+  let wake: (() => void) | null = null;
+  const signalWake = () => {
+    if (wake) {
+      const fn = wake;
+      wake = null;
+      fn();
+    }
+  };
+
+  /** Applies a chunk event, discarding it if it belongs to a different run's log subscription. */
+  const applyChunk = (data: { streamId: string; chunk: TerraformRunChunk }) => {
+    if (data.streamId !== ownStreamId) return;
+    buffer.push(data.chunk);
+    signalWake();
+  };
+  /** Applies an end event, discarding it if it belongs to a different run's log subscription. */
+  const applyEnd = (data: { streamId: string; error?: string }) => {
+    if (data.streamId !== ownStreamId) return;
+    ended = true;
+    endError = data.error;
+    signalWake();
+  };
+
+  const onChunk = (_evt: IpcRendererEvent, data: { streamId: string; chunk: TerraformRunChunk }) => {
+    if (ownStreamId === null) {
+      rawChunkBuffer.push(data);
+      return;
+    }
+    applyChunk(data);
+  };
+  const onEnd = (_evt: IpcRendererEvent, data: { streamId: string; error?: string }) => {
+    if (ownStreamId === null) {
+      rawEndBuffer.push(data);
+      return;
+    }
+    applyEnd(data);
+  };
+  const onAbort = () => {
+    aborted = true;
+    signalWake();
+  };
+
+  // Attach both listeners before invoking so no early event sent right after
+  // the main process acknowledges the call is ever dropped — the channel
+  // names here are fixed constants known up front, so there is no need to
+  // wait for the invoke response first. `onEnd` uses `ipcRenderer.on` (not
+  // `.once`): a subscription to a different run's log stream could deliver
+  // its end event on this same fixed channel before our own, and a `once`
+  // listener would consume and discard it, missing our own end event
+  // entirely.
+  ipcRenderer.on(TERRAFORM_RUNS_LOGS_CHUNK_CHANNEL, onChunk);
+  ipcRenderer.on(TERRAFORM_RUNS_LOGS_END_CHANNEL, onEnd);
+  if (signal) {
+    if (signal.aborted) aborted = true;
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  try {
+    if (aborted) return;
+
+    const ack = (await invoke('terraform.runs.logs', { runId })) as { streamId: string };
+    ownStreamId = ack.streamId;
+
+    // Replay anything observed before we knew our own streamId, filtering
+    // out events tagged with a different (foreign, overlapping) run.
+    for (const data of rawChunkBuffer) applyChunk(data);
+    rawChunkBuffer.length = 0;
+    for (const data of rawEndBuffer) applyEnd(data);
+    rawEndBuffer.length = 0;
+
+    while (true) {
+      while (buffer.length > 0) {
+        if (aborted) return;
+        yield buffer.shift()!;
+      }
+      if (aborted) return;
+      if (ended) {
+        if (endError) throw new Error(endError);
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+  } finally {
+    ipcRenderer.removeListener(TERRAFORM_RUNS_LOGS_CHUNK_CHANNEL, onChunk);
+    ipcRenderer.removeListener(TERRAFORM_RUNS_LOGS_END_CHANNEL, onEnd);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
 const api: GsdApi = {
   games: {
     list: () => invoke('games.list'),
@@ -431,6 +597,10 @@ const api: GsdApi = {
     approve: (opts: { planRunId: string }) => invoke<TerraformApproveAck>('terraform.approve', opts),
     apply: (payload: TerraformApplyPayload) => invoke<TerraformPlanAck>('terraform.apply', payload),
     output: (force?: boolean) => invoke<TfOutputs | null>('terraform.output', { force }),
+    runs: {
+      get: (runId: string) => invoke<TerraformRunsGetResult>('terraform.runs.get', { runId }),
+      streamLogs: streamTerraformRunLogs,
+    },
   },
 };
 

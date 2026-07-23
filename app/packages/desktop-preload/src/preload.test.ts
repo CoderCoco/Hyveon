@@ -1287,4 +1287,420 @@ describe('preload dispatcher', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // terraform.runs.get
+  // -------------------------------------------------------------------------
+
+  describe('terraform.runs.get', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.runs.get channel with a { runId } payload and resolve the result', async () => {
+        const result = { found: true, status: 'success', record: { runId: 'run-001', kind: 'plan', startedAt: '2026-07-17T00:00:00.000Z', completedAt: '2026-07-17T00:01:00.000Z', exitCode: 0 } };
+        ipcInvoke.mockResolvedValue(result);
+        const terraformRuns = (bridge['terraform'] as { runs: { get: (runId: string) => Promise<unknown> } }).runs;
+
+        const actual = await terraformRuns.get('run-001');
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.runs.get', { runId: 'run-001' });
+        expect(actual).toEqual(result);
+      });
+
+      it('should resolve { found: false } when the run is unknown', async () => {
+        ipcInvoke.mockResolvedValue({ found: false });
+        const terraformRuns = (bridge['terraform'] as { runs: { get: (runId: string) => Promise<unknown> } }).runs;
+
+        const actual = await terraformRuns.get('run-missing');
+
+        expect(actual).toEqual({ found: false });
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.runs.get is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const result = { found: true, status: 'running' };
+        const mockHandler = vi.fn().mockResolvedValue(result);
+        testApi.mock('terraform.runs.get', mockHandler);
+
+        const terraformRuns = (bridge['terraform'] as { runs: { get: (runId: string) => Promise<unknown> } }).runs;
+        const actual = await terraformRuns.get('run-002');
+
+        expect(mockHandler).toHaveBeenCalledWith({ runId: 'run-002' });
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(actual).toEqual(result);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // terraform.runs.streamLogs
+  // -------------------------------------------------------------------------
+
+  describe('terraform.runs.streamLogs', () => {
+    /** Helper to collect all chunks from the `terraform.runs.streamLogs` async iterable into an array. */
+    async function collectChunks(
+      iterable: AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>,
+    ): Promise<{ stream: 'stdout' | 'stderr'; line: string }[]> {
+      const chunks: { stream: 'stdout' | 'stderr'; line: string }[] = [];
+      for await (const chunk of iterable) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    }
+
+    // -----------------------------------------------------------------------
+    // Mocked-delegation branch
+    // -----------------------------------------------------------------------
+
+    describe('mocked-delegation branch', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should delegate to the registered mock iterable instead of ipcRenderer when terraform.runs.logs is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* fakeStream() {
+          yield { stream: 'stdout' as const, line: 'Refreshing state...' };
+          yield { stream: 'stdout' as const, line: 'Plan: 1 to add, 0 to change, 0 to destroy.' };
+        }
+
+        const mockHandler = vi.fn().mockReturnValue(fakeStream());
+        testApi.mock('terraform.runs.logs', mockHandler);
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (
+                runId: string,
+                signal?: AbortSignal,
+              ) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const chunks = await collectChunks(terraformRuns.streamLogs('run-003'));
+
+        expect(mockHandler).toHaveBeenCalledWith('run-003', undefined);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(ipcSend).not.toHaveBeenCalled();
+        expect(chunks).toEqual([
+          { stream: 'stdout', line: 'Refreshing state...' },
+          { stream: 'stdout', line: 'Plan: 1 to add, 0 to change, 0 to destroy.' },
+        ]);
+      });
+
+      it('should forward the AbortSignal to the mock handler when one is provided', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* emptyStream() {}
+        const mockHandler = vi.fn().mockReturnValue(emptyStream());
+        testApi.mock('terraform.runs.logs', mockHandler);
+
+        const controller = new AbortController();
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (
+                runId: string,
+                signal?: AbortSignal,
+              ) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        await collectChunks(terraformRuns.streamLogs('run-004', controller.signal));
+
+        expect(mockHandler).toHaveBeenCalledWith('run-004', controller.signal);
+      });
+
+      it('should not attach any ipcRenderer listeners when the mock handles the stream', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+
+        async function* emptyStream() {}
+        testApi.mock('terraform.runs.logs', vi.fn().mockReturnValue(emptyStream()));
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        await collectChunks(terraformRuns.streamLogs('run-005'));
+
+        expect(ipcOn).not.toHaveBeenCalled();
+        expect(ipcOnce).not.toHaveBeenCalled();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Unmocked passthrough branch
+    // -----------------------------------------------------------------------
+
+    describe('unmocked passthrough branch', () => {
+      /**
+       * `TerraformRunsController.logs` mints a per-call `streamId` and tags every
+       * chunk/end payload with it (returning the same id in the invoke ack) so an
+       * overlapping subscription to a different run's log stream can't
+       * cross-terminate this call's stream. Tests below default to this id when
+       * simulating the ack/events.
+       */
+      const STREAM_ID = 'sid-terraform-runs-1';
+
+      /** Listener signatures captured off `ipcOn.mockImplementation` calls below. */
+      type ChunkListener = (
+        _evt: unknown,
+        data: { streamId: string; chunk: { stream: string; line: string } },
+      ) => void;
+      type EndListener = (_evt: unknown, data: { streamId: string; error?: string }) => void;
+
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        // Load with test-mode OFF so no mock registry is active — the real IPC
+        // path is always exercised.
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should attach the chunk/end listeners before calling ipcRenderer.invoke so no early chunk is dropped', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.end') {
+            Promise.resolve().then(() => listener({} as unknown, { streamId: STREAM_ID }));
+          }
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        await collectChunks(terraformRuns.streamLogs('run-006'));
+
+        // Registration must happen strictly before the invoke call resolves —
+        // otherwise a chunk sent immediately after the main process
+        // acknowledges the call could be dropped.
+        const firstOnCallOrder = ipcOn.mock.invocationCallOrder[0];
+        const secondOnCallOrder = ipcOn.mock.invocationCallOrder[1];
+        const invokeCallOrder = ipcInvoke.mock.invocationCallOrder[0];
+
+        expect(firstOnCallOrder).toBeLessThan(invokeCallOrder);
+        expect(secondOnCallOrder).toBeLessThan(invokeCallOrder);
+      });
+
+      it('should invoke terraform.runs.logs on ipcRenderer with the { runId } payload', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.end') {
+            Promise.resolve().then(() => listener({} as unknown, { streamId: STREAM_ID }));
+          }
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const chunks = await collectChunks(terraformRuns.streamLogs('run-007'));
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.runs.logs', { runId: 'run-007' });
+        expect(chunks).toEqual([]);
+      });
+
+      it('should yield chunks received over the terraform.runs.logs.chunk IPC channel in order', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        const capturedChunkListener: { current: ChunkListener | null } = { current: null };
+        const capturedEndListener: { current: EndListener | null } = { current: null };
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.chunk') capturedChunkListener.current = listener as ChunkListener;
+          if (channel === 'terraform.runs.logs.end') capturedEndListener.current = listener as EndListener;
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const collected = collectChunks(terraformRuns.streamLogs('run-008'));
+
+        await Promise.resolve();
+        await Promise.resolve();
+        capturedChunkListener.current?.({}, { streamId: STREAM_ID, chunk: { stream: 'stdout', line: 'Refreshing state...' } });
+        capturedChunkListener.current?.({}, {
+          streamId: STREAM_ID,
+          chunk: { stream: 'stdout', line: 'Plan: 1 to add, 0 to change, 0 to destroy.' },
+        });
+        capturedEndListener.current?.({}, { streamId: STREAM_ID });
+
+        const chunks = await collected;
+
+        expect(chunks).toEqual([
+          { stream: 'stdout', line: 'Refreshing state...' },
+          { stream: 'stdout', line: 'Plan: 1 to add, 0 to change, 0 to destroy.' },
+        ]);
+      });
+
+      it('should ignore chunk/end events tagged with a foreign streamId so an overlapping subscription to a different run cannot cross-terminate this stream', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        const capturedChunkListener: { current: ChunkListener | null } = { current: null };
+        const capturedEndListener: { current: EndListener | null } = { current: null };
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.chunk') capturedChunkListener.current = listener as ChunkListener;
+          if (channel === 'terraform.runs.logs.end') capturedEndListener.current = listener as EndListener;
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const collected = collectChunks(terraformRuns.streamLogs('run-009'));
+
+        await Promise.resolve();
+        await Promise.resolve();
+        // A subscription to a different run's log stream fires first, tagged
+        // with a different streamId — must not terminate this stream.
+        capturedEndListener.current?.({}, { streamId: 'sid-other-run', error: 'boom' });
+        capturedChunkListener.current?.({}, { streamId: 'sid-other-run', chunk: { stream: 'stdout', line: 'not mine' } });
+        // This call's own chunk/end events still resolve the generator normally.
+        capturedChunkListener.current?.({}, { streamId: STREAM_ID, chunk: { stream: 'stdout', line: 'Refreshing state...' } });
+        capturedEndListener.current?.({}, { streamId: STREAM_ID });
+
+        const chunks = await collected;
+
+        expect(chunks).toEqual([{ stream: 'stdout', line: 'Refreshing state...' }]);
+      });
+
+      it('should throw when the terraform.runs.logs.end event carries an error field', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.end') {
+            Promise.resolve().then(() => listener({} as unknown, { streamId: STREAM_ID, error: 'run not found' }));
+          }
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+
+        await expect(collectChunks(terraformRuns.streamLogs('run-010'))).rejects.toThrow('run not found');
+      });
+
+      it('should remove chunk/end listeners once the stream completes', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.end') {
+            Promise.resolve().then(() => listener({} as unknown, { streamId: STREAM_ID }));
+          }
+        });
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (runId: string) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        await collectChunks(terraformRuns.streamLogs('run-011'));
+
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.chunk', expect.any(Function));
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.end', expect.any(Function));
+      });
+
+      // -----------------------------------------------------------------------
+      // AbortSignal cancellation
+      // -----------------------------------------------------------------------
+
+      it('should stop yielding and clean up listeners without calling invoke when the signal is already aborted', async () => {
+        const controller = new AbortController();
+        controller.abort();
+
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (
+                runId: string,
+                signal?: AbortSignal,
+              ) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const chunks = await collectChunks(terraformRuns.streamLogs('run-012', controller.signal));
+
+        expect(chunks).toEqual([]);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.chunk', expect.any(Function));
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.end', expect.any(Function));
+      });
+
+      it('should stop the async iterable and clean up listeners when the signal aborts mid-stream', async () => {
+        ipcInvoke.mockResolvedValue({ streamId: STREAM_ID });
+
+        const capturedChunkListener: { current: ChunkListener | null } = { current: null };
+        ipcOn.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === 'terraform.runs.logs.chunk') capturedChunkListener.current = listener as ChunkListener;
+          // 'terraform.runs.logs.end' listener is captured but intentionally
+          // never invoked — the stream stays open until the signal aborts.
+        });
+
+        const controller = new AbortController();
+        const terraformRuns = (
+          bridge['terraform'] as {
+            runs: {
+              streamLogs: (
+                runId: string,
+                signal?: AbortSignal,
+              ) => AsyncIterable<{ stream: 'stdout' | 'stderr'; line: string }>;
+            };
+          }
+        ).runs;
+        const gen = terraformRuns.streamLogs('run-013', controller.signal)[Symbol.asyncIterator]();
+
+        const nextPromise = gen.next();
+        await Promise.resolve();
+        await Promise.resolve();
+        capturedChunkListener.current?.({}, { streamId: STREAM_ID, chunk: { stream: 'stdout', line: 'Refreshing state...' } });
+        const first = await nextPromise;
+        expect(first).toEqual({ done: false, value: { stream: 'stdout', line: 'Refreshing state...' } });
+
+        controller.abort();
+        const second = await gen.next();
+
+        expect(second).toEqual({ done: true, value: undefined });
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.chunk', expect.any(Function));
+        expect(ipcRemoveListener).toHaveBeenCalledWith('terraform.runs.logs.end', expect.any(Function));
+      }, 10_000);
+    });
+  });
 });

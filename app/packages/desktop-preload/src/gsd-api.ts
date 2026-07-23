@@ -519,6 +519,68 @@ export interface TerraformInitConfig {
 }
 
 /**
+ * Which `terraform` subcommand produced a {@link TerraformRunRecord}.
+ *
+ * Mirrors the `kind` field of `TerraformRunRecord` in
+ * `@hyveon/desktop-main/src/services/TerraformService.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type TerraformRunKind = 'plan' | 'apply' | 'destroy';
+
+/**
+ * Persisted local run record for a finished `terraform` plan/apply/destroy
+ * run — a lightweight run history entry written once the run's spawned
+ * process has closed.
+ *
+ * Mirrors `TerraformRunRecord` in
+ * `@hyveon/desktop-main/src/services/TerraformService.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface TerraformRunRecord {
+  /** The `runId` this record describes — matches the directory it's written into. */
+  runId: string;
+  /** Which subcommand produced this record. */
+  kind: TerraformRunKind;
+  /** ISO-8601 timestamp captured immediately before the process was spawned. */
+  startedAt: string;
+  /** ISO-8601 timestamp captured immediately after the process closed. */
+  completedAt: string;
+  /** The process's exit code, or `null` if it never reported one (e.g. killed via abort signal). */
+  exitCode: number | null;
+  /** The tfvars version id the applied plan was generated against, if the caller supplied one. */
+  tfvarsVersionId?: string;
+}
+
+/**
+ * Lifecycle status surfaced by the run-detail view — a superset of the
+ * persisted `success` / `failed` / `aborted` run status with two additional,
+ * non-persisted values computed at read time: `running` (no
+ * {@link TerraformRunRecord} exists yet because the run hasn't finished) and
+ * `awaiting_approval` (a `plan` run finished successfully but its `.tfplan`
+ * artifact still exists on disk, awaiting an operator's explicit apply).
+ *
+ * Mirrors `RunDetailStatus` in `@hyveon/shared/src/runs.ts` — that file is
+ * the source of truth; keep this copy in sync with it.
+ */
+export type RunDetailStatus = 'success' | 'failed' | 'aborted' | 'running' | 'awaiting_approval';
+
+/**
+ * Result of the `terraform.runs.get` IPC channel: `found: false` when the
+ * requested `runId` is neither the currently in-flight run nor a persisted
+ * {@link TerraformRunRecord} on disk. `found: true` always carries the
+ * derived {@link RunDetailStatus}; `record` is present only once the run has
+ * produced a persisted {@link TerraformRunRecord} (i.e. every status except
+ * `running`, since a run in flight hasn't closed its process yet).
+ *
+ * Mirrors `TerraformRunsGetResult` in
+ * `@hyveon/desktop-main/src/controllers/terraform-runs.controller.ts` — that
+ * file is the source of truth; keep this copy in sync with it.
+ */
+export type TerraformRunsGetResult =
+  | { found: false }
+  | { found: true; status: RunDetailStatus; record?: TerraformRunRecord };
+
+/**
  * Payload accepted by the `terraform.plan` IPC channel. `tfvarsVersionId`,
  * when the configured tfvars source is S3-backed, is forwarded verbatim to
  * `TerraformService.plan`'s pre-spawn staleness check against the current
@@ -764,6 +826,46 @@ export interface GsdAuditApi {
 }
 
 /**
+ * Terraform run history: look up a single plan/apply/destroy run's current
+ * status and stream its live/replayed log output (issue #108).
+ */
+export interface GsdTerraformRunsApi {
+  /**
+   * Looks up the run identified by `runId` and returns its current
+   * {@link TerraformRunsGetResult} — `{ found: false }` if `runId` is
+   * neither the in-flight run nor a persisted {@link TerraformRunRecord},
+   * otherwise `{ found: true, status, record? }`.
+   *
+   * Internally this is a plain `invoke('terraform.runs.get', { runId })`
+   * call — unlike {@link streamLogs}, there is no streaming involved.
+   */
+  get: (runId: string) => Promise<TerraformRunsGetResult>;
+  /**
+   * Opens a live/replayed log stream for the run identified by `runId` as an
+   * async iterable of {@link TerraformRunChunk}. Consume it with
+   * `for await (const chunk of terraform.runs.streamLogs(runId, signal))`.
+   *
+   * Mirrors {@link GsdTerraformApi.init}'s streaming shape: the
+   * `terraform.runs.logs` invoke call resolves immediately with an opaque
+   * `streamId`, and subsequent chunk/end messages arrive on the fixed
+   * `terraform.runs.logs.chunk` / `terraform.runs.logs.end` side channels,
+   * tagged with that `streamId` so overlapping subscriptions to different
+   * runs can never cross-terminate one another.
+   *
+   * Pass an `AbortSignal` to stop consuming the stream early: aborting (or
+   * breaking out of the `for await` loop) stops the generator from yielding
+   * further chunks. There is no dedicated cancel side channel — the run
+   * itself (and its log tailing on the main-process side) keeps going in the
+   * background; only this caller's consumption stops.
+   *
+   * The iterator completes normally once the run's output finishes
+   * replaying/streaming, and throws (using the `terraform.runs.logs.end`
+   * payload's `error` field) if it terminated due to an error.
+   */
+  streamLogs: (runId: string, signal?: AbortSignal) => AsyncIterable<TerraformRunChunk>;
+}
+
+/**
  * Terraform orchestration: streams `terraform init` output live as the
  * process runs.
  */
@@ -838,6 +940,8 @@ export interface GsdTerraformApi {
    * when Terraform reports no outputs (infra not yet deployed).
    */
   output: (force?: boolean) => Promise<TfOutputs | null>;
+  /** Terraform run history: look up a single run's status and stream its log output. */
+  runs: GsdTerraformRunsApi;
 }
 
 // ---------------------------------------------------------------------------
