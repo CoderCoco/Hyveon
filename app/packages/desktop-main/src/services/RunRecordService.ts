@@ -25,11 +25,62 @@
 import { readFileSync } from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import { buildRunSk, deriveRunStatus } from '@hyveon/shared';
-import type { RunKind, RunRecord, RunRecordStore } from '@hyveon/shared';
+import type { RunKind, RunRecord, RunRecordStore, RunStatus } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { RunService } from './RunService.js';
 import { RUN_RECORD_STORE } from '../modules/cloud-provider.tokens.js';
+
+/**
+ * Thrown by {@link RunRecordService.approveRun} when the run-history table
+ * isn't configured yet (`ConfigService.getTfOutputs().runs_table_name` is
+ * unset) — the same chicken-and-egg guard {@link RunRecordService.persist}
+ * applies, but here it's surfaced to the caller rather than swallowed, since
+ * an approval that silently no-ops would let a later apply attempt proceed
+ * without ever having recorded who approved it.
+ */
+export class RunRecordTableNotConfiguredError extends Error {
+  constructor(runId: string) {
+    super(`RunRecordService.approveRun: runs_table_name not configured, cannot approve run "${runId}"`);
+    this.name = 'RunRecordTableNotConfiguredError';
+  }
+}
+
+/**
+ * Thrown by {@link RunRecordService.approveRun} when no run record exists for
+ * the given `runId`.
+ */
+export class RunRecordNotFoundError extends Error {
+  constructor(runId: string) {
+    super(`No run record found for runId "${runId}"`);
+    this.name = 'RunRecordNotFoundError';
+  }
+}
+
+/**
+ * Thrown by {@link RunRecordService.approveRun} when the run record found for
+ * `runId` is not a `plan` run — only a `plan` run's `.tfplan` artifact is
+ * ever compared against an apply request's `planHash` (see #109), so
+ * approving an `apply`/`destroy` record makes no sense.
+ */
+export class RunRecordNotPlanError extends Error {
+  constructor(runId: string, kind: RunKind) {
+    super(`Run "${runId}" is a "${kind}" run, not a "plan" run, and cannot be approved`);
+    this.name = 'RunRecordNotPlanError';
+  }
+}
+
+/**
+ * Thrown by {@link RunRecordService.approveRun} when the plan run found for
+ * `runId` did not finish with `status: 'success'` — a failed or aborted plan
+ * produced no trustworthy `.tfplan` artifact for a later apply to reuse.
+ */
+export class RunRecordNotSuccessfulError extends Error {
+  constructor(runId: string, status: RunStatus) {
+    super(`Run "${runId}" has status "${status}", not "success", and cannot be approved`);
+    this.name = 'RunRecordNotSuccessfulError';
+  }
+}
 
 /**
  * Maximum size, in UTF-8 encoded bytes, of a captured run log that
@@ -66,6 +117,12 @@ export interface PersistRunRecordParams {
   exitCode: number | null;
   /** The tfvars version id the run was executed against, if the caller supplied one. */
   tfvarsVersionId?: string;
+  /**
+   * SHA-256 hex digest of the `.tfplan` artifact this run produced (a
+   * successful `plan` run only — see `TerraformService.computePlanHash` and
+   * issue #109), if the caller supplied one.
+   */
+  planHash?: string;
 }
 
 /**
@@ -185,6 +242,7 @@ export class RunRecordService {
           completedAt: params.completedAt,
           exitCode: params.exitCode,
           ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
+          ...(params.planHash !== undefined ? { planHash: params.planHash } : {}),
           ...(logInline !== undefined ? { logInline } : {}),
           ...(logS3Key !== undefined ? { logS3Key } : {}),
         };
@@ -216,5 +274,89 @@ export class RunRecordService {
    */
   async getLogUrl(logKey: string, expiresInSeconds?: number): Promise<string> {
     return this.store.getLogUrl(logKey, expiresInSeconds);
+  }
+
+  /**
+   * Looks up a previously persisted run record by its `runId`, delegating
+   * directly to `store.getRecordByRunId` — exposed on the service (rather
+   * than requiring callers to reach for the injected store themselves) so
+   * consumers such as the apply IPC handler (#109) depend only on
+   * `RunRecordService`.
+   *
+   * Guarded by the same `runs_table_name`-not-configured check as
+   * {@link persist}: when the run-history table isn't in the Terraform
+   * outputs yet, a winston warning is logged and `undefined` is returned
+   * without calling `store.getRecordByRunId`.
+   *
+   * @param runId - Unique identifier of the run to look up.
+   * @returns The matching {@link RunRecord}, or `undefined` if no record with
+   *   that `runId` exists in the store (or the run-history table isn't
+   *   configured yet).
+   */
+  async getByRunId(runId: string): Promise<RunRecord | undefined> {
+    const tableName = this.config.getTfOutputs()?.runs_table_name;
+    if (!tableName) {
+      logger.warn('RunRecordService.getByRunId: runs_table_name not configured, returning undefined', {
+        runId,
+      });
+      return undefined;
+    }
+
+    return this.store.getRecordByRunId(runId);
+  }
+
+  /**
+   * Approves a successful `plan` run for apply: stamps `approvedBy` and an
+   * `approvedAt` timestamp onto its persisted {@link RunRecord} and writes it
+   * back via `store.putRecord`.
+   *
+   * Unlike {@link persist}, this method is **not** best-effort — a failure
+   * here is thrown to the caller rather than logged and swallowed, since an
+   * approval that silently fails would let a later apply proceed without the
+   * approval actually having been recorded.
+   *
+   * Validates, in order, throwing a distinct error for each failure mode so
+   * callers (e.g. the approve IPC handler) can surface a precise message:
+   *
+   * - The run-history table is configured — throws
+   *   {@link RunRecordTableNotConfiguredError} otherwise.
+   * - A record exists for `runId` — throws {@link RunRecordNotFoundError}
+   *   otherwise.
+   * - The record's `kind` is `'plan'` — throws {@link RunRecordNotPlanError}
+   *   otherwise.
+   * - The record's `status` is `'success'` — throws
+   *   {@link RunRecordNotSuccessfulError} otherwise.
+   *
+   * @param runId - Unique identifier of the plan run to approve.
+   * @param approvedBy - Opaque identifier (e.g. username) of the admin approving the run.
+   * @returns The updated {@link RunRecord}, with `approvedBy`/`approvedAt` set.
+   */
+  async approveRun(runId: string, approvedBy: string): Promise<RunRecord> {
+    const tableName = this.config.getTfOutputs()?.runs_table_name;
+    if (!tableName) {
+      throw new RunRecordTableNotConfiguredError(runId);
+    }
+
+    const record = await this.store.getRecordByRunId(runId);
+    if (!record) {
+      throw new RunRecordNotFoundError(runId);
+    }
+
+    if (record.kind !== 'plan') {
+      throw new RunRecordNotPlanError(runId, record.kind);
+    }
+
+    if (record.status !== 'success') {
+      throw new RunRecordNotSuccessfulError(runId, record.status);
+    }
+
+    const updated: RunRecord = {
+      ...record,
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+    };
+
+    await this.store.putRecord(updated);
+    return updated;
   }
 }

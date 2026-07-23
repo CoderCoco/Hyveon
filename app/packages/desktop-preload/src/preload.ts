@@ -51,6 +51,8 @@ import type {
   GsdApi,
   GsdTestApi,
   LogChunk,
+  TerraformApplyPayload,
+  TerraformApproveAck,
   TerraformInitConfig,
   TerraformPlanAck,
   TerraformPlanPayload,
@@ -592,6 +594,8 @@ const api: GsdApi = {
   terraform: {
     init: streamTerraformInit,
     plan: (opts?: TerraformPlanPayload) => invoke<TerraformPlanAck>('terraform.plan', opts),
+    approve: (opts: { planRunId: string }) => invoke<TerraformApproveAck>('terraform.approve', opts),
+    apply: (payload: TerraformApplyPayload) => invoke<TerraformPlanAck>('terraform.apply', payload),
     output: (force?: boolean) => invoke<TfOutputs | null>('terraform.output', { force }),
     runs: {
       get: (runId: string) => invoke<TerraformRunsGetResult>('terraform.runs.get', { runId }),

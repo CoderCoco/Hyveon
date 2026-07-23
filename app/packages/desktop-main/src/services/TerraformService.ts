@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -152,6 +152,15 @@ export interface TerraformPlanResult {
   change: number;
   /** Number of resources Terraform plans to destroy. */
   destroy: number;
+  /**
+   * SHA-256 hex digest of the persisted `.tfplan` artifact at
+   * {@link artifactPath}, computed via {@link TerraformService.computePlanHash}
+   * once the spawned process has exited `0` — see #109. A later `apply()`
+   * call compares its caller-supplied `planHash` against this run's stored
+   * value before proceeding, so the tfvars/plan an admin approved is exactly
+   * what gets applied.
+   */
+  planHash: string;
 }
 
 /**
@@ -259,6 +268,13 @@ export interface TerraformRunRecord {
   exitCode: number | null;
   /** The tfvars version id the applied plan was generated against, if the caller supplied one. */
   tfvarsVersionId?: string;
+  /**
+   * SHA-256 hex digest of the persisted `.tfplan` artifact this record's
+   * `plan` run produced — see {@link TerraformPlanResult.planHash}. Set only
+   * on a successful `plan` record; a failed or aborted `plan` run (and
+   * `apply`/`destroy` records generally) leave this unset.
+   */
+  planHash?: string;
 }
 
 /**
@@ -283,7 +299,33 @@ export type TerraformApplyOutcome =
 export type TerraformPlanOutcome =
   | { kind: 'success'; result: TerraformPlanResult }
   | { kind: 'aborted' }
-  | { kind: 'failed'; error: TerraformPlanError };
+  | { kind: 'failed'; error: TerraformPlanError | TerraformPlanHashError };
+
+/**
+ * Thrown by {@link TerraformService.plan} when the spawned `terraform plan`
+ * process exited `0` but {@link TerraformService.computePlanHash} then failed
+ * to read the persisted `.tfplan` artifact back off disk (e.g. it was deleted
+ * or became unreadable in the window between the process closing and the
+ * hash read) — distinct from {@link TerraformPlanError} (the process itself
+ * exiting non-zero). Folded into a `{ kind: 'failed' }` outcome rather than
+ * `'success'` so `plan()` still writes `terraform.log`/`run.json`/the
+ * `RunRecordStore` entry for the run (see the try/catch around
+ * `computePlanHash` in `plan()`) instead of letting the raw filesystem error
+ * unwind past that persistence block and reach the renderer unexplained.
+ */
+export class TerraformPlanHashError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly artifactPath: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `Failed to compute SHA-256 hash of plan artifact "${artifactPath}" for run "${runId}": ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = 'TerraformPlanHashError';
+  }
+}
 
 /**
  * Thrown by {@link TerraformService.plan}, {@link TerraformService.apply}, or
@@ -327,7 +369,12 @@ export class TerraformRunPersistError extends Error {
       case 'aborted':
         return 'aborted';
       case 'failed':
-        return `failed (exit code ${outcome.error.exitCode ?? 'null'})`;
+        // `TerraformPlanHashError` (a plan whose process exited `0` but then
+        // failed to hash the persisted artifact) has no `exitCode` — describe
+        // it by its message instead of an exit code that doesn't apply.
+        return 'exitCode' in outcome.error
+          ? `failed (exit code ${outcome.error.exitCode ?? 'null'})`
+          : `failed (${outcome.error.message})`;
     }
   }
 }
@@ -732,6 +779,12 @@ export class TerraformService {
    * value alongside `runId`, `artifactPath`, and `varFilePath`. A "no changes"
    * plan (no summary line present) resolves all three counts to `0`.
    *
+   * Once the process has exited `0` (and the run wasn't aborted), the
+   * persisted `.tfplan` artifact at `artifactPath` is hashed via
+   * {@link computePlanHash} and the SHA-256 hex digest is returned as
+   * `planHash` on {@link TerraformPlanResult} — see #109. A failed or aborted
+   * run never computes or persists a `planHash`.
+   *
    * Every yielded chunk's `line` is also accumulated in-memory as it streams
    * through, and — once the spawned process has closed, regardless of
    * whether the run succeeded, failed, or was aborted — written in a single
@@ -929,15 +982,44 @@ export class TerraformService {
 
       const result = next.value;
 
+      // Compute the SHA-256 hash of the persisted `.tfplan` artifact once the
+      // process has exited cleanly — see {@link computePlanHash}. Only
+      // attempted on the success path: a failed or aborted run has no (or an
+      // incomplete) `.tfplan` artifact worth hashing, so `planHash` stays
+      // unset for those outcomes. Wrapped in try/catch (rather than left to
+      // propagate) because `readFileSync` can still throw here even though
+      // `terraform plan` exited `0` — e.g. the artifact was deleted or became
+      // unreadable in the window between the process closing and this read.
+      // Left unwrapped, that exception would unwind straight past the
+      // writeRunLog/writeRunRecord/persistRunRecord calls below, silently
+      // breaking the "a run record is written on every exit path" guarantee
+      // and surfacing an unexplained raw fs error to the renderer instead of
+      // a proper `TerraformPlanHashError`. Captured here and folded into a
+      // 'failed' outcome below so persistence still runs before it's thrown.
+      let planHash: string | undefined;
+      let planHashError: TerraformPlanHashError | undefined;
+      if (!result.aborted && result.exitCode === 0) {
+        try {
+          planHash = this.computePlanHash(artifactPath);
+        } catch (err) {
+          planHashError = new TerraformPlanHashError(runId, artifactPath, err);
+        }
+      }
+
       // Compute the outcome the generator would return/throw *before*
       // attempting to persist the run record, so a persistence failure below
       // can still report the real plan outcome instead of losing it behind
-      // an unrelated filesystem exception — mirrors apply()/destroy().
+      // an unrelated filesystem exception — mirrors apply()/destroy(). A
+      // `terraform plan` process that exited `0` but then failed to hash is
+      // reported as 'failed' (not 'success' with a missing `planHash`) — see
+      // {@link TerraformPlanHashError}.
       const outcome: TerraformPlanOutcome = result.aborted
         ? { kind: 'aborted' }
-        : result.exitCode === 0
-          ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy } }
-          : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
+        : planHashError
+          ? { kind: 'failed', error: planHashError }
+          : result.exitCode === 0
+            ? { kind: 'success', result: { runId, artifactPath, varFilePath, add, change, destroy, planHash: planHash! } }
+            : { kind: 'failed', error: new TerraformPlanError(result.exitCode) };
 
       // `runRecordWritten` is flipped *before* the write is attempted (not
       // only on success) so the outer `finally` below never re-attempts a
@@ -964,14 +1046,14 @@ export class TerraformService {
       const completedAt = new Date().toISOString();
       const planExitCode = result.aborted ? null : result.exitCode;
       try {
-        this.writeRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId);
+        this.writeRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId, planHash);
       } catch (err) {
         throw new TerraformRunPersistError(runId, outcome, err);
       }
       // Persists the same run to the cloud-agnostic RunRecordStore (DynamoDB
       // for AWS) alongside the local run.json write above — see
       // persistRunRecord's TSDoc for why this is best-effort and awaited.
-      await this.persistRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId);
+      await this.persistRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId, planHash);
 
       if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
@@ -1858,6 +1940,32 @@ export class TerraformService {
   }
 
   /**
+   * Computes the SHA-256 hex digest of the `.tfplan` artifact at
+   * `artifactPath`. Called by {@link plan} exactly once, immediately after
+   * the spawned `terraform plan` process has exited `0`, so the returned
+   * digest reflects the plan binary actually written to disk for this run.
+   * Read via `readFileSync` (rather than streamed) since `.tfplan` artifacts
+   * are small enough that buffering the whole file for a single hash pass is
+   * simpler than wiring up a streaming digest — see #109 for why this hash
+   * exists: a later `apply()` call compares its caller-supplied `planHash`
+   * against this run's stored value before proceeding, so the tfvars/plan an
+   * admin approved is exactly what gets applied.
+   *
+   * Public (rather than `private`) so `TerraformController.apply` can also
+   * call it directly, as a pre-flight step, to *re-read and re-hash the
+   * on-disk artifact* right before spawning `terraform apply` — comparing
+   * `payload.planHash`/`record.planHash` alone only proves the two in-memory
+   * values agree with each other, not that the `.tfplan` file actually
+   * sitting on disk still matches either of them. Without this second,
+   * artifact-level re-verification a swapped/tampered `.tfplan` file (with
+   * the stored `RunRecord.planHash` left untouched) would still pass the
+   * plan-hash gate and get applied.
+   */
+  computePlanHash(artifactPath: string): string {
+    return createHash('sha256').update(readFileSync(artifactPath)).digest('hex');
+  }
+
+  /**
    * Registers a fresh, empty {@link ActiveRunBuffer} for `runId` — called by
    * {@link apply}/{@link destroy} immediately before their spawned process
    * starts, so a concurrent {@link streamRunOutput} call observes the run as
@@ -2002,6 +2110,11 @@ export class TerraformService {
    * so the exact same timestamp can also be handed to
    * {@link persistRunRecord} — the local `run.json` and the remote
    * `RunRecordStore` entry for a given run always agree on `completedAt`.
+   *
+   * `planHash`, when supplied (only by a successful {@link plan} run — see
+   * {@link computePlanHash}), is recorded on {@link TerraformRunRecord.planHash}.
+   * Defaults to `undefined` so `apply()`/`destroy()`'s existing call sites
+   * don't need to pass it.
    */
   private writeRunRecord(
     runId: string,
@@ -2010,6 +2123,7 @@ export class TerraformService {
     completedAt: string,
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
+    planHash: string | undefined = undefined,
   ): void {
     TerraformService.assertValidRunId(runId);
     const runDir = join(this.config.getRunsDir(), runId);
@@ -2020,6 +2134,7 @@ export class TerraformService {
       completedAt,
       exitCode,
       tfvarsVersionId,
+      planHash,
     };
     try {
       mkdirSync(runDir, { recursive: true });
@@ -2059,6 +2174,13 @@ export class TerraformService {
    * observable (e.g. in tests), not because its outcome affects the
    * already-computed plan/apply/destroy outcome those callers act on
    * afterward.
+   *
+   * `planHash`, when supplied (only by a successful {@link plan} run — see
+   * {@link computePlanHash}), is forwarded to `RunRecordService.persist` so
+   * it lands on the persisted `RunRecord.planHash` alongside the local
+   * `run.json`'s copy written by {@link writeRunRecord}. Defaults to
+   * `undefined` so `apply()`/`destroy()`'s existing call sites don't need to
+   * pass it.
    */
   private async persistRunRecord(
     runId: string,
@@ -2067,10 +2189,11 @@ export class TerraformService {
     completedAt: string,
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
+    planHash: string | undefined = undefined,
   ): Promise<void> {
     try {
       await this.runRecordService.persist(
-        { runId, kind, startedAt, completedAt, exitCode, tfvarsVersionId },
+        { runId, kind, startedAt, completedAt, exitCode, tfvarsVersionId, planHash },
         this.getRunLogPath(runId),
       );
     } catch (err) {

@@ -52,9 +52,17 @@ vi.mock('node:fs', () => ({
   readFileSync: readFileSyncMock,
 }));
 
-vi.mock('node:crypto', () => ({
-  randomUUID: randomUUIDMock,
-}));
+// `createHash` is delegated to the real `node:crypto` implementation (rather
+// than mocked) so `computePlanHash`'s digest reflects whatever
+// `readFileSyncMock` returns for a given test — only `randomUUID` needs to be
+// controllable.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    randomUUID: randomUUIDMock,
+  };
+});
 
 import { TerraformService, type TerraformRunChunk, type TerraformRunRecord } from './TerraformService.js';
 import type { ConfigService } from './ConfigService.js';
@@ -205,6 +213,11 @@ beforeEach(() => {
   writeFileSyncMock.mockReset();
   copyFileSyncMock.mockReset();
   readFileSyncMock.mockReset();
+  // Default so a successful `plan()`'s post-exit `computePlanHash()` read of
+  // the `.tfplan` artifact has bytes to hash; tests that care about a
+  // specific `readFileSync` return value (e.g. replaying `terraform.log`)
+  // override this with their own `mockReturnValue` as before.
+  readFileSyncMock.mockReturnValue(Buffer.from(''));
   randomUUIDMock.mockReset();
   randomUUIDMock.mockReturnValue('run-123');
   runRecordPersistMock.mockReset();

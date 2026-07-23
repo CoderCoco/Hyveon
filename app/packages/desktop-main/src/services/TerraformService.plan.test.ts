@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /*
@@ -13,6 +14,7 @@ const {
   existsSyncMock,
   writeFileSyncMock,
   copyFileSyncMock,
+  readFileSyncMock,
   randomUUIDMock,
   runRecordPersistMock,
 } = vi.hoisted(() => {
@@ -22,6 +24,7 @@ const {
   const existsSyncMock = vi.fn();
   const writeFileSyncMock = vi.fn();
   const copyFileSyncMock = vi.fn();
+  const readFileSyncMock = vi.fn();
   const randomUUIDMock = vi.fn();
   const runRecordPersistMock = vi.fn();
   return {
@@ -31,6 +34,7 @@ const {
     existsSyncMock,
     writeFileSyncMock,
     copyFileSyncMock,
+    readFileSyncMock,
     randomUUIDMock,
     runRecordPersistMock,
   };
@@ -46,16 +50,27 @@ vi.mock('node:fs', () => ({
   existsSync: existsSyncMock,
   writeFileSync: writeFileSyncMock,
   copyFileSync: copyFileSyncMock,
+  readFileSync: readFileSyncMock,
 }));
 
-vi.mock('node:crypto', () => ({
-  randomUUID: randomUUIDMock,
-}));
+// `createHash` is delegated to the real `node:crypto` implementation (rather
+// than mocked) so `TerraformService.computePlanHash`'s SHA-256 digest is a
+// real, independently-verifiable hash of whatever bytes `readFileSyncMock`
+// returns for a given test — only `randomUUID` needs to be
+// deterministically controlled here.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    randomUUID: randomUUIDMock,
+  };
+});
 
 import {
   TerraformService,
   TerraformNotFoundError,
   TerraformPlanError,
+  TerraformPlanHashError,
   TerraformRunPersistError,
   type TerraformRunChunk,
   type TerraformPlanResult,
@@ -178,6 +193,12 @@ function queueSpawn(child: FakeChildProcess): void {
   spawnMock.mockImplementationOnce(() => child);
 }
 
+/** Bytes `readFileSyncMock` returns by default in every test — stands in for the persisted `.tfplan` artifact `computePlanHash` reads. */
+const DEFAULT_PLAN_ARTIFACT_BYTES = Buffer.from('fake .tfplan artifact bytes');
+
+/** SHA-256 hex digest a successful `plan()` run is expected to compute/persist for {@link DEFAULT_PLAN_ARTIFACT_BYTES}. */
+const EXPECTED_PLAN_HASH = createHash('sha256').update(DEFAULT_PLAN_ARTIFACT_BYTES).digest('hex');
+
 /**
  * Waits for every already-queued microtask to drain (via a macrotask
  * boundary) before returning. `plan()` awaits the binary/version resolution
@@ -230,6 +251,8 @@ beforeEach(() => {
   existsSyncMock.mockReturnValue(true);
   writeFileSyncMock.mockReset();
   copyFileSyncMock.mockReset();
+  readFileSyncMock.mockReset();
+  readFileSyncMock.mockReturnValue(DEFAULT_PLAN_ARTIFACT_BYTES);
   randomUUIDMock.mockReset();
   randomUUIDMock.mockReturnValue('run-123');
   runRecordPersistMock.mockReset();
@@ -575,12 +598,13 @@ describe('TerraformService.plan run record persistence', () => {
       kind: 'plan',
       exitCode: 0,
       tfvarsVersionId: 'tfvars-version-abc',
+      planHash: EXPECTED_PLAN_HASH,
     });
     expect(typeof record.startedAt).toBe('string');
     expect(typeof record.completedAt).toBe('string');
   });
 
-  it('should write a TerraformRunRecord with kind "plan" and the non-zero exit code when the process exits non-zero', async () => {
+  it('should write a TerraformRunRecord with kind "plan" and the non-zero exit code when the process exits non-zero, with no planHash', async () => {
     queueSuccessfulResolution();
     randomUUIDMock.mockReturnValue('run-record-2');
     const child = new FakeChildProcess();
@@ -603,9 +627,11 @@ describe('TerraformService.plan run record persistence', () => {
     const [, contents] = recordCalls[0] as [string, string];
     const record = JSON.parse(contents);
     expect(record).toMatchObject({ runId: 'run-record-2', kind: 'plan', exitCode: 1 });
+    expect(record).not.toHaveProperty('planHash');
+    expect(readFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it('should write a TerraformRunRecord with kind "plan" and a null exit code when the run is aborted mid-flight', async () => {
+  it('should write a TerraformRunRecord with kind "plan" and a null exit code when the run is aborted mid-flight, with no planHash', async () => {
     queueSuccessfulResolution();
     randomUUIDMock.mockReturnValue('run-record-3');
     const child = new FakeChildProcess();
@@ -638,6 +664,7 @@ describe('TerraformService.plan run record persistence', () => {
     const [, contents] = recordCalls[0] as [string, string];
     const record = JSON.parse(contents);
     expect(record).toMatchObject({ runId: 'run-record-3', kind: 'plan', exitCode: null });
+    expect(record).not.toHaveProperty('planHash');
   });
 
   it('should throw TerraformRunPersistError carrying the real outcome when the run record write fails', async () => {
@@ -683,6 +710,69 @@ describe('TerraformService.plan run record persistence', () => {
     expect((rejection.cause as Error).cause).toBe(persistFailure);
   });
 
+  it('should still write run.json, terraform.log, and the RunRecordStore entry — and throw TerraformPlanHashError — when the process exits 0 but computePlanHash fails to read the persisted artifact', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-hash-fail');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+    const hashReadFailure = new Error('ENOENT: no such file or directory');
+    // Only the .tfplan artifact read (computePlanHash) fails — every other
+    // readFileSync caller in this test file uses the default mock, so this
+    // targets exactly the call plan() makes once the process has exited 0.
+    readFileSyncMock.mockImplementation((path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('.tfplan')) {
+        throw hashReadFailure;
+      }
+      return Buffer.from('plan-bytes');
+    });
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    const pending = collectPlanChunks(service.plan(), () => {
+      child.emitStdout('Plan: 3 to add, 1 to change, 2 to destroy.\n');
+      child.close(0);
+    });
+
+    // The raw fs error must not escape unwrapped — it's surfaced as a
+    // descriptive TerraformPlanHashError instead.
+    await expect(pending).rejects.toBeInstanceOf(TerraformPlanHashError);
+    const rejection = (await pending.catch((err: unknown) => err)) as TerraformPlanHashError;
+    expect(rejection.runId).toBe('run-record-hash-fail');
+    expect(rejection.cause).toBe(hashReadFailure);
+
+    // terraform.log must still have been written despite the hash failure.
+    const logCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-hash-fail/terraform.log',
+    );
+    expect(logCalls).toHaveLength(1);
+
+    // run.json must still have been written, with exitCode 0 (the process
+    // really did succeed) and no planHash (the hash computation failed).
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-hash-fail/run.json',
+    );
+    expect(recordCalls).toHaveLength(1);
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record).toMatchObject({ runId: 'run-record-hash-fail', kind: 'plan', exitCode: 0 });
+    expect(record).not.toHaveProperty('planHash');
+
+    // The cloud-agnostic RunRecordStore must also still have received this
+    // run, mirroring the local run.json write above.
+    expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
+    const [params] = runRecordPersistMock.mock.calls[0] as [
+      { runId: string; kind: string; exitCode: number | null; planHash?: string },
+      string,
+    ];
+    expect(params).toMatchObject({ runId: 'run-record-hash-fail', kind: 'plan', exitCode: 0 });
+    expect(params.planHash).toBeUndefined();
+  });
+
   it('should write exactly one run.json record with a null exitCode when the generator is force-closed before the process exits', async () => {
     queueSuccessfulResolution();
     randomUUIDMock.mockReturnValue('run-record-5');
@@ -724,6 +814,7 @@ describe('TerraformService.plan run record persistence', () => {
     expect(record.kind).toBe('plan');
     expect(record.exitCode).toBeNull();
     expect(record.tfvarsVersionId).toBe('v1');
+    expect(record).not.toHaveProperty('planHash');
   });
 });
 
@@ -745,7 +836,7 @@ describe('TerraformService.plan RunRecordService persistence', () => {
 
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
     const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
-      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string },
+      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string; planHash?: string },
       string,
     ];
     expect(params).toMatchObject({
@@ -753,6 +844,7 @@ describe('TerraformService.plan RunRecordService persistence', () => {
       kind: 'plan',
       exitCode: 0,
       tfvarsVersionId: 'tfvars-version-abc',
+      planHash: EXPECTED_PLAN_HASH,
     });
     expect(logFilePath).toBe('/repo/runs/run-store-1/terraform.log');
 
@@ -786,10 +878,11 @@ describe('TerraformService.plan RunRecordService persistence', () => {
 
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
     const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
-      { runId: string; kind: string; exitCode: number | null },
+      { runId: string; kind: string; exitCode: number | null; planHash?: string },
       string,
     ];
     expect(params).toMatchObject({ runId: 'run-store-2', kind: 'plan', exitCode: 1 });
+    expect(params.planHash).toBeUndefined();
     expect(logFilePath).toBe('/repo/runs/run-store-2/terraform.log');
   });
 
@@ -816,10 +909,11 @@ describe('TerraformService.plan RunRecordService persistence', () => {
 
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
     const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
-      { runId: string; kind: string; exitCode: number | null },
+      { runId: string; kind: string; exitCode: number | null; planHash?: string },
       string,
     ];
     expect(params).toMatchObject({ runId: 'run-store-3', kind: 'plan', exitCode: null });
+    expect(params.planHash).toBeUndefined();
     expect(logFilePath).toBe('/repo/runs/run-store-3/terraform.log');
   });
 
@@ -865,7 +959,7 @@ describe('TerraformService.plan RunRecordService persistence', () => {
       child.close(0);
     });
 
-    expect(result).toMatchObject({ runId: 'run-store-5', add: 3, change: 1, destroy: 2 });
+    expect(result).toMatchObject({ runId: 'run-store-5', add: 3, change: 1, destroy: 2, planHash: EXPECTED_PLAN_HASH });
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
   });
 
@@ -895,10 +989,11 @@ describe('TerraformService.plan RunRecordService persistence', () => {
 
     expect(runRecordPersistMock).toHaveBeenCalledTimes(1);
     const [params, logFilePath] = runRecordPersistMock.mock.calls[0] as [
-      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string },
+      { runId: string; kind: string; exitCode: number | null; tfvarsVersionId?: string; planHash?: string },
       string,
     ];
     expect(params).toMatchObject({ runId: 'run-store-6', kind: 'plan', exitCode: null, tfvarsVersionId: 'v1' });
+    expect(params.planHash).toBeUndefined();
     expect(logFilePath).toBe('/repo/runs/run-store-6/terraform.log');
   });
 });
@@ -929,7 +1024,9 @@ describe('TerraformService.plan summary parsing and return value', () => {
       add: 3,
       change: 1,
       destroy: 2,
+      planHash: EXPECTED_PLAN_HASH,
     });
+    expect(readFileSyncMock).toHaveBeenCalledWith('/repo/runs/run-789/run-789.tfplan');
   });
 
   it('should resolve all three counts to 0 when the plan has no changes', async () => {

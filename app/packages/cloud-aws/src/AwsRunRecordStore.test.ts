@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { RunLockHeldError } from '@hyveon/shared';
 import type { RunLock, RunRecord } from '@hyveon/shared';
@@ -132,6 +138,85 @@ describe('AwsRunRecordStore', () => {
     it('should throw a clear error when constructed without a getConfig callback', async () => {
       const store = makeStore(null);
       await expect(store.putRecord(makeRecord())).rejects.toThrow(
+        'AwsRunRecordStore: table not configured. Supply a getConfig callback that resolves { tableName }.',
+      );
+    });
+  });
+
+  describe('getRecordByRunId', () => {
+    it('should query the RUN partition newest-first and return the matching record', async () => {
+      const record = makeRecord();
+      ddbMock.on(QueryCommand).resolves({ Items: [{ pk: 'RUN', ...record }] });
+
+      const store = makeStore();
+      await expect(store.getRecordByRunId('run-123')).resolves.toEqual(record);
+
+      const calls = ddbMock.commandCalls(QueryCommand);
+      expect(calls).toHaveLength(1);
+      const input = calls[0]!.args[0].input;
+      expect(input.TableName).toBe('hyveon-runs');
+      expect(input.KeyConditionExpression).toBe('pk = :pk');
+      expect(input.FilterExpression).toBe('runId = :runId');
+      expect(input.ExpressionAttributeValues).toEqual({ ':pk': 'RUN', ':runId': 'run-123' });
+      expect(input.ScanIndexForward).toBe(false);
+    });
+
+    it('should return the newest record when the query returns multiple items for the runId', async () => {
+      // ScanIndexForward: false means DynamoDB returns items sk-descending
+      // (sk is `<startedAt>#<runId>`), so the newest record is Items[0].
+      const newest = makeRecord({
+        sk: '2026-07-18T00:00:00.000Z#run-123',
+        startedAt: '2026-07-18T00:00:00.000Z',
+        status: 'success',
+      });
+      const older = makeRecord({
+        sk: '2026-07-17T00:00:00.000Z#run-123',
+        startedAt: '2026-07-17T00:00:00.000Z',
+        status: 'error',
+      });
+      ddbMock.on(QueryCommand).resolves({ Items: [{ pk: 'RUN', ...newest }, { pk: 'RUN', ...older }] });
+
+      const store = makeStore();
+      await expect(store.getRecordByRunId('run-123')).resolves.toEqual(newest);
+    });
+
+    it('should page through LastEvaluatedKey until a matching item is found', async () => {
+      const record = makeRecord();
+      ddbMock
+        .on(QueryCommand)
+        .resolvesOnce({ Items: [], LastEvaluatedKey: { pk: 'RUN', sk: 'cursor-1' } })
+        .resolvesOnce({ Items: [{ pk: 'RUN', ...record }] });
+
+      const store = makeStore();
+      await expect(store.getRecordByRunId('run-123')).resolves.toEqual(record);
+
+      const calls = ddbMock.commandCalls(QueryCommand);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]!.args[0].input.ExclusiveStartKey).toBeUndefined();
+      expect(calls[1]!.args[0].input.ExclusiveStartKey).toEqual({ pk: 'RUN', sk: 'cursor-1' });
+    });
+
+    it('should return undefined once the partition is exhausted with no match', async () => {
+      ddbMock.on(QueryCommand).resolves({ Items: [] });
+
+      const store = makeStore();
+      await expect(store.getRecordByRunId('missing-run')).resolves.toBeUndefined();
+    });
+
+    it('should restore optional fields (tfvarsVersionId, logS3Key) on the returned record when present', async () => {
+      const record = makeRecord({ tfvarsVersionId: 'v-1', logS3Key: 'runs/run-123.log' });
+      ddbMock.on(QueryCommand).resolves({ Items: [{ pk: 'RUN', ...record }] });
+
+      const store = makeStore();
+      const result = await store.getRecordByRunId('run-123');
+
+      expect(result?.tfvarsVersionId).toBe('v-1');
+      expect(result?.logS3Key).toBe('runs/run-123.log');
+    });
+
+    it('should throw a clear error when constructed without a getConfig callback', async () => {
+      const store = makeStore(null);
+      await expect(store.getRecordByRunId('run-123')).rejects.toThrow(
         'AwsRunRecordStore: table not configured. Supply a getConfig callback that resolves { tableName }.',
       );
     });

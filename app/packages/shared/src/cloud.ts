@@ -243,6 +243,19 @@ export interface RunRecordStore {
   putRecord(record: RunRecord): Promise<void>;
 
   /**
+   * Looks up a previously persisted run record by its `runId` (as opposed to
+   * `putRecord`'s `sk`-based keying), since callers such as the apply-status
+   * IPC handler only have the `runId` minted at run start and not the
+   * `<startedAt>#<runId>` sort key.
+   *
+   * @param runId - Unique identifier of the run to look up (matches
+   *   {@link RunRecord.runId}).
+   * @returns The matching {@link RunRecord}, or `undefined` if no record with
+   *   that `runId` exists in the store.
+   */
+  getRecordByRunId(runId: string): Promise<RunRecord | undefined>;
+
+  /**
    * Writes a run's captured log to the remote file store, keyed by `runId`.
    *
    * @param runId - Unique identifier of the run the log belongs to.
