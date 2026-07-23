@@ -1088,7 +1088,7 @@ describe('preload dispatcher', () => {
       });
 
       it('should invoke the terraform.approve channel with the opts payload', async () => {
-        const result = { runId: 'run-001', approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
+        const result = { approved: true, approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
         ipcInvoke.mockResolvedValue(result);
         const terraform = bridge['terraform'] as { approve: (opts: { planRunId: string }) => Promise<unknown> };
         const opts = { planRunId: 'run-001' };
@@ -1109,7 +1109,7 @@ describe('preload dispatcher', () => {
 
       it('should call the registered mock instead of ipcRenderer.invoke when terraform.approve is mocked', async () => {
         const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
-        const result = { runId: 'run-mock', approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
+        const result = { approved: true, approvedBy: 'admin@example.com', approvedAt: '2026-07-21T00:00:00.000Z' };
         const mockHandler = vi.fn().mockResolvedValue(result);
         testApi.mock('terraform.approve', mockHandler);
 

@@ -573,15 +573,20 @@ export interface TerraformApplyPayload {
 /**
  * Immediate acknowledgement the `terraform.approve` IPC channel resolves
  * with once the identified plan run has been marked approved. Mirrors
- * `POST /api/terraform/runs/:id/approve` (#109), which records `approvedBy`
- * and `approvedAt` on the underlying `RunRecord` — see `RunRecord.approvedBy`
- * / `RunRecord.approvedAt` in `@hyveon/shared/runs.ts`, the source of truth
- * for the approval fields this type mirrors.
+ * `TerraformApproveAck` in `@hyveon/desktop-main/src/controllers/terraform.controller.ts`
+ * — that type is the source of truth; keep this copy in sync with it.
+ * `approved: true` means `RunRecordService.approveRun` succeeded and
+ * `approvedBy`/`approvedAt` mirror the values stamped onto the persisted
+ * `RunRecord`. `approved: false` means the request failed (invalid payload,
+ * missing service, or a thrown error) — `error` carries a human-readable
+ * description and `approvedBy`/`approvedAt` are omitted. Note there is no
+ * `runId` field — the controller never returns one.
  */
 export interface TerraformApproveAck {
-  runId: string;
-  approvedBy: string;
-  approvedAt: string;
+  approved: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  error?: string;
 }
 
 /**
