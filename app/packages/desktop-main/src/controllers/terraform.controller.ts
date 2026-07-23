@@ -624,9 +624,18 @@ export class TerraformController implements OnModuleInit {
    *    is rejected with a {@link RunLockHeldError}-derived message and
    *    `conflict: 'apply'` and no lock is acquired by this call (so there is
    *    nothing for it to release).
+   * 7. Immediately after step 6's `await` settles, the workspace check from
+   *    step 5 is repeated (`TerraformService.getWorkspaceInFlight()` again).
+   *    Step 6 is itself an `await`, so a concurrent `plan`/`init` could have
+   *    reserved the workspace during that gap; this re-check closes it. If
+   *    the workspace is now busy, the apply lock acquired in step 6 is
+   *    released (`RunService.releaseRun`) and the call is rejected with
+   *    `conflict` set to the new in-flight run — mirroring step 5's ack
+   *    shape — before anything externally visible (the audit entry, the
+   *    streaming loop) has happened.
    *
-   * Any failure in 1–6 resolves immediately with `{ started: false, error }`
-   * (plus `conflict` for 5–6) — `TerraformService.apply` is never called, so
+   * Any failure in 1–7 resolves immediately with `{ started: false, error }`
+   * (plus `conflict` for 5–7) — `TerraformService.apply` is never called, so
    * no `terraform apply` process is ever spawned, and no run record is
    * written for the rejected attempt.
    *
@@ -641,15 +650,16 @@ export class TerraformController implements OnModuleInit {
    * `TerraformService.plan` persisted and what `TerraformService.apply`
    * itself independently re-validates before spawning).
    *
-   * Once the lock is acquired, the generator's first step is driven
-   * *synchronously* — the same synchronous-first-`.next()` workspace
-   * reservation (before anything is `await`ed) that {@link plan} uses, for
-   * the same TOCTOU reason described at that call site: `TerraformService`'s
-   * `workspaceInFlight` check-and-set runs synchronously, before its own
-   * first `await`, so driving `.next()` here — rather than only from inside
-   * the fire-and-forget block below — closes the gap a second concurrent
-   * call could otherwise race through. The un-awaited first-step promise is
-   * given a no-op `.catch()` purely so Node doesn't log an
+   * Once the lock is acquired and step 7's post-lock workspace re-check has
+   * passed, the generator's first step is driven *synchronously* — the same
+   * synchronous-first-`.next()` workspace reservation (before anything is
+   * `await`ed) that {@link plan} uses, for the same TOCTOU reason described
+   * at that call site: `TerraformService`'s `workspaceInFlight` check-and-set
+   * runs synchronously, before its own first `await`, so driving `.next()`
+   * here — rather than only from inside the fire-and-forget block below —
+   * closes the gap a second concurrent call could otherwise race through
+   * between this re-check and the reservation itself. The un-awaited
+   * first-step promise is given a no-op `.catch()` purely so Node doesn't log an
    * unhandledRejection warning while it sits unawaited; the real handling of
    * whatever it settles to happens in the streaming loop below, the same way
    * every later `.next()` result already is. This means a pre-spawn failure
@@ -794,6 +804,27 @@ export class TerraformController implements OnModuleInit {
       return { started: false, error };
     }
 
+    // `createRun` above is the first `await` since the `getWorkspaceInFlight()`
+    // check at the top of this method, so a concurrent `plan`/`init` could
+    // have reserved the shared workspace during that gap. Re-check here,
+    // synchronously before anything externally visible happens, and release
+    // the just-acquired apply lock if the workspace is now busy — otherwise
+    // this call would ack `{ started: true }`, record a spurious 'apply'
+    // audit entry, and only then fail on the end channel once the streaming
+    // loop's `await firstStep` rejects.
+    const inFlightAfterLock = this.terraform.getWorkspaceInFlight();
+    if (inFlightAfterLock) {
+      await this.runService.releaseRun(payload.planRunId);
+      const error =
+        `terraform apply refused: ${inFlightAfterLock} is already in flight; wait for it to finish ` +
+        'before submitting another apply';
+      logger.error('terraform apply rejected: workspace busy after acquiring apply lock', {
+        inFlight: inFlightAfterLock,
+        planRunId: payload.planRunId,
+      });
+      return { started: false, error, conflict: inFlightAfterLock };
+    }
+
     const runId = payload.planRunId;
     const sender: WebContents = ctx.evt.sender;
     const ac = new AbortController();
@@ -801,8 +832,8 @@ export class TerraformController implements OnModuleInit {
     // Reserve the shared workspace *synchronously* — mirrors plan()'s own
     // synchronous-first-`.next()` reservation (see the inline comment on
     // that call site for why the ordering matters): no `await` runs between
-    // the `getWorkspaceInFlight()` check above and this `stream.next()`
-    // call, which is the only thing that actually flips
+    // the `getWorkspaceInFlight()` re-check immediately above and this
+    // `stream.next()` call, which is the only thing that actually flips
     // `TerraformService`'s internal `workspaceInFlight` lock. The `.catch()`
     // below exists solely to mark `firstStep` as "handled" so Node doesn't
     // log an unhandledRejection warning while it sits unawaited; the real

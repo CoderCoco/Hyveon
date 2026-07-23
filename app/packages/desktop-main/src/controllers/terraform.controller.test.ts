@@ -913,6 +913,20 @@ describe('TerraformController', () => {
       expect(record).not.toHaveBeenCalled();
     });
 
+    it('should release the just-acquired apply lock and reject with { started: false, error, conflict } when the workspace becomes busy between the pre-lock check and RunService.createRun (TOCTOU regression)', async () => {
+      const { controller, terraform, createRun, releaseRun, record } = makeApplyController();
+      vi.mocked(terraform.getWorkspaceInFlight).mockReturnValueOnce(null).mockReturnValueOnce('plan');
+      const { ctx } = makeCtx();
+
+      const result = await controller.apply(APPLY_PAYLOAD, ctx);
+
+      expect(result).toEqual({ started: false, error: expect.any(String), conflict: 'plan' });
+      expect(createRun).toHaveBeenCalledWith('apply', 'test-operator', 'plan-run-1');
+      expect(releaseRun).toHaveBeenCalledWith('plan-run-1');
+      expect(terraform.apply).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
     it('should reject with { started: false, error, conflict: "apply" } and never call TerraformService.apply when the durable apply lock is already held (RunLockHeldError)', async () => {
       const { controller, terraform, createRun, releaseRun, record } = makeApplyController();
       const heldLock: RunLock = {
