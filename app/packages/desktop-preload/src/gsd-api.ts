@@ -754,6 +754,33 @@ export interface TerraformApplyPayload {
 }
 
 /**
+ * Result the `terraform.destroy.mintToken` IPC channel resolves with —
+ * `token` must be supplied back on {@link TerraformDestroyPayload.confirmationToken}
+ * within its short expiry window (see `TerraformService.mintDestroyConfirmationToken`).
+ *
+ * Mirrors `TerraformDestroyMintAck` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformDestroyMintAck {
+  token: string;
+}
+
+/**
+ * Payload accepted by the `terraform.destroy` IPC channel. `confirmationToken`
+ * must be the most recently minted, unexpired, not-yet-consumed value
+ * returned by `terraform.destroy.mintToken` — enforced server-side, never
+ * trusted from the client beyond this single round-trip.
+ *
+ * Mirrors `TerraformDestroyPayload` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformDestroyPayload {
+  confirmationToken: string;
+}
+
+/**
  * Immediate acknowledgement the `terraform.approve` IPC channel resolves
  * with once the identified plan run has been marked approved. Mirrors
  * `TerraformApproveAck` in `@hyveon/desktop-main/src/controllers/terraform.controller.ts`
@@ -1074,6 +1101,26 @@ export interface GsdTerraformApi {
    * lock.
    */
   apply: (payload: TerraformApplyPayload) => Promise<TerraformPlanAck>;
+  /**
+   * Mints a fresh, short-lived destroy-confirmation token by invoking the
+   * `terraform.destroy.mintToken` IPC channel — call this the moment the
+   * operator's type-to-confirm phrase is accepted, then pass the returned
+   * `token` straight through to {@link destroy}'s `confirmationToken` before
+   * it expires. Minting a new token supersedes (invalidates) any prior
+   * unconsumed one.
+   */
+  mintDestroyToken: () => Promise<TerraformDestroyMintAck>;
+  /**
+   * Submits a `terraform destroy -auto-approve` run gated on
+   * `payload.confirmationToken` (minted via {@link mintDestroyToken}) by
+   * invoking the `terraform.destroy` IPC channel, resolving an ack shaped
+   * like {@link TerraformPlanAck}. Mirrors {@link apply}: this call only
+   * resolves the initial acknowledgement — it does not itself stream the
+   * run's output; consume `gsd.terraform.runs.streamLogs(runId)` (tagged
+   * with the returned `runId`) for progress, the same seam every other
+   * `terraform` run's live output flows through.
+   */
+  destroy: (payload: TerraformDestroyPayload) => Promise<TerraformPlanAck>;
   /**
    * Returns the current Terraform outputs by invoking the `terraform.output`
    * IPC channel with `{ force }`. `force` defaults to `false`, matching

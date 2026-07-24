@@ -59,6 +59,8 @@ import type {
   LogChunk,
   TerraformApplyPayload,
   TerraformApproveAck,
+  TerraformDestroyMintAck,
+  TerraformDestroyPayload,
   TerraformInitConfig,
   TerraformPlanAck,
   TerraformPlanPayload,
@@ -606,6 +608,8 @@ const api: GsdApi = {
     plan: (opts?: TerraformPlanPayload) => invoke<TerraformPlanAck>('terraform.plan', opts),
     approve: (opts: { planRunId: string }) => invoke<TerraformApproveAck>('terraform.approve', opts),
     apply: (payload: TerraformApplyPayload) => invoke<TerraformPlanAck>('terraform.apply', payload),
+    mintDestroyToken: () => invoke<TerraformDestroyMintAck>('terraform.destroy.mintToken'),
+    destroy: (payload: TerraformDestroyPayload) => invoke<TerraformPlanAck>('terraform.destroy', payload),
     output: (force?: boolean) => invoke<TfOutputs | null>('terraform.output', { force }),
     runs: {
       get: (runId: string) => invoke<TerraformRunsGetResult>('terraform.runs.get', { runId }),

@@ -1580,10 +1580,14 @@ export class TerraformService {
    * check runs *after* the {@link workspaceInFlight} lock check below so a
    * "busy" refusal doesn't consume (and waste) an otherwise-valid token.
    *
-   * A fresh `runId` is minted for every call (`randomUUID()`, mirroring
-   * {@link plan}) and its run directory `<runsDir>/<runId>/` is created ahead
-   * of the spawn, since `destroy` has no preceding `plan()` artifact to
-   * inherit a `runId` from.
+   * A fresh `runId` is minted for every call (`randomUUID()`, or the caller's
+   * `preMintedRunId` when supplied — mirrors {@link plan}'s own
+   * `preMintedRunId` parameter, letting `TerraformController.destroy` mint
+   * the id up front so it can reserve the `RunService` apply lock and tag
+   * chunk/end IPC messages before this generator's first `.next()` call ever
+   * runs) and its run directory `<runsDir>/<runId>/` is created ahead of the
+   * spawn, since `destroy` has no preceding `plan()` artifact to inherit a
+   * `runId` from.
    *
    * While streaming, stdout lines are scanned via {@link DESTROY_SUMMARY_PATTERN}
    * for Terraform's summary line (`Destroy complete! Resources: N destroyed.`)
@@ -1633,6 +1637,7 @@ export class TerraformService {
   async *destroy(
     confirmationToken: string,
     signal?: AbortSignal,
+    preMintedRunId?: string,
   ): AsyncGenerator<TerraformRunChunk, TerraformDestroyResult | undefined> {
     if (this.workspaceInFlight) {
       throw new Error(
@@ -1640,10 +1645,13 @@ export class TerraformService {
           'running; wait for it to finish before calling destroy() again.',
       );
     }
+    if (preMintedRunId !== undefined) {
+      TerraformService.assertValidRunId(preMintedRunId);
+    }
     this.assertFreshDestroyConfirmation(confirmationToken);
 
     this.workspaceInFlight = 'destroy';
-    const runId = randomUUID();
+    const runId = preMintedRunId ?? randomUUID();
     // Hoisted for the same reason as apply()'s equivalents — a force-closed
     // generator (consumer break/.return()/.throw()) unwinds straight past
     // the writeRunRecord call below to the outer finally, which needs to see

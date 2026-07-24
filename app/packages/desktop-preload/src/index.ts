@@ -15,6 +15,8 @@ export type {
   TerraformPlanPayload,
   TerraformApplyPayload,
   TerraformApproveAck,
+  TerraformDestroyPayload,
+  TerraformDestroyMintAck,
   TerraformRollbackResolveAck,
   TerraformRollbackConfirmAck,
 } from './gsd-api.js';

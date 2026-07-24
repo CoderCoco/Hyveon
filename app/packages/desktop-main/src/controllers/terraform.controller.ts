@@ -10,10 +10,12 @@ import {
   TerraformInitError,
   TerraformPlanError,
   TerraformApplyError,
+  TerraformDestroyError,
   type TerraformInitConfig,
   type TerraformRunChunk,
   type TerraformPlanResult,
   type TerraformApplyResult,
+  type TerraformDestroyResult,
 } from '../services/TerraformService.js';
 import { ConfigService, type TfOutputs } from '../services/ConfigService.js';
 import { AuditService } from '../services/AuditService.js';
@@ -38,6 +40,12 @@ const APPLY_CHUNK_CHANNEL = 'terraform.apply.chunk';
 
 /** Fixed side-channel `TerraformController.apply` sends its terminal message on. */
 const APPLY_END_CHANNEL = 'terraform.apply.end';
+
+/** Fixed side-channel `TerraformController.destroy` pushes streamed output on. */
+const DESTROY_CHUNK_CHANNEL = 'terraform.destroy.chunk';
+
+/** Fixed side-channel `TerraformController.destroy` sends its terminal message on. */
+const DESTROY_END_CHANNEL = 'terraform.destroy.end';
 
 /**
  * Message payload sent, in order, on {@link CHUNK_CHANNEL} for every chunk
@@ -265,6 +273,58 @@ interface TerraformApplyEndMessage {
 }
 
 /**
+ * Result {@link TerraformController.mintDestroyToken} resolves with —
+ * delegates directly to `TerraformService.mintDestroyConfirmationToken()`,
+ * which the operator must then supply back on {@link TerraformController.destroy}'s
+ * payload within its short expiry window (see that method's TSDoc).
+ */
+interface TerraformDestroyMintAck {
+  token: string;
+}
+
+/**
+ * Payload accepted by {@link TerraformController.destroy}. `confirmationToken`
+ * must be the most recently minted, unexpired, not-yet-consumed value
+ * returned by {@link TerraformController.mintDestroyToken} — enforced
+ * server-side by `TerraformService.destroy`'s own
+ * `assertFreshDestroyConfirmation` gate (see {@link DestroyNotConfirmedError}).
+ *
+ * Mirrors `TerraformDestroyPayload` in
+ * `@hyveon/desktop-preload/src/gsd-api.ts` — keep this shape in sync with
+ * that sibling contract.
+ */
+interface TerraformDestroyPayload {
+  confirmationToken: string;
+}
+
+/**
+ * Message payload sent, in order, on {@link DESTROY_CHUNK_CHANNEL} for every
+ * chunk `TerraformService.destroy` yields. `runId` ties the chunk back to the
+ * `destroy()` call that produced it — the same id already handed back in the
+ * ack `TerraformController.destroy` resolves — mirrors
+ * {@link TerraformApplyChunkMessage}.
+ */
+interface TerraformDestroyChunkMessage {
+  runId: string;
+  chunk: TerraformRunChunk;
+}
+
+/**
+ * Message payload sent once on {@link DESTROY_END_CHANNEL} when a
+ * `terraform.destroy` run finishes. `exitCode` is `0` on success. On failure
+ * it carries whatever exit code the spawned process reported (or `null` when
+ * the run failed before/without an exit code — e.g. an unconfirmed-token
+ * rejection that never spawned `terraform`), plus a stringified `error`.
+ * `result` is present only on a successful run.
+ */
+interface TerraformDestroyEndMessage {
+  runId: string;
+  exitCode: number | null;
+  error?: string;
+  result?: TerraformDestroyResult;
+}
+
+/**
  * IPC-only Terraform controller. Handles Electron main-process messages via
  * `@MessagePattern` — no HTTP routes are registered here.
  *
@@ -280,7 +340,10 @@ interface TerraformApplyEndMessage {
  * `RunRecordService.approveRun` (see issue #109). {@link apply} mirrors
  * {@link plan}'s streaming/bridging shape once more, gated behind the
  * plan-hash + approval + apply-lock checks described in its own TSDoc (issue
- * #109).
+ * #109). {@link destroy} mirrors {@link apply}'s streaming/bridging/lock
+ * shape a third time, gated behind a short-lived confirmation token minted by
+ * {@link mintDestroyToken} (issue #307) instead of a plan/approval lineage —
+ * `mintDestroyToken` itself needs no bridging, same as {@link approve}.
  */
 @Controller()
 export class TerraformController implements OnModuleInit {
@@ -333,6 +396,15 @@ export class TerraformController implements OnModuleInit {
   private readonly activeApplies = new Map<string, AbortController>();
 
   /**
+   * Per-call `AbortController`s keyed by the `runId` pre-minted in
+   * {@link destroy}. Mirrors {@link activeApplies} — lets a future
+   * `terraform.destroy.cancel` channel reach the right in-flight run, and
+   * lets the `WebContents` `'destroyed'` listener in {@link destroy} abort
+   * immediately without racing the chunk loop's own `isDestroyed()` check.
+   */
+  private readonly activeDestroys = new Map<string, AbortController>();
+
+  /**
    * Registers an `ipcMain.handle` bridge for the `terraform.init` channel
    * after the Nest module initialises, so that
    * `ipcRenderer.invoke('terraform.init', config)` in the preload actually
@@ -379,6 +451,16 @@ export class TerraformController implements OnModuleInit {
     ipcMain.removeHandler('terraform.apply');
     ipcMain.handle('terraform.apply', (evt, payload: TerraformApplyPayload) =>
       this.apply(payload, { evt: evt as IpcMainInvokeEvent }),
+    );
+    // `terraform.destroy` streams chunk/end messages the same way
+    // `terraform.apply` does — see `SELF_BRIDGED_PATTERNS` in
+    // `../ipc-main-bridge.ts`, which excludes it from the generic bridge for
+    // the same reason. `terraform.destroy.mintToken` needs no such bridging
+    // (it resolves a single value), so the generic bridge wires it
+    // automatically — no entry here.
+    ipcMain.removeHandler('terraform.destroy');
+    ipcMain.handle('terraform.destroy', (evt, payload: TerraformDestroyPayload) =>
+      this.destroy(payload, { evt: evt as IpcMainInvokeEvent }),
     );
   }
 
@@ -955,6 +1037,219 @@ export class TerraformController implements OnModuleInit {
   }
 
   /**
+   * Mints a fresh, short-lived destroy-confirmation token by delegating to
+   * `TerraformService.mintDestroyConfirmationToken()` — the operator's
+   * type-to-confirm dialog calls this the moment the confirmation phrase is
+   * accepted, then submits the returned token straight through to
+   * {@link destroy}'s payload before it expires. Minting a new token
+   * supersedes (invalidates) any prior unconsumed one, so only the most
+   * recently minted token can ever confirm a destroy.
+   *
+   * Needs no manual bridging — it resolves a single value rather than
+   * streaming progress, so the generic `ipcMain.handle` bridge in
+   * `../ipc-main-bridge.ts` wires it automatically (it isn't listed in
+   * `SELF_BRIDGED_PATTERNS`).
+   *
+   * Reachable via the Electron IPC transport (`terraform.destroy.mintToken`).
+   */
+  @MessagePattern('terraform.destroy.mintToken')
+  mintDestroyToken(): TerraformDestroyMintAck {
+    return { token: this.terraform.mintDestroyConfirmationToken() };
+  }
+
+  /**
+   * Kicks off `terraform destroy -auto-approve` and streams its output back
+   * to the renderer — mirrors {@link apply}'s streaming/lock/audit shape
+   * almost exactly, but gated behind `payload.confirmationToken` (minted via
+   * {@link mintDestroyToken}) instead of a plan/approval lineage, since a
+   * destroy has no preceding plan to inherit a `runId`, `tfvarsVersionId`, or
+   * artifact path from.
+   *
+   * Validates `payload.confirmationToken` is present, then requires
+   * `runService` to be configured (mirrors {@link apply}'s dependency guard;
+   * `runRecord`/`config` aren't needed here since destroy has no plan-record
+   * lookup or `.tfplan` artifact to verify).
+   *
+   * Checks `TerraformService.getWorkspaceInFlight()` first: if `init`,
+   * `plan`, `apply`, or `destroy` is already running against the shared
+   * workspace, no run is attempted — resolves immediately with
+   * `{ started: false, error, conflict: <in-flight op> }`. No chunk/end
+   * messages are sent, no audit entry is recorded, and — critically — the
+   * confirmation token minted for this attempt is **not** consumed (the
+   * token gate inside `TerraformService.destroy` only ever runs once the
+   * generator actually starts), so a busy rejection never burns an otherwise
+   * valid token.
+   *
+   * Otherwise a `runId` is pre-minted (`randomUUID()`) and the apply lock is
+   * acquired via `RunService.createRun('destroy', initiator, runId)` —
+   * mirrors {@link apply}'s `RunLockHeldError` handling (`conflict: 'destroy'`)
+   * and its post-lock `getWorkspaceInFlight()` TOCTOU re-check (releasing the
+   * just-acquired lock and refusing if a concurrent `init`/`plan`/`apply`
+   * call won the shared workspace during that gap).
+   *
+   * Once past both checks, the generator's first step is driven
+   * *synchronously* — the same synchronous-first-`.next()` workspace
+   * reservation {@link apply}/{@link plan} use, for the identical TOCTOU
+   * reason: `TerraformService`'s `workspaceInFlight` check-and-set runs
+   * synchronously, before its own first `await`. This is also the exact
+   * point `TerraformService.destroy`'s own `assertFreshDestroyConfirmation`
+   * check runs (synchronously, before any `await` inside it), so an
+   * unconfirmed/stale/already-consumed token surfaces as a normal
+   * `{ runId, exitCode: null, error }` message on {@link DESTROY_END_CHANNEL}
+   * once the streaming loop's `await firstStep` rejects with
+   * {@link DestroyNotConfirmedError} — mirrors how a `StalePlanError`
+   * surfaces from {@link apply}.
+   *
+   * Only once the reservation has happened is a best-effort audit entry
+   * (`action: 'destroy'`) recorded via `AuditService.record()` — mirrors
+   * {@link apply}'s own audit-entry call — and the streaming loop fired and
+   * forgotten immediately afterward; the method resolves
+   * `{ started: true, runId }` well before the `terraform destroy` run
+   * itself settles. Each chunk `TerraformService.destroy` yields is
+   * forwarded, in order, via `sender.send` on {@link DESTROY_CHUNK_CHANNEL}
+   * as `{ runId, chunk }`; once the run settles a single terminal message is
+   * sent on {@link DESTROY_END_CHANNEL}: `{ runId, exitCode: 0, result }` on
+   * success, or `{ runId, exitCode, error }` on failure (`exitCode` from
+   * {@link TerraformDestroyError} when the spawned process exited non-zero,
+   * `null` for any other failure).
+   *
+   * Regardless of how the streaming loop ends, its `finally` block
+   * unconditionally calls `RunService.releaseRun(runId)` once more —
+   * deliberately redundant with the release `TerraformService.destroy`'s own
+   * `persistRunRecord` already performs internally on every path that
+   * reaches it (idempotent), guaranteeing the lock is released on every exit
+   * path this method can take, not just the ones `TerraformService.destroy`
+   * itself accounts for — mirrors {@link apply}.
+   *
+   * Creates its own `AbortController` per invocation and registers it in
+   * {@link activeDestroys} keyed by `runId`, the same reasoning as
+   * {@link apply}.
+   *
+   * Reachable via the Electron IPC transport (`terraform.destroy`).
+   */
+  @MessagePattern('terraform.destroy')
+  async destroy(
+    @Payload() payload: TerraformDestroyPayload,
+    ctx: { evt: IpcMainInvokeEvent },
+  ): Promise<TerraformPlanAck> {
+    const validationError = TerraformController.validateDestroyPayload(payload);
+    if (validationError) {
+      logger.error('terraform destroy rejected: invalid payload', { error: validationError });
+      return { started: false, error: validationError };
+    }
+
+    if (!this.runService) {
+      const error = 'terraform.destroy requires a configured RunService';
+      logger.error('terraform destroy rejected: no RunService available', {});
+      return { started: false, error };
+    }
+
+    const inFlight = this.terraform.getWorkspaceInFlight();
+    if (inFlight) {
+      const error =
+        `terraform destroy refused: ${inFlight} is already in flight; wait for it to finish ` +
+        'before submitting another destroy';
+      logger.error('terraform destroy rejected: workspace busy', { inFlight });
+      return { started: false, error, conflict: inFlight };
+    }
+
+    const runId = randomUUID();
+    const initiator = TerraformController.resolveApprover();
+    try {
+      await this.runService.createRun('destroy', initiator, runId);
+    } catch (err) {
+      if (err instanceof RunLockHeldError) {
+        logger.error('terraform destroy rejected: apply lock already held', { runId, lock: err.lock });
+        return { started: false, error: err.message, conflict: 'destroy' };
+      }
+      const error = err instanceof Error ? err.message : String(err);
+      logger.error('terraform destroy rejected: failed to acquire apply lock', { runId, error });
+      return { started: false, error };
+    }
+
+    // `createRun` above is the first `await` since the `getWorkspaceInFlight()`
+    // check at the top of this method — mirrors apply()'s identical TOCTOU
+    // re-check and rationale.
+    const inFlightAfterLock = this.terraform.getWorkspaceInFlight();
+    if (inFlightAfterLock) {
+      await this.runService.releaseRun(runId);
+      const error =
+        `terraform destroy refused: ${inFlightAfterLock} is already in flight; wait for it to finish ` +
+        'before submitting another destroy';
+      logger.error('terraform destroy rejected: workspace busy after acquiring apply lock', {
+        inFlight: inFlightAfterLock,
+        runId,
+      });
+      return { started: false, error, conflict: inFlightAfterLock };
+    }
+
+    const sender: WebContents = ctx.evt.sender;
+    const ac = new AbortController();
+
+    // Reserve the shared workspace *synchronously* — mirrors apply()'s own
+    // synchronous-first-`.next()` reservation; see that call site's comment
+    // for why the ordering matters. This is also the exact point
+    // TerraformService.destroy's own assertFreshDestroyConfirmation check
+    // runs, so an unconfirmed/stale token surfaces as a normal end-message
+    // error once the streaming loop awaits `firstStep`, not a synchronous ack
+    // rejection.
+    const stream = this.terraform.destroy(payload.confirmationToken, ac.signal, runId);
+    const firstStep = stream.next();
+    firstStep.catch(() => { /* handled in the streaming loop below */ });
+
+    this.activeDestroys.set(runId, ac);
+
+    const onDestroyed = () => ac.abort();
+    sender.once('destroyed', onDestroyed);
+    const cleanup = () => {
+      this.activeDestroys.delete(runId);
+      sender.removeListener('destroyed', onDestroyed);
+    };
+
+    // Best-effort: AuditService.record() never throws (failures are logged
+    // and swallowed internally), mirrors apply()'s own audit-entry call.
+    await this.audit?.record({ action: 'destroy', game: '', before: null, after: null });
+
+    // Fire-and-forget the streaming loop, mirroring apply()'s shape.
+    void (async () => {
+      try {
+        let next = await firstStep;
+        while (!next.done) {
+          if (sender.isDestroyed()) {
+            ac.abort();
+            await stream.return(undefined);
+            return;
+          }
+          const chunkMessage: TerraformDestroyChunkMessage = { runId, chunk: next.value };
+          sender.send(DESTROY_CHUNK_CHANNEL, chunkMessage);
+          next = await stream.next();
+        }
+        if (!sender.isDestroyed()) {
+          const message: TerraformDestroyEndMessage = { runId, exitCode: 0, result: next.value };
+          sender.send(DESTROY_END_CHANNEL, message);
+        }
+      } catch (err) {
+        logger.error('terraform destroy error', { err });
+        if (!sender.isDestroyed()) {
+          const exitCode = err instanceof TerraformDestroyError ? err.exitCode : null;
+          const message: TerraformDestroyEndMessage = { runId, exitCode, error: String(err) };
+          sender.send(DESTROY_END_CHANNEL, message);
+        }
+      } finally {
+        cleanup();
+        // Redundant with (but a safety net alongside) the release
+        // TerraformService.destroy's own persistRunRecord already performs
+        // internally on every path that reaches it — releaseRun is
+        // idempotent, so this unconditionally guarantees the lock is
+        // released on every exit path this method can take.
+        await this.runService?.releaseRun(runId);
+      }
+    })();
+
+    return { started: true, runId };
+  }
+
+  /**
    * Returns the current Terraform outputs by delegating to
    * `TerraformService.output`. Unlike {@link init}, this channel needs no
    * manual bridging — it resolves a single value rather than streaming
@@ -1168,6 +1463,21 @@ export class TerraformController implements OnModuleInit {
 
     if (!isNonEmptyString(payload?.planRunId)) {
       return 'terraform.approve requires a non-empty planRunId string';
+    }
+    return null;
+  }
+
+  /**
+   * Validates that `payload.confirmationToken` is a non-empty string.
+   * Returns a descriptive error message when validation fails, or `null`
+   * when `payload` is valid.
+   */
+  private static validateDestroyPayload(payload: TerraformDestroyPayload): string | null {
+    const isNonEmptyString = (value: unknown): value is string =>
+      typeof value === 'string' && value.length > 0;
+
+    if (!isNonEmptyString(payload?.confirmationToken)) {
+      return 'terraform.destroy requires a non-empty confirmationToken string';
     }
     return null;
   }

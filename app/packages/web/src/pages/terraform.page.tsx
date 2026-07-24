@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { CheckCircle2, Loader2, Play, RotateCcw, ShieldCheck } from 'lucide-react';
-import type { RunDetailStatus, TerraformPlanPayload, TerraformRunChunk, TerraformRunRecord } from '@hyveon/desktop-preload';
+import { AlertTriangle, CheckCircle2, Loader2, Play, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react';
+import type {
+  RunDetailStatus,
+  TerraformPlanPayload,
+  TerraformRunChunk,
+  TerraformRunRecord,
+} from '@hyveon/desktop-preload';
 import { Button } from '../components/ui/button.component.js';
 import { Badge } from '../components/ui/badge.component.js';
 import { AnsiLogViewer } from '../components/ansi-log-viewer.component.js';
+import { ConfirmDialog } from '../components/confirm-dialog.component.js';
 
 /**
  * `location.state` shape the rollback flow (#112) navigates to `/terraform`
@@ -50,6 +56,17 @@ const PLAN_SUMMARY_PATTERN = /Plan:\s*(\d+) to add,\s*(\d+) to change,\s*(\d+) t
 /** Mirrors `APPLY_SUMMARY_PATTERN` in `TerraformService.ts` — scans streamed apply output for the resource-change summary. */
 const APPLY_SUMMARY_PATTERN = /Apply complete!\s*Resources:\s*(\d+) added,\s*(\d+) changed,\s*(\d+) destroyed\./;
 
+/** Mirrors `DESTROY_SUMMARY_PATTERN` in `TerraformService.ts` — scans streamed destroy output for the destroyed-resource count. */
+const DESTROY_SUMMARY_PATTERN = /Destroy complete!\s*Resources:\s*(\d+) destroyed\./;
+
+/**
+ * Exact phrase an operator must type into the destroy confirmation dialog
+ * before the destructive button enables (issue #307) — the UI's
+ * defense-in-depth layer; the token minted on confirm is what the backend
+ * actually trusts (see `TerraformService.assertFreshDestroyConfirmation`).
+ */
+const DESTROY_CONFIRM_PHRASE = 'destroy infrastructure';
+
 interface ChangeSummary {
   add: number;
   change: number;
@@ -70,6 +87,15 @@ function parseApplySummary(chunks: TerraformRunChunk[]): ChangeSummary | null {
   for (const chunk of chunks) {
     const m = APPLY_SUMMARY_PATTERN.exec(chunk.line);
     if (m) return { add: Number(m[1]), change: Number(m[2]), destroy: Number(m[3]) };
+  }
+  return null;
+}
+
+/** Scans streamed `destroy` output chunks for Terraform's `Destroy complete! Resources: N destroyed.` summary line. */
+function parseDestroySummary(chunks: TerraformRunChunk[]): number | null {
+  for (const chunk of chunks) {
+    const m = DESTROY_SUMMARY_PATTERN.exec(chunk.line);
+    if (m) return Number(m[1]);
   }
   return null;
 }
@@ -201,13 +227,22 @@ export function TerraformPage() {
 
   const [applyStatus, setApplyStatus] = useState<RunDetailStatus | null>(null);
 
+  const [destroyConfirmOpen, setDestroyConfirmOpen] = useState(false);
+  const [destroyRunId, setDestroyRunId] = useState<string | null>(null);
+  const [destroyConflict, setDestroyConflict] = useState<Conflict | null>(null);
+  const [destroySubmitError, setDestroySubmitError] = useState<string | null>(null);
+  const [destroying, setDestroying] = useState(false);
+  const [destroyStatus, setDestroyStatus] = useState<RunDetailStatus | null>(null);
+
   const [now, setNow] = useState(() => Date.now());
 
   const planLog = useTerraformRunLog(planRunId);
   const applyLog = useTerraformRunLog(applyRunId);
+  const destroyLog = useTerraformRunLog(destroyRunId);
 
   const planSummary = useMemo(() => parsePlanSummary(planLog.chunks), [planLog.chunks]);
   const applySummary = useMemo(() => parseApplySummary(applyLog.chunks), [applyLog.chunks]);
+  const destroyedCount = useMemo(() => parseDestroySummary(destroyLog.chunks), [destroyLog.chunks]);
 
   // Tick every 30s so the approval-staleness hint stays roughly fresh.
   useEffect(() => {
@@ -247,6 +282,19 @@ export function TerraformPage() {
       cancelled = true;
     };
   }, [applyRunId, applyLog.ended]);
+
+  useEffect(() => {
+    if (!destroyRunId || !destroyLog.ended || !window.gsd) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await window.gsd!.terraform.runs.get(destroyRunId);
+      if (cancelled) return;
+      if (result.found) setDestroyStatus(result.status);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [destroyRunId, destroyLog.ended]);
 
   const submitPlan = useCallback((payload?: TerraformPlanPayload) => {
     if (!window.gsd) {
@@ -334,6 +382,34 @@ export function TerraformPage() {
     })();
   }, [planRunId, planRecord]);
 
+  const submitDestroy = useCallback(() => {
+    if (!window.gsd) {
+      setDestroySubmitError('IPC bridge (window.gsd) is not available in this context.');
+      return;
+    }
+    setDestroying(true);
+    setDestroyConflict(null);
+    setDestroySubmitError(null);
+    void (async () => {
+      try {
+        const mintAck = await window.gsd!.terraform.mintDestroyToken();
+        const ack = await window.gsd!.terraform.destroy({ confirmationToken: mintAck.token });
+        if (ack.started && ack.runId) {
+          setDestroyConfirmOpen(false);
+          setDestroyRunId(ack.runId);
+          setDestroyStatus(null);
+        } else {
+          if (ack.conflict) setDestroyConflict(ack.conflict);
+          setDestroySubmitError(ack.error ?? 'terraform destroy could not be started.');
+        }
+      } catch (err) {
+        setDestroySubmitError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDestroying(false);
+      }
+    })();
+  }, []);
+
   const startOver = useCallback(() => {
     setPlanRunId(null);
     setPlanStatus(null);
@@ -349,6 +425,10 @@ export function TerraformPage() {
   useEffect(() => {
     if (applyStatus === 'success') toast.success('terraform apply complete');
   }, [applyStatus]);
+
+  useEffect(() => {
+    if (destroyStatus === 'success') toast.success('terraform destroy complete');
+  }, [destroyStatus]);
 
   const awaitingApproval = planStatus === 'awaiting_approval';
   const planFinished = planStatus !== null;
@@ -493,6 +573,76 @@ export function TerraformPage() {
           )}
         </section>
       )}
+
+      <section
+        className="flex flex-col gap-3 rounded-[var(--radius-md)] border border-[var(--color-red)]/40 bg-[var(--color-red)]/5 p-4"
+        aria-label="Destroy infrastructure"
+      >
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="size-5 shrink-0 text-[var(--color-red)]" aria-hidden="true" />
+          <h3 className="text-lg font-semibold text-[var(--color-foreground)]">Destroy infrastructure</h3>
+        </div>
+        <p className="text-sm text-[var(--color-muted-foreground)]">
+          Runs <code className="font-[var(--font-mono)]">terraform destroy</code>, tearing down every resource this
+          app manages. This cannot be undone from here — game servers, storage, and networking are all removed.
+        </p>
+
+        {!destroyRunId && (
+          <div className="flex flex-col gap-3">
+            <Button
+              variant="destructive"
+              onClick={() => setDestroyConfirmOpen(true)}
+              disabled={destroying}
+              className="self-start"
+            >
+              {destroying ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Destroy infrastructure
+            </Button>
+            {destroyConflict && <BusyBanner conflict={destroyConflict} />}
+            {destroySubmitError && <ErrorBanner message={destroySubmitError} />}
+          </div>
+        )}
+
+        <ConfirmDialog
+          open={destroyConfirmOpen}
+          onOpenChange={setDestroyConfirmOpen}
+          title="Destroy all managed infrastructure?"
+          description={
+            `This runs terraform destroy and tears down every resource this app manages — game servers, ` +
+            `storage, and networking. It cannot be undone from here. Type "${DESTROY_CONFIRM_PHRASE}" to confirm.`
+          }
+          onConfirm={submitDestroy}
+          confirmLabel={destroying ? 'Destroying…' : 'Destroy'}
+          typeToConfirm={DESTROY_CONFIRM_PHRASE}
+        />
+
+        {destroyRunId && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-[var(--color-foreground)]">Destroy run</h4>
+              {destroyedCount !== null && <Badge variant="destructive">{destroyedCount} destroyed</Badge>}
+            </div>
+
+            <AnsiLogViewer chunks={destroyLog.chunks} emptyMessage="Waiting for destroy output…" />
+
+            {destroyStatus === 'failed' || destroyStatus === 'aborted' ? (
+              <ErrorBanner
+                message={`terraform destroy ${destroyStatus === 'aborted' ? 'was aborted' : 'failed'} — see the log above for details.`}
+              />
+            ) : null}
+
+            {destroyStatus === 'success' && (
+              <div
+                role="status"
+                className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-green)]/40 bg-[var(--color-green)]/10 px-3 py-2 text-sm text-[var(--color-green)]"
+              >
+                <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" />
+                Destroy complete.
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
