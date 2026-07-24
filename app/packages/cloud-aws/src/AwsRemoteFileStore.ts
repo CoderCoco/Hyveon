@@ -5,6 +5,7 @@ import {
   ListObjectVersionsCommand,
   NoSuchKey,
   S3ServiceException,
+  type ObjectVersion,
 } from '@aws-sdk/client-s3';
 import { RemoteFileConflictError, type RemoteFileStore } from '@hyveon/shared';
 
@@ -148,14 +149,37 @@ export class AwsRemoteFileStore implements RemoteFileStore {
   /**
    * Lists the known versions of a remote file.
    *
+   * `ListObjectVersionsCommand` caps each response at 1,000 entries
+   * (across all keys sharing the `Prefix`, not just `path`), so a single
+   * call silently truncates history for a key with more versions than
+   * that. Loops on `IsTruncated`, forwarding `NextKeyMarker`/
+   * `NextVersionIdMarker` as the next call's `KeyMarker`/`VersionIdMarker`,
+   * accumulating every page's `Versions` before the existing filter/sort —
+   * see issue #260.
+   *
    * @param path - The path of the file whose versions should be listed.
    */
   async listVersions(path: string): Promise<Array<{ versionId: string; lastModified: Date }>> {
-    const resp = await this.getClient().send(
-      new ListObjectVersionsCommand({ Bucket: this.getBucketName(), Prefix: path }),
-    );
+    const allVersions: ObjectVersion[] = [];
+    let keyMarker: string | undefined;
+    let versionIdMarker: string | undefined;
 
-    return (resp.Versions ?? [])
+    let resp;
+    do {
+      resp = await this.getClient().send(
+        new ListObjectVersionsCommand({
+          Bucket: this.getBucketName(),
+          Prefix: path,
+          KeyMarker: keyMarker,
+          VersionIdMarker: versionIdMarker,
+        }),
+      );
+      allVersions.push(...(resp.Versions ?? []));
+      keyMarker = resp.NextKeyMarker;
+      versionIdMarker = resp.NextVersionIdMarker;
+    } while (resp.IsTruncated);
+
+    return allVersions
       .filter(
         (v): v is typeof v & { Key: string; VersionId: string; LastModified: Date } =>
           v.Key === path && v.VersionId !== undefined && v.LastModified !== undefined,

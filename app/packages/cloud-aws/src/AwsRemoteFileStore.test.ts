@@ -265,6 +265,79 @@ describe('AwsRemoteFileStore', () => {
       const store = makeStore();
       await expect(store.listVersions('foo.txt')).resolves.toEqual([]);
     });
+
+    it('should not request a further page when the first response is not truncated', async () => {
+      s3Mock.on(ListObjectVersionsCommand).resolves({
+        Versions: [{ Key: 'foo.txt', VersionId: 'v1', LastModified: new Date('2024-01-01T00:00:00Z') }],
+        IsTruncated: false,
+      });
+
+      const store = makeStore();
+      await store.listVersions('foo.txt');
+
+      expect(s3Mock.commandCalls(ListObjectVersionsCommand)).toHaveLength(1);
+    });
+
+    it('should loop on IsTruncated, forwarding NextKeyMarker/NextVersionIdMarker as the next page\'s markers, and accumulate every page', async () => {
+      s3Mock
+        .on(ListObjectVersionsCommand)
+        .resolvesOnce({
+          Versions: [{ Key: 'foo.txt', VersionId: 'v1', LastModified: new Date('2024-01-01T00:00:00Z') }],
+          IsTruncated: true,
+          NextKeyMarker: 'foo.txt',
+          NextVersionIdMarker: 'v1',
+        })
+        .resolvesOnce({
+          Versions: [{ Key: 'foo.txt', VersionId: 'v2', LastModified: new Date('2024-06-01T00:00:00Z') }],
+          IsTruncated: true,
+          NextKeyMarker: 'foo.txt',
+          NextVersionIdMarker: 'v2',
+        })
+        .resolvesOnce({
+          Versions: [{ Key: 'foo.txt', VersionId: 'v3', LastModified: new Date('2024-12-01T00:00:00Z') }],
+          IsTruncated: false,
+        });
+
+      const store = makeStore();
+      await expect(store.listVersions('foo.txt')).resolves.toEqual([
+        { versionId: 'v3', lastModified: new Date('2024-12-01T00:00:00Z') },
+        { versionId: 'v2', lastModified: new Date('2024-06-01T00:00:00Z') },
+        { versionId: 'v1', lastModified: new Date('2024-01-01T00:00:00Z') },
+      ]);
+
+      const calls = s3Mock.commandCalls(ListObjectVersionsCommand);
+      expect(calls).toHaveLength(3);
+      expect(calls[0]!.args[0].input.KeyMarker).toBeUndefined();
+      expect(calls[0]!.args[0].input.VersionIdMarker).toBeUndefined();
+      expect(calls[1]!.args[0].input.KeyMarker).toBe('foo.txt');
+      expect(calls[1]!.args[0].input.VersionIdMarker).toBe('v1');
+      expect(calls[2]!.args[0].input.KeyMarker).toBe('foo.txt');
+      expect(calls[2]!.args[0].input.VersionIdMarker).toBe('v2');
+    });
+
+    it('should filter and sort across accumulated pages, not just the last one', async () => {
+      s3Mock
+        .on(ListObjectVersionsCommand)
+        .resolvesOnce({
+          Versions: [
+            { Key: 'foo.txt', VersionId: 'v1', LastModified: new Date('2024-01-01T00:00:00Z') },
+            { Key: 'other.txt', VersionId: 'vx', LastModified: new Date('2024-02-01T00:00:00Z') },
+          ],
+          IsTruncated: true,
+          NextKeyMarker: 'other.txt',
+          NextVersionIdMarker: 'vx',
+        })
+        .resolvesOnce({
+          Versions: [{ Key: 'foo.txt', VersionId: 'v2', LastModified: new Date('2024-06-01T00:00:00Z') }],
+          IsTruncated: false,
+        });
+
+      const store = makeStore();
+      await expect(store.listVersions('foo.txt')).resolves.toEqual([
+        { versionId: 'v2', lastModified: new Date('2024-06-01T00:00:00Z') },
+        { versionId: 'v1', lastModified: new Date('2024-01-01T00:00:00Z') },
+      ]);
+    });
   });
 
   describe('bucket configuration', () => {
