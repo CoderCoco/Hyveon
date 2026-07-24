@@ -161,14 +161,16 @@ export class AwsRemoteFileStore implements RemoteFileStore {
    */
   async listVersions(path: string): Promise<Array<{ versionId: string; lastModified: Date }>> {
     const allVersions: ObjectVersion[] = [];
+    const client = this.getClient();
+    const bucket = this.getBucketName();
     let keyMarker: string | undefined;
     let versionIdMarker: string | undefined;
 
     let resp;
     do {
-      resp = await this.getClient().send(
+      resp = await client.send(
         new ListObjectVersionsCommand({
-          Bucket: this.getBucketName(),
+          Bucket: bucket,
           Prefix: path,
           KeyMarker: keyMarker,
           VersionIdMarker: versionIdMarker,
