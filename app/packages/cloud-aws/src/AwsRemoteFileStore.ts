@@ -108,6 +108,27 @@ export class AwsRemoteFileStore implements RemoteFileStore {
   }
 
   /**
+   * Retrieves a specific historical version of a file by path.
+   *
+   * @param path - The store-relative path of the file to retrieve.
+   * @param versionId - The S3 `VersionId` to retrieve.
+   */
+  async getVersion(path: string, versionId: string): Promise<{ body: Uint8Array } | undefined> {
+    try {
+      const resp = await this.getClient().send(
+        new GetObjectCommand({ Bucket: this.getBucketName(), Key: path, VersionId: versionId }),
+      );
+      const body = await resp.Body?.transformToByteArray();
+      if (!body) return undefined;
+      return { body };
+    } catch (err) {
+      if (err instanceof NoSuchKey) return undefined;
+      if (err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404) return undefined;
+      throw err;
+    }
+  }
+
+  /**
    * Writes a remote file, optionally conditioned on a matching etag.
    *
    * @param path - The path of the file to write.

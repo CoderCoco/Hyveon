@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from './config.module.js';
 import { CloudProviderModule } from './cloud-provider.module.js';
+import { TfvarsModule } from './tfvars.module.js';
 import { TerraformService } from '../services/TerraformService.js';
 import { RunRecordService } from '../services/RunRecordService.js';
 import { RunService } from '../services/RunService.js';
@@ -40,10 +41,16 @@ import { RunService } from '../services/RunService.js';
  *
  * Imported by `AppModule` alongside `TerraformController`, which bridges
  * `TerraformService.init`'s async-generator output onto Electron IPC.
+ *
+ * Also imports `TfvarsModule` so `TerraformService`'s optional
+ * `TfvarsService` constructor dependency (used only by the rollback flow,
+ * #112 — see `resolveRollbackTarget`/`confirmRollback`) resolves through
+ * Nest DI; re-exported for the same "full dependency chain" reason as
+ * `ConfigModule`/`CloudProviderModule` above.
  */
 @Module({
-  imports: [ConfigModule, CloudProviderModule],
+  imports: [ConfigModule, CloudProviderModule, TfvarsModule],
   providers: [TerraformService, RunService, RunRecordService],
-  exports: [ConfigModule, CloudProviderModule, TerraformService, RunService, RunRecordService],
+  exports: [ConfigModule, CloudProviderModule, TfvarsModule, TerraformService, RunService, RunRecordService],
 })
 export class TerraformModule {}

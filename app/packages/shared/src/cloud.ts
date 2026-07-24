@@ -110,6 +110,20 @@ export interface RemoteFileStore {
   get(path: string): Promise<{ body: Uint8Array; etag: string } | undefined>;
 
   /**
+   * Retrieves a specific historical version of a file by path, for stores
+   * that support object versioning (e.g. a versioned S3 bucket). Used by the
+   * rollback flow (#112) to read a prior tfvars version's bytes before
+   * restoring them as a new head version.
+   *
+   * @param path - The store-relative path of the file to retrieve.
+   * @param versionId - The provider-assigned version id to retrieve, as
+   *   returned by {@link listVersions} or {@link put}.
+   * @returns An object containing the raw file contents (`body`), or
+   *   `undefined` if no file exists at the given path with that version id.
+   */
+  getVersion(path: string, versionId: string): Promise<{ body: Uint8Array } | undefined>;
+
+  /**
    * Writes a file to the store at the given path, creating or overwriting it.
    * Supports optimistic concurrency via an optional `ifMatch` etag guard — if
    * provided, the write is rejected (provider throws) when the stored etag no

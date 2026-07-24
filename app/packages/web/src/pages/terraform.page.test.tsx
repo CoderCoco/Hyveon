@@ -147,4 +147,63 @@ describe('TerraformPage', () => {
     expect(screen.getByRole('button', { name: /^Apply$/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Re-approve/ })).toBeInTheDocument();
   });
+
+  describe('rollback flow (#112)', () => {
+    it('should auto-submit a tagged plan with the rollback location.state, without requiring a Run plan click', async () => {
+      gsdMock.terraform.plan.mockResolvedValue({ started: true, runId: PLAN_RUN_ID });
+      gsdMock.terraform.runs.streamLogs.mockImplementation(async function* () {
+        /* no chunks needed for this assertion */
+      });
+      gsdMock.terraform.runs.get.mockResolvedValue({ found: false });
+
+      renderPage(<TerraformPage />, {
+        initialEntries: [
+          { pathname: '/terraform', state: { tfvarsVersionId: 'v-new-head', rolledBackFrom: 'apply-1' } },
+        ],
+      });
+
+      await waitFor(() =>
+        expect(gsdMock.terraform.plan).toHaveBeenCalledWith({
+          tfvarsVersionId: 'v-new-head',
+          rolledBackFrom: 'apply-1',
+        }),
+      );
+      expect(screen.queryByRole('button', { name: /Run plan/ })).not.toBeInTheDocument();
+    });
+
+    it('should render a link to the rolled-back apply run once the plan record carries rolledBackFrom', async () => {
+      gsdMock.terraform.plan.mockResolvedValue({ started: true, runId: PLAN_RUN_ID });
+      gsdMock.terraform.runs.streamLogs.mockImplementation(async function* () {
+        /* no chunks needed for this assertion */
+      });
+      gsdMock.terraform.runs.get.mockResolvedValue({
+        found: true,
+        status: 'awaiting_approval',
+        record: {
+          runId: PLAN_RUN_ID,
+          kind: 'plan',
+          startedAt: 't0',
+          completedAt: 't1',
+          exitCode: 0,
+          planHash: 'hash-1',
+          rolledBackFrom: 'apply-1',
+        },
+      });
+
+      renderPage(<TerraformPage />, {
+        initialEntries: [
+          { pathname: '/terraform', state: { tfvarsVersionId: 'v-new-head', rolledBackFrom: 'apply-1' } },
+        ],
+      });
+
+      const link = await screen.findByRole('link', { name: /apply run apply-1/ });
+      expect(link).toHaveAttribute('href', '/terraform/history/apply-1');
+    });
+
+    it('should not auto-submit when there is no rollback location.state', () => {
+      renderPage(<TerraformPage />);
+      expect(gsdMock.terraform.plan).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Run plan/ })).toBeInTheDocument();
+    });
+  });
 });

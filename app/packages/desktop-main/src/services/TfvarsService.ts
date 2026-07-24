@@ -239,6 +239,28 @@ export class TfvarsService {
   }
 
   /**
+   * Restores `hcl` as the tfvars source's new head version verbatim — used
+   * by the rollback flow (#112) to write a prior version's exact bytes back
+   * as a fresh S3 version (history is append-only; this never deletes or
+   * reverts an existing version) rather than applying a `game_servers`-
+   * specific mutation like {@link addGameServer}/{@link updateGameServer}/
+   * {@link removeGameServer} do. Always an unconditional write (no
+   * `expectedVersionId` guard) — rollback is explicitly restoring known
+   * historic content, not editing the current head against an expected
+   * prior state. Invalidates the in-memory {@link getGameServers} cache
+   * afterward so the next read reflects the restored content, mirroring
+   * {@link writeTfvars}.
+   *
+   * @param hcl - The exact historic tfvars content to restore.
+   * @returns The write's `{ etag, versionId }` — see {@link putRawTfvars}.
+   */
+  async restoreRawTfvars(hcl: string): Promise<{ etag: string; versionId?: string }> {
+    const result = await this.putRawTfvars(hcl);
+    this.invalidateCache();
+    return result;
+  }
+
+  /**
    * Adds a brand-new entry to the `game_servers` map (see issue #96). Reads
    * the current raw HCL, splices `name = { ... }` in as the map's first
    * entry via `hclSurgeon.locateMapBody()` + `hclEmit.emitGameServerEntry()`,

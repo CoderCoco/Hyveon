@@ -186,6 +186,18 @@ export function TerraformRunDetailPage() {
             </span>
           </div>
 
+          {record.rolledBackFrom && (
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Rollback of{' '}
+              <Link
+                to={`/terraform/history/${record.rolledBackFrom}`}
+                className="text-[var(--color-primary)] underline underline-offset-2"
+              >
+                apply run {record.rolledBackFrom}
+              </Link>
+            </p>
+          )}
+
           {record.approvedBy && (
             <p className="text-sm text-[var(--color-foreground)]">
               Approved by <strong>{record.approvedBy}</strong>

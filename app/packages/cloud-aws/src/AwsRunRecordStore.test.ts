@@ -135,6 +135,27 @@ describe('AwsRunRecordStore', () => {
       expect(input.Item).not.toHaveProperty('logS3Key');
     });
 
+    it('should include rolledBackFrom on the written item when present on the record', async () => {
+      ddbMock.on(PutCommand).resolves({});
+
+      const store = makeStore();
+      const record = makeRecord({ kind: 'plan', rolledBackFrom: 'apply-run-1' });
+      await store.putRecord(record);
+
+      const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
+      expect(input.Item?.['rolledBackFrom']).toBe('apply-run-1');
+    });
+
+    it('should omit rolledBackFrom from the written item when absent on the record', async () => {
+      ddbMock.on(PutCommand).resolves({});
+
+      const store = makeStore();
+      await store.putRecord(makeRecord());
+
+      const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
+      expect(input.Item).not.toHaveProperty('rolledBackFrom');
+    });
+
     it('should throw a clear error when constructed without a getConfig callback', async () => {
       const store = makeStore(null);
       await expect(store.putRecord(makeRecord())).rejects.toThrow(
@@ -212,6 +233,16 @@ describe('AwsRunRecordStore', () => {
 
       expect(result?.tfvarsVersionId).toBe('v-1');
       expect(result?.logS3Key).toBe('runs/run-123.log');
+    });
+
+    it('should restore rolledBackFrom on the returned record when present', async () => {
+      const record = makeRecord({ kind: 'plan', rolledBackFrom: 'apply-run-1' });
+      ddbMock.on(QueryCommand).resolves({ Items: [{ pk: 'RUN', ...record }] });
+
+      const store = makeStore();
+      const result = await store.getRecordByRunId('run-123');
+
+      expect(result?.rolledBackFrom).toBe('apply-run-1');
     });
 
     it('should throw a clear error when constructed without a getConfig callback', async () => {

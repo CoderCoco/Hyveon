@@ -93,10 +93,13 @@ interface TerraformOutputPayload {
  * Payload accepted by {@link TerraformController.plan}. `tfvarsVersionId`,
  * when the configured tfvars source is S3-backed, is forwarded verbatim to
  * `TerraformService.plan`'s pre-spawn staleness check against the current
- * head version of the tfvars object.
+ * head version of the tfvars object. `rolledBackFrom`, when supplied by the
+ * rollback flow (#112), is stamped onto the resulting plan's `RunRecord` so
+ * history can tag it as a rollback of that `runId`.
  */
 interface TerraformPlanPayload {
   tfvarsVersionId?: string;
+  rolledBackFrom?: string;
 }
 
 /**
@@ -174,6 +177,45 @@ interface TerraformApproveAck {
   approved: boolean;
   approvedBy?: string;
   approvedAt?: string;
+  error?: string;
+}
+
+/**
+ * Payload accepted by {@link TerraformController.resolveRollback} and
+ * {@link TerraformController.confirmRollback} — both key off the `apply` run
+ * being rolled back.
+ */
+interface TerraformRollbackPayload {
+  applyRunId: string;
+}
+
+/**
+ * Result `resolveRollback()` resolves with. `resolved: true` means
+ * `TerraformService.resolveRollbackTarget` found a prior tfvars version to
+ * restore — `versionId`/`lastModified` identify it, for the confirmation
+ * dialog to display before anything is written. `resolved: false` means the
+ * payload failed validation or resolution was rejected (no matching apply
+ * run, not an apply run, no recorded tfvarsVersionId, or no earlier version
+ * exists) — `error` is always a human-readable description of why.
+ */
+interface TerraformRollbackResolveAck {
+  resolved: boolean;
+  versionId?: string;
+  lastModified?: string;
+  error?: string;
+}
+
+/**
+ * Result `confirmRollback()` resolves with. `confirmed: true` means the
+ * historic tfvars content was restored as a new head version —
+ * `versionId` is the new version's id, ready to pass to `terraform.plan`'s
+ * `tfvarsVersionId` (alongside `rolledBackFrom: applyRunId`) to complete the
+ * rollback. `confirmed: false` means no write was attempted — `error` is
+ * always a human-readable description of why.
+ */
+interface TerraformRollbackConfirmAck {
+  confirmed: boolean;
+  versionId?: string;
   error?: string;
 }
 
@@ -525,7 +567,7 @@ export class TerraformController implements OnModuleInit {
     // `audit.record()` call further down — the real handling of whatever it
     // settles to happens in the streaming loop below, the same way every
     // later `.next()` result already is.
-    const stream = this.terraform.plan(payload.tfvarsVersionId, ac.signal, runId);
+    const stream = this.terraform.plan(payload.tfvarsVersionId, ac.signal, runId, payload.rolledBackFrom);
     const firstStep = stream.next();
     firstStep.catch(() => { /* handled in the streaming loop below */ });
 
@@ -1008,6 +1050,83 @@ export class TerraformController implements OnModuleInit {
   }
 
   /**
+   * Previews the rollback flow's (#112) target tfvars version for
+   * `payload.applyRunId`, without writing anything — delegates to
+   * `TerraformService.resolveRollbackTarget`. Called when the operator clicks
+   * "Rollback" on an apply row in history, so the confirmation dialog can
+   * name the version it would restore before the operator commits to it.
+   *
+   * Reachable via the Electron IPC transport (`terraform.rollback.resolve`),
+   * bridged automatically by the generic `ipcMain.handle` bridge since it
+   * resolves a single value rather than streaming progress.
+   */
+  @MessagePattern('terraform.rollback.resolve')
+  async resolveRollback(@Payload() payload: TerraformRollbackPayload): Promise<TerraformRollbackResolveAck> {
+    const validationError = TerraformController.validateRollbackPayload(payload);
+    if (validationError) {
+      logger.error('terraform rollback resolve rejected: invalid payload', { error: validationError });
+      return { resolved: false, error: validationError };
+    }
+
+    try {
+      const target = await this.terraform.resolveRollbackTarget(payload.applyRunId);
+      return { resolved: true, versionId: target.versionId, lastModified: target.lastModified.toISOString() };
+    } catch (err) {
+      logger.error('terraform rollback resolve error', { err, applyRunId: payload.applyRunId });
+      const error = err instanceof Error ? err.message : String(err);
+      return { resolved: false, error };
+    }
+  }
+
+  /**
+   * Confirms the rollback flow (#112) for `payload.applyRunId`: restores the
+   * previewed historic tfvars version as a new head version — delegates to
+   * `TerraformService.confirmRollback`, which re-resolves the target so an
+   * expiry between preview and confirm is still caught before anything is
+   * written. The renderer follows a successful ack with an ordinary
+   * `terraform.plan` call passing the returned `versionId` as
+   * `tfvarsVersionId` and `payload.applyRunId` as `rolledBackFrom`, so the
+   * rollback plan streams and gates through the exact same channel every
+   * other plan does.
+   *
+   * Reachable via the Electron IPC transport (`terraform.rollback.confirm`),
+   * bridged automatically by the generic `ipcMain.handle` bridge since it
+   * resolves a single value rather than streaming progress.
+   */
+  @MessagePattern('terraform.rollback.confirm')
+  async confirmRollback(@Payload() payload: TerraformRollbackPayload): Promise<TerraformRollbackConfirmAck> {
+    const validationError = TerraformController.validateRollbackPayload(payload);
+    if (validationError) {
+      logger.error('terraform rollback confirm rejected: invalid payload', { error: validationError });
+      return { confirmed: false, error: validationError };
+    }
+
+    try {
+      const result = await this.terraform.confirmRollback(payload.applyRunId);
+
+      // Best-effort: AuditService.record() never throws (failures are
+      // logged and swallowed internally), mirroring the audit entry
+      // recorded by plan()/apply()/approve() for their own accepted
+      // submissions — restoring a version as a new head is the most
+      // consequential of these writes, so it shouldn't be the one exempt
+      // from the audit trail.
+      await this.audit?.record({
+        action: 'rollback',
+        game: '',
+        before: null,
+        after: null,
+        versionId: result.versionId,
+      });
+
+      return { confirmed: true, versionId: result.versionId };
+    } catch (err) {
+      logger.error('terraform rollback confirm error', { err, applyRunId: payload.applyRunId });
+      const error = err instanceof Error ? err.message : String(err);
+      return { confirmed: false, error };
+    }
+  }
+
+  /**
    * Resolves the identity of the local operator approving a plan run, as the
    * OS username reported by `node:os`'s `userInfo()`. Wrapped in its own
    * method (rather than calling `os.userInfo().username` inline in
@@ -1049,6 +1168,22 @@ export class TerraformController implements OnModuleInit {
 
     if (!isNonEmptyString(payload?.planRunId)) {
       return 'terraform.approve requires a non-empty planRunId string';
+    }
+    return null;
+  }
+
+  /**
+   * Validates that `payload.applyRunId` is a non-empty string. Returns a
+   * descriptive error message when validation fails, or `null` when
+   * `payload` is valid. Shared by {@link resolveRollback} and
+   * {@link confirmRollback} — both key off the same field.
+   */
+  private static validateRollbackPayload(payload: TerraformRollbackPayload): string | null {
+    const isNonEmptyString = (value: unknown): value is string =>
+      typeof value === 'string' && value.length > 0;
+
+    if (!isNonEmptyString(payload?.applyRunId)) {
+      return 'terraform.rollback requires a non-empty applyRunId string';
     }
     return null;
   }

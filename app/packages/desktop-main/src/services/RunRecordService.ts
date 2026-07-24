@@ -151,6 +151,11 @@ export interface PersistRunRecordParams {
    * issue #109), if the caller supplied one.
    */
   planHash?: string;
+  /**
+   * The `runId` of the `apply` run this plan rolled back, if the caller
+   * started this run via the rollback flow (#112).
+   */
+  rolledBackFrom?: string;
 }
 
 /**
@@ -271,6 +276,7 @@ export class RunRecordService {
           exitCode: params.exitCode,
           ...(params.tfvarsVersionId !== undefined ? { tfvarsVersionId: params.tfvarsVersionId } : {}),
           ...(params.planHash !== undefined ? { planHash: params.planHash } : {}),
+          ...(params.rolledBackFrom !== undefined ? { rolledBackFrom: params.rolledBackFrom } : {}),
           ...(logInline !== undefined ? { logInline } : {}),
           ...(logS3Key !== undefined ? { logS3Key } : {}),
         };

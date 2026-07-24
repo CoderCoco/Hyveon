@@ -272,6 +272,53 @@ describe('TfvarsService write path', () => {
     });
   });
 
+  describe('restoreRawTfvars (rollback flow, #112)', () => {
+    it('should write the supplied hcl unconditionally (no ifMatch) and return the store put() result', async () => {
+      remoteFileStore.put.mockResolvedValueOnce({ etag: 'etag-restored', versionId: 'v-restored' });
+
+      const service = new TfvarsService(makeConfig({ bucket: 'my-tfvars-bucket' }), remoteFileStore);
+
+      await expect(service.restoreRawTfvars(FIXTURE_TFVARS)).resolves.toEqual({
+        etag: 'etag-restored',
+        versionId: 'v-restored',
+      });
+      expect(remoteFileStore.put).toHaveBeenCalledWith(
+        'terraform.tfvars',
+        new TextEncoder().encode(FIXTURE_TFVARS),
+        undefined,
+      );
+    });
+
+    it('should write the file directly in local mode, mirroring the other write paths', async () => {
+      mockExists.mockReturnValue(true);
+
+      const service = new TfvarsService(makeConfig({ bucket: null }), remoteFileStore);
+
+      await expect(service.restoreRawTfvars(FIXTURE_TFVARS)).resolves.toEqual({
+        etag: '',
+        versionId: undefined,
+      });
+      expect(mockWrite).toHaveBeenCalledWith(expect.any(String), FIXTURE_TFVARS, 'utf-8');
+    });
+
+    it('should invalidate the in-memory cache so the next getGameServers() re-reads the restored content', async () => {
+      remoteFileStore.get.mockResolvedValue({
+        body: new TextEncoder().encode(FIXTURE_TFVARS),
+        etag: 'etag-1',
+      });
+      remoteFileStore.put.mockResolvedValueOnce({ etag: 'etag-restored', versionId: 'v-restored' });
+
+      const service = new TfvarsService(makeConfig({ bucket: 'my-tfvars-bucket' }), remoteFileStore);
+      await service.getGameServers();
+      expect(remoteFileStore.get).toHaveBeenCalledTimes(1);
+
+      await service.restoreRawTfvars(FIXTURE_TFVARS);
+      await service.getGameServers();
+
+      expect(remoteFileStore.get).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('concurrent writes (S3 mode)', () => {
     it('should fail the second of two concurrent writes with a clear OptimisticLockError, not silently overwrite the first', async () => {
       // Both writers read the same starting etag...
