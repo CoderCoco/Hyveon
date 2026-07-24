@@ -1197,6 +1197,118 @@ describe('preload dispatcher', () => {
   // terraform.output
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // terraform.destroy.mintToken / terraform.destroy
+  // -------------------------------------------------------------------------
+
+  describe('terraform.destroy.mintToken', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.destroy.mintToken channel with no arguments and resolve the token', async () => {
+        const ack = { token: 'destroy-token-abc' };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as { mintDestroyToken: () => Promise<unknown> };
+
+        const result = await terraform.mintDestroyToken();
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.destroy.mintToken');
+        expect(result).toEqual(ack);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.destroy.mintToken is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const ack = { token: 'destroy-token-mock' };
+        const mockHandler = vi.fn().mockResolvedValue(ack);
+        testApi.mock('terraform.destroy.mintToken', mockHandler);
+
+        const terraform = bridge['terraform'] as { mintDestroyToken: () => Promise<unknown> };
+        const result = await terraform.mintDestroyToken();
+
+        expect(mockHandler).toHaveBeenCalledWith();
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(ack);
+      });
+    });
+  });
+
+  describe('terraform.destroy', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.destroy channel with the payload and resolve the started ack with a runId', async () => {
+        const ack = { started: true, runId: 'destroy-run-001' };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          destroy: (payload: { confirmationToken: string }) => Promise<unknown>;
+        };
+        const payload = { confirmationToken: 'destroy-token-abc' };
+
+        const result = await terraform.destroy(payload);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.destroy', payload);
+        expect(result).toEqual(ack);
+      });
+
+      it('should resolve conflict details when the shared workspace is already busy', async () => {
+        const ack = {
+          started: false,
+          error: 'terraform destroy refused: apply is already in flight',
+          conflict: 'apply' as const,
+        };
+        ipcInvoke.mockResolvedValue(ack);
+        const terraform = bridge['terraform'] as {
+          destroy: (payload: { confirmationToken: string }) => Promise<unknown>;
+        };
+
+        const result = await terraform.destroy({ confirmationToken: 'destroy-token-abc' });
+
+        expect(result).toEqual(ack);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.destroy is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const ack = { started: true, runId: 'destroy-run-mock' };
+        const mockHandler = vi.fn().mockResolvedValue(ack);
+        testApi.mock('terraform.destroy', mockHandler);
+
+        const terraform = bridge['terraform'] as {
+          destroy: (payload: { confirmationToken: string }) => Promise<unknown>;
+        };
+        const payload = { confirmationToken: 'destroy-token-def' };
+        const result = await terraform.destroy(payload);
+
+        expect(mockHandler).toHaveBeenCalledWith(payload);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(ack);
+      });
+    });
+  });
+
   describe('terraform.output', () => {
     /** Minimal `TfOutputs`-shaped fixture used across these tests. */
     const OUTPUTS = {

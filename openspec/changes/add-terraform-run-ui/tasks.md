@@ -39,24 +39,24 @@ One task group per GitHub issue; each group is one PR. Order matters: 1 → 2 �
 
 ## 4. Issue #112 — Rollback flow (depends on groups 2 and 3)
 
-- [ ] 4.1 Create the worktree/branch: `git worktree add .worktrees/claude/issue-112-rollback-flow -b claude/issue-112-rollback-flow`
-- [ ] 4.2 Add optional `rolledBackFrom?: string` to `RunRecord` in `@hyveon/shared/runs.ts` with TSDoc; plumb it through the `terraform.plan` IPC payload, `TerraformService.plan`, and run-record persistence (unit tests at each layer)
-- [ ] 4.3 Implement the rollback backend path: resolve the tfvars version live before the target apply run (complete `listVersions` history), read its bytes (clear error naming the version when it no longer exists), write them as a new head via `TfvarsService`, and start a plan against the new `versionId` tagged `rolledBackFrom`
-- [ ] 4.4 Add the "Rollback" action to apply rows in `/terraform/history` (hidden when no `tfvarsVersionId`), with a confirmation dialog identifying the target version and stating that the tfvars head will be rewritten before planning
-- [ ] 4.5 Route the confirmed rollback into the group 1 run view so the tagged plan streams live and goes through the standard approve + apply gates unchanged
-- [ ] 4.6 Display the `rolledBackFrom` tag on history rows and in run detail; surface the missing-version error without writing anything
-- [ ] 4.7 Component/page tests: rollback action visibility, confirmation gating, tag rendering, missing-version error path
-- [ ] 4.8 Run `npm run app:test` and `npm run app:lint` — both must pass
-- [ ] 4.9 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): rollback flow from apply history`, <70 chars); PR body's FIRST line must be `Closes #112`
+- [x] 4.1 Create the worktree/branch: `git worktree add .worktrees/claude/issue-112-rollback-flow -b claude/issue-112-rollback-flow`
+- [x] 4.2 Add optional `rolledBackFrom?: string` to `RunRecord` in `@hyveon/shared/runs.ts` with TSDoc; plumb it through the `terraform.plan` IPC payload, `TerraformService.plan`, and run-record persistence (unit tests at each layer)
+- [x] 4.3 Implement the rollback backend path: resolve the tfvars version live before the target apply run (complete `listVersions` history), read its bytes (clear error naming the version when it no longer exists), write them as a new head via `TfvarsService`, and start a plan against the new `versionId` tagged `rolledBackFrom`
+- [x] 4.4 Add the "Rollback" action to apply rows in `/terraform/history` (hidden when no `tfvarsVersionId`), with a confirmation dialog identifying the target version and stating that the tfvars head will be rewritten before planning
+- [x] 4.5 Route the confirmed rollback into the group 1 run view so the tagged plan streams live and goes through the standard approve + apply gates unchanged
+- [x] 4.6 Display the `rolledBackFrom` tag on history rows and in run detail; surface the missing-version error without writing anything
+- [x] 4.7 Component/page tests: rollback action visibility, confirmation gating, tag rendering, missing-version error path
+- [x] 4.8 Run `npm run app:test` and `npm run app:lint` — both must pass
+- [x] 4.9 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): rollback flow from apply history`, <70 chars); PR body's FIRST line must be `Closes #112`
 
 ## 5. Issue #307 — Destroy flow (last open child of epic #138)
 
-- [ ] 5.1 Create the worktree/branch: `git worktree add .worktrees/claude/issue-307-destroy-flow -b claude/issue-307-destroy-flow`
-- [ ] 5.2 Add a `terraform.destroy.mintToken` plain-invoke IPC channel on `TerraformController` delegating to `TerraformService.mintDestroyConfirmationToken()`
-- [ ] 5.3 Add the self-bridged streaming `terraform.destroy` channel following `apply`'s pattern: workspace conflict ack, `RunService.createRun('destroy', …)` lock with post-await re-check and unconditional `releaseRun` in `finally`, synchronous first-`.next()` reservation, audit entry, chunk/end side channels tagged with the run id; register in `onModuleInit` and add the channel to `SELF_BRIDGED_PATTERNS` in `ipc-main-bridge.ts`
-- [ ] 5.4 Controller unit tests: token-gate refusal (`DestroyNotConfirmedError` path spawns nothing and writes no record/audit), BUSY conflict ack, lock release on every exit path, destroy run visible via `terraform.runs.get`/history
-- [ ] 5.5 Add the preload bridge (`gsd.terraform.destroy` async-iterable + token mint) in `preload.ts` honoring the test-mode mock registry, with typed mirrors in `gsd-api.ts`
-- [ ] 5.6 Build the guarded destroy UI on `/terraform`: type-to-confirm dialog (exact phrase enables the destructive button, copy states all managed infrastructure is destroyed), mint token on confirm, stream output through `AnsiLogViewer`, BUSY surfaced like plan/apply
-- [ ] 5.7 Component/page tests: phrase gating (button disabled on mismatch, no token minted), confirmed destroy streams and shows terminal state, fresh token required per attempt
-- [ ] 5.8 Run `npm run app:test` and `npm run app:lint` — both must pass
+- [x] 5.1 Create the worktree/branch: `git worktree add .worktrees/claude/issue-307-destroy-flow -b claude/issue-307-destroy-flow`
+- [x] 5.2 Add a `terraform.destroy.mintToken` plain-invoke IPC channel on `TerraformController` delegating to `TerraformService.mintDestroyConfirmationToken()`
+- [x] 5.3 Add the self-bridged streaming `terraform.destroy` channel following `apply`'s pattern: workspace conflict ack, `RunService.createRun('destroy', …)` lock with post-await re-check and unconditional `releaseRun` in `finally`, synchronous first-`.next()` reservation, audit entry, chunk/end side channels tagged with the run id; register in `onModuleInit` and add the channel to `SELF_BRIDGED_PATTERNS` in `ipc-main-bridge.ts`
+- [x] 5.4 Controller unit tests: token-gate refusal (`DestroyNotConfirmedError` path spawns nothing and writes no record/audit), BUSY conflict ack, lock release on every exit path, destroy run visible via `terraform.runs.get`/history
+- [x] 5.5 Add the preload bridge (`gsd.terraform.destroy` async-iterable + token mint) in `preload.ts` honoring the test-mode mock registry, with typed mirrors in `gsd-api.ts`
+- [x] 5.6 Build the guarded destroy UI on `/terraform`: type-to-confirm dialog (exact phrase enables the destructive button, copy states all managed infrastructure is destroyed), mint token on confirm, stream output through `AnsiLogViewer`, BUSY surfaced like plan/apply
+- [x] 5.7 Component/page tests: phrase gating (button disabled on mismatch, no token minted), confirmed destroy streams and shows terminal state, fresh token required per attempt
+- [x] 5.8 Run `npm run app:test` and `npm run app:lint` — both must pass
 - [ ] 5.9 Open PR via the `/pr` command with a Conventional Commits title (`feat(desktop): guarded terraform destroy IPC + UI`, <70 chars); PR body's FIRST line must be `Closes #307`, and — as this PR completes the last open issue of epic #138 — the body must also include `Closes #138` on its own line so the epic auto-closes

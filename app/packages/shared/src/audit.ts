@@ -6,11 +6,13 @@ import type { GameServer } from './tfvars.js';
  * exposed by the `game_servers` write endpoints in `@hyveon/desktop-main`,
  * plus `plan` for a dry-run `terraform plan` invocation that touched no
  * infrastructure, `approve` for marking a successful `plan` run approved
- * for a later `apply` (see `TerraformController.approve`, issue #109), and
+ * for a later `apply` (see `TerraformController.approve`, issue #109),
  * `apply` for a `terraform apply` invocation that actually mutated
- * infrastructure (see `TerraformController.apply`, issue #109).
+ * infrastructure (see `TerraformController.apply`, issue #109), and
+ * `destroy` for a confirmed `terraform destroy` invocation that tore down
+ * every managed resource (see `TerraformController.destroy`, issue #307).
  */
-export type AuditAction = 'add' | 'edit' | 'remove' | 'plan' | 'approve' | 'apply';
+export type AuditAction = 'add' | 'edit' | 'remove' | 'plan' | 'approve' | 'apply' | 'destroy';
 
 /**
  * A single row in the DynamoDB audit log (`${project_name}-audit` table,

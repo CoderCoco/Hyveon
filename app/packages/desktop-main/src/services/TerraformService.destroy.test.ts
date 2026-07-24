@@ -384,6 +384,41 @@ describe('TerraformService.destroy confirmed run', () => {
   });
 });
 
+describe('TerraformService.destroy pre-minted runId', () => {
+  it('should use a caller-supplied preMintedRunId instead of minting a fresh one', async () => {
+    queueSuccessfulResolution();
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubDestroyConfigService({ runsDir: '/repo/runs' }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+    const token = service.mintDestroyConfirmationToken();
+
+    const { result } = await collectDestroyChunks(
+      service.destroy(token, undefined, 'pre-minted-destroy-id'),
+      () => child.close(0),
+    );
+
+    expect(mkdirSyncMock).toHaveBeenCalledWith('/repo/runs/pre-minted-destroy-id', { recursive: true });
+    expect(result).toMatchObject({ runId: 'pre-minted-destroy-id' });
+  });
+
+  it('should throw a descriptive Error synchronously and never call spawn when preMintedRunId is malformed', async () => {
+    const service = new TerraformService(stubDestroyConfigService(), stubRemoteFileStore(), stubRunRecordService());
+    const token = service.mintDestroyConfirmationToken();
+
+    const gen = service.destroy(token, undefined, '../escape');
+
+    await expect(gen.next()).rejects.toThrow(/not a valid run id/i);
+    expect(spawnMock).not.toHaveBeenCalled();
+    // The workspace lock must not be left held after a synchronous rejection.
+    expect(service.getWorkspaceInFlight()).toBeNull();
+  });
+});
+
 describe('TerraformService.destroy concurrency guard', () => {
   it('should throw a descriptive Error from a second destroy() call while the first is still in flight', async () => {
     queueSuccessfulResolution();

@@ -7,10 +7,13 @@ import {
   TerraformInitError,
   TerraformPlanError,
   TerraformApplyError,
+  TerraformDestroyError,
+  DestroyNotConfirmedError,
   type TerraformInitConfig,
   type TerraformRunChunk,
   type TerraformPlanResult,
   type TerraformApplyResult,
+  type TerraformDestroyResult,
 } from '../services/TerraformService.js';
 import type { TfOutputs, ConfigService } from '../services/ConfigService.js';
 import type { TerraformService } from '../services/TerraformService.js';
@@ -90,8 +93,10 @@ function makeTerraform(): TerraformService {
     output: vi.fn().mockResolvedValue(null),
     plan: vi.fn().mockImplementation(async function* () { /* empty */ }),
     apply: vi.fn().mockImplementation(async function* () { /* empty */ }),
+    destroy: vi.fn().mockImplementation(async function* () { /* empty */ }),
     getWorkspaceInFlight: vi.fn().mockReturnValue(null),
     computePlanHash: vi.fn().mockReturnValue('plan-hash-abc'),
+    mintDestroyConfirmationToken: vi.fn().mockReturnValue('token-abc'),
   };
   return stub as TerraformService;
 }
@@ -314,6 +319,16 @@ describe('TerraformController', () => {
       const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.apply);
       expect(pattern).toEqual(['terraform.apply']);
     });
+
+    it('should register mintDestroyToken on the "terraform.destroy.mintToken" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.mintDestroyToken);
+      expect(pattern).toEqual(['terraform.destroy.mintToken']);
+    });
+
+    it('should register destroy on the "terraform.destroy" IPC channel', () => {
+      const pattern = Reflect.getMetadata(PATTERN_METADATA_KEY, TerraformController.prototype.destroy);
+      expect(pattern).toEqual(['terraform.destroy']);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -370,6 +385,21 @@ describe('TerraformController', () => {
     it('should remove any existing "terraform.apply" handler before registering so hot-reload re-bootstrap does not throw', async () => {
       await new TerraformController(makeTerraform()).onModuleInit();
       expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith('terraform.apply');
+    });
+
+    it('should register ipcMain.handle for "terraform.destroy" so ipcRenderer.invoke can resolve', async () => {
+      await new TerraformController(makeTerraform()).onModuleInit();
+      expect(mockIpcMainHandle).toHaveBeenCalledWith('terraform.destroy', expect.any(Function));
+    });
+
+    it('should remove any existing "terraform.destroy" handler before registering so hot-reload re-bootstrap does not throw', async () => {
+      await new TerraformController(makeTerraform()).onModuleInit();
+      expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith('terraform.destroy');
+    });
+
+    it('should not manually register "terraform.destroy.mintToken" — the generic bridge handles it', async () => {
+      await new TerraformController(makeTerraform()).onModuleInit();
+      expect(mockIpcMainHandle).not.toHaveBeenCalledWith('terraform.destroy.mintToken', expect.any(Function));
     });
   });
 
@@ -1154,6 +1184,309 @@ describe('TerraformController', () => {
       expect(result.started).toBe(false);
       expect(typeof result.error).toBe('string');
       expect(terraform.apply).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // mintDestroyToken
+  // -------------------------------------------------------------------------
+
+  describe('mintDestroyToken', () => {
+    it('should return the token minted by TerraformService.mintDestroyConfirmationToken', () => {
+      const terraform = makeTerraform();
+      const controller = new TerraformController(terraform);
+
+      const result = controller.mintDestroyToken();
+
+      expect(terraform.mintDestroyConfirmationToken).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ token: 'token-abc' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // destroy
+  // -------------------------------------------------------------------------
+
+  describe('destroy', () => {
+    /** The `terraform.destroy` payload matching {@link makeTerraform}'s default `mintDestroyConfirmationToken` stub. */
+    const DESTROY_PAYLOAD = { confirmationToken: 'token-abc' };
+
+    /**
+     * Wires up a `TerraformController` with every dependency `destroy()`
+     * needs (`terraform`, `audit`, `runService`) — unlike {@link makeApplyController}
+     * there's no `runRecord`/`config`, since destroy has no plan lineage or
+     * `.tfplan` artifact to look up.
+     */
+    function makeDestroyController(terraform: TerraformService = makeTerraform()) {
+      const { audit, record } = makeAudit();
+      const { runService, createRun, releaseRun } = makeRunService();
+      const controller = new TerraformController(terraform, audit, undefined, runService);
+      return { controller, terraform, createRun, releaseRun, record };
+    }
+
+    it('should reject with { started: false, error } and never call TerraformService.destroy when confirmationToken is missing', async () => {
+      const { controller, terraform, createRun, record } = makeDestroyController();
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy({ confirmationToken: '' }, ctx);
+
+      expect(result.started).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(terraform.destroy).not.toHaveBeenCalled();
+      expect(createRun).not.toHaveBeenCalled();
+      expect(sender.send).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should reject with { started: false, error, conflict } and never call TerraformService.destroy or RunService.createRun when the shared workspace is busy', async () => {
+      const { controller, terraform, createRun, record } = makeDestroyController();
+      vi.mocked(terraform.getWorkspaceInFlight).mockReturnValue('apply');
+      const { ctx } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result).toEqual({ started: false, error: expect.any(String), conflict: 'apply' });
+      expect(terraform.destroy).not.toHaveBeenCalled();
+      expect(createRun).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should release the just-acquired apply lock and reject with { started: false, error, conflict } when the workspace becomes busy between the pre-lock check and RunService.createRun (TOCTOU regression)', async () => {
+      const { controller, terraform, createRun, releaseRun, record } = makeDestroyController();
+      vi.mocked(terraform.getWorkspaceInFlight).mockReturnValueOnce(null).mockReturnValueOnce('plan');
+      const { ctx } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result).toEqual({ started: false, error: expect.any(String), conflict: 'plan' });
+      expect(createRun).toHaveBeenCalledWith('destroy', 'test-operator', expect.any(String));
+      expect(releaseRun).toHaveBeenCalledWith(createRun.mock.calls[0]?.[2]);
+      expect(terraform.destroy).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should reject with { started: false, error, conflict: "destroy" } and never call TerraformService.destroy when the durable apply lock is already held (RunLockHeldError)', async () => {
+      const { controller, terraform, createRun, releaseRun, record } = makeDestroyController();
+      const heldLock: RunLock = {
+        runId: 'other-run',
+        kind: 'destroy',
+        initiator: 'someone-else',
+        acquiredAt: '2026-07-21T00:00:00.000Z',
+        expiresAt: '2026-07-21T01:00:00.000Z',
+      };
+      createRun.mockRejectedValue(new RunLockHeldError(heldLock));
+      const { ctx } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result).toEqual({ started: false, error: expect.any(String), conflict: 'destroy' });
+      expect(terraform.destroy).not.toHaveBeenCalled();
+      // No lock was ever acquired by this call, so there is nothing to release.
+      expect(releaseRun).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('should acquire the apply lock with a pre-minted runId as initiator, and call TerraformService.destroy with the confirmationToken, an AbortSignal, and that same runId', async () => {
+      const { controller, terraform, createRun } = makeDestroyController();
+      const { ctx } = makeCtx();
+
+      await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      const runId = createRun.mock.calls[0]?.[2] as string;
+      expect(typeof runId).toBe('string');
+      expect(createRun).toHaveBeenCalledWith('destroy', 'test-operator', runId);
+      expect(terraform.destroy).toHaveBeenCalledWith('token-abc', expect.any(AbortSignal), runId);
+    });
+
+    it('should record an audit entry with action "destroy" for an accepted destroy submission', async () => {
+      const { controller, record } = makeDestroyController();
+      const { ctx } = makeCtx();
+
+      await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      expect(record).toHaveBeenCalledTimes(1);
+      const recordedEntry = record.mock.calls[0]?.[0] as RecordAuditEntryParams;
+      expect(recordedEntry).toMatchObject({ action: 'destroy' });
+    });
+
+    it('should resolve { started: true, runId } immediately, then deliver a normal end-message error and release the just-acquired lock, when TerraformService.destroy rejects before spawning (e.g. DestroyNotConfirmedError)', async () => {
+      // Mirrors apply()'s own synchronous-first-.next() workspace reservation
+      // shape: the reservation happens synchronously before the ack
+      // resolves, so a pre-spawn failure inside TerraformService.destroy
+      // itself (most notably DestroyNotConfirmedError, since the token gate
+      // runs synchronously on the generator's first .next()) is *not*
+      // observed before the ack — it surfaces later as a normal
+      // terraform.destroy.end error once the fire-and-forget streaming loop
+      // awaits its already-in-flight first step.
+      // eslint-disable-next-line require-yield -- generator must throw before yielding to simulate an unconfirmed-token rejection
+      async function* rejectsBeforeSpawn(): AsyncGenerator<TerraformRunChunk> {
+        throw new DestroyNotConfirmedError();
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(rejectsBeforeSpawn);
+      const { controller, releaseRun } = makeDestroyController(terraform);
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result.started).toBe(true);
+      expect(typeof result.runId).toBe('string');
+
+      await flushPromises();
+
+      expect(sender.send).not.toHaveBeenCalledWith('terraform.destroy.chunk', expect.anything());
+      const endCall = sender.send.mock.calls.find(([channel]) => channel === 'terraform.destroy.end');
+      expect(endCall?.[1]).toMatchObject({ runId: result.runId, exitCode: null });
+      expect(String(endCall?.[1]?.error)).toContain('DestroyNotConfirmedError');
+      expect(releaseRun).toHaveBeenCalledWith(result.runId);
+    });
+
+    it('should return { started: true, runId } immediately without waiting for the run to settle', async () => {
+      const terraform = makeTerraform();
+      // eslint-disable-next-line require-yield -- generator intentionally never yields/returns to prove destroy() doesn't await it
+      vi.mocked(terraform.destroy).mockImplementation(async function* () {
+        await new Promise<void>(() => { /* never resolves */ });
+      });
+      const { controller } = makeDestroyController(terraform);
+      const { ctx } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result.started).toBe(true);
+      expect(typeof result.runId).toBe('string');
+    });
+
+    it('should send each yielded chunk to the renderer via sender.send, in order, tagged with the pre-minted runId', async () => {
+      const chunks: TerraformRunChunk[] = [
+        { stream: 'stdout', line: 'aws_instance.game: Destroying...' },
+        { stream: 'stdout', line: 'Destroy complete! Resources: 1 destroyed.' },
+      ];
+      async function* yieldChunks() {
+        for (const chunk of chunks) yield chunk;
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(yieldChunks);
+      const { controller } = makeDestroyController(terraform);
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      const chunkCalls = sender.send.mock.calls.filter(([channel]) => channel === 'terraform.destroy.chunk');
+      const runIds = new Set(chunkCalls.map(([, payload]) => (payload as { runId: string }).runId));
+      expect(runIds).toEqual(new Set([result.runId]));
+      expect(chunkCalls.map(([, payload]) => (payload as { chunk: TerraformRunChunk }).chunk)).toEqual(chunks);
+    });
+
+    it('should send an end message with exitCode 0, the resolved result, and no error, and release the apply lock, when the run succeeds', async () => {
+      async function* succeeds(): AsyncGenerator<TerraformRunChunk, TerraformDestroyResult> {
+        yield { stream: 'stdout', line: 'Destroy complete! Resources: 3 destroyed.' };
+        return { runId: 'ignored-because-controller-mints-its-own', destroyed: 3 };
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(succeeds);
+      const { controller, releaseRun } = makeDestroyController(terraform);
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      const endCall = sender.send.mock.calls.find(([channel]) => channel === 'terraform.destroy.end');
+      expect(endCall?.[1]).toMatchObject({ runId: result.runId, exitCode: 0 });
+      expect(endCall?.[1]).not.toHaveProperty('error');
+      expect(releaseRun).toHaveBeenCalledWith(result.runId);
+    });
+
+    it('should send an end message with the process exit code and a stringified error, and still release the apply lock, on TerraformDestroyError', async () => {
+      async function* failsWithExitCode(): AsyncGenerator<TerraformRunChunk> {
+        yield { stream: 'stderr', line: 'Error: destroy failed' };
+        throw new TerraformDestroyError(1);
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(failsWithExitCode);
+      const { controller, releaseRun } = makeDestroyController(terraform);
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      const endCall = sender.send.mock.calls.find(([channel]) => channel === 'terraform.destroy.end');
+      expect(endCall?.[1]).toMatchObject({ exitCode: 1 });
+      expect(String(endCall?.[1]?.error)).toContain('terraform destroy exited with code 1');
+      expect(releaseRun).toHaveBeenCalledWith(result.runId);
+    });
+
+    it('should not send further chunks or an end message, should finalize the generator via stream.return, and should still release the apply lock, once the WebContents is destroyed', async () => {
+      let returnCalled = false;
+      async function* twoLines(): AsyncGenerator<TerraformRunChunk, TerraformDestroyResult | undefined> {
+        try {
+          yield { stream: 'stdout', line: 'first' };
+          yield { stream: 'stdout', line: 'second' };
+          return undefined;
+        } finally {
+          returnCalled = true;
+        }
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(twoLines);
+      const { controller, releaseRun } = makeDestroyController(terraform);
+      // Simulate WebContents already destroyed before the loop runs.
+      const { ctx, sender } = makeCtx(true);
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      expect(sender.send).not.toHaveBeenCalled();
+      expect(returnCalled).toBe(true);
+      expect(releaseRun).toHaveBeenCalledWith(result.runId);
+    });
+
+    it('should return { started: false, error } when no RunService is available', async () => {
+      const terraform = makeTerraform();
+      const { audit } = makeAudit();
+      const controller = new TerraformController(terraform, audit);
+      const { ctx } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+
+      expect(result.started).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(terraform.destroy).not.toHaveBeenCalled();
+    });
+
+    it('should surface a run visible via terraform.runs.get by tagging every message with the same runId returned in the ack', async () => {
+      // Sanity check that the pre-minted runId used for the lock, the
+      // TerraformService.destroy() call, and every chunk/end message are all
+      // identical — this is what lets the renderer (and terraform.runs.get,
+      // backed by the same runId) find the run afterward.
+      const chunks: TerraformRunChunk[] = [{ stream: 'stdout', line: 'aws_instance.game: Destroying...' }];
+      async function* yieldChunks() {
+        for (const chunk of chunks) yield chunk;
+      }
+      const terraform = makeTerraform();
+      vi.mocked(terraform.destroy).mockImplementation(yieldChunks);
+      const { controller, createRun } = makeDestroyController(terraform);
+      const { ctx, sender } = makeCtx();
+
+      const result = await controller.destroy(DESTROY_PAYLOAD, ctx);
+      await flushPromises();
+
+      const lockRunId = createRun.mock.calls[0]?.[2];
+      const [, terraformSignal, terraformRunId] = vi.mocked(terraform.destroy).mock.calls[0] as [
+        string,
+        AbortSignal,
+        string,
+      ];
+      const chunkRunId = (sender.send.mock.calls.find(([channel]) => channel === 'terraform.destroy.chunk')?.[1] as {
+        runId: string;
+      }).runId;
+
+      expect(result.runId).toBe(lockRunId);
+      expect(terraformRunId).toBe(lockRunId);
+      expect(chunkRunId).toBe(lockRunId);
+      expect(terraformSignal).toBeInstanceOf(AbortSignal);
     });
   });
 

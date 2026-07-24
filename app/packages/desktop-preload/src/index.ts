@@ -14,6 +14,8 @@ export type {
   TerraformPlanAck,
   TerraformApplyPayload,
   TerraformApproveAck,
+  TerraformDestroyPayload,
+  TerraformDestroyMintAck,
 } from './gsd-api.js';
 
 declare global {
