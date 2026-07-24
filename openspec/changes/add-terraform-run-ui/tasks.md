@@ -47,7 +47,7 @@ One task group per GitHub issue; each group is one PR. Order matters: 1 → 2 �
 - [x] 4.6 Display the `rolledBackFrom` tag on history rows and in run detail; surface the missing-version error without writing anything
 - [x] 4.7 Component/page tests: rollback action visibility, confirmation gating, tag rendering, missing-version error path
 - [x] 4.8 Run `npm run app:test` and `npm run app:lint` — both must pass
-- [ ] 4.9 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): rollback flow from apply history`, <70 chars); PR body's FIRST line must be `Closes #112`
+- [x] 4.9 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): rollback flow from apply history`, <70 chars); PR body's FIRST line must be `Closes #112`
 
 ## 5. Issue #307 — Destroy flow (last open child of epic #138)
 
