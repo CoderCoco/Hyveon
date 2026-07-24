@@ -589,6 +589,78 @@ export type TerraformRunsGetResult =
   | { found: true; status: RunDetailStatus; record?: TerraformRunRecord };
 
 /**
+ * Lifecycle status of a {@link RunHistoryRecord}.
+ *
+ * Mirrors `RunStatus` in `@hyveon/shared/src/runs.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export type RunHistoryStatus = 'success' | 'failed' | 'aborted';
+
+/**
+ * A single row in the DynamoDB-persisted run-history table — the shape
+ * `terraform.runs.list` returns pages of. Distinct from the local-disk
+ * {@link TerraformRunRecord} that `terraform.runs.get`/`streamLogs` operate
+ * on: this record additionally carries `sk`, `status`, `approvedBy`/
+ * `approvedAt`, and the offloaded-log fields.
+ *
+ * Mirrors `RunRecord` in `@hyveon/shared/src/runs.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface RunHistoryRecord {
+  /** Sort key: `<startedAt>#<runId>`. */
+  sk: string;
+  /** Unique identifier for the run. */
+  runId: string;
+  /** Which `terraform` subcommand produced this record. */
+  kind: TerraformRunKind;
+  /** Lifecycle status. */
+  status: RunHistoryStatus;
+  /** ISO-8601 timestamp captured immediately before the process was spawned. */
+  startedAt: string;
+  /** ISO-8601 timestamp captured immediately after the process closed. */
+  completedAt: string;
+  /** The process's exit code, or `null` if it never reported one. */
+  exitCode: number | null;
+  /** The tfvars version id the run was executed against, if the caller supplied one. */
+  tfvarsVersionId?: string;
+  /** Hash of the plan artifact this record's run produced or was gated against. */
+  planHash?: string;
+  /** Opaque identifier of the admin who approved this plan run for apply. Set only on approved `plan` records. */
+  approvedBy?: string;
+  /** ISO-8601 timestamp the run was approved at. */
+  approvedAt?: string;
+  /** The run's captured log text, embedded directly on the record when small enough. Mutually exclusive with `logS3Key`. */
+  logInline?: string;
+  /** Key identifying where the run's captured log was offloaded to, once too large to embed. Mutually exclusive with `logInline`. */
+  logS3Key?: string;
+}
+
+/**
+ * A page of {@link RunHistoryRecord}s, newest-first, plus an optional cursor
+ * for fetching the next page. Returned by the `terraform.runs.list` IPC
+ * channel.
+ *
+ * Mirrors `RunPageResult` in `@hyveon/shared/src/runs.ts` — that file is the
+ * source of truth; keep this copy in sync with it.
+ */
+export interface RunHistoryPageResult {
+  /** The page of records, newest-first. */
+  records: RunHistoryRecord[];
+  /** Cursor (a {@link RunHistoryRecord.sk} value) to pass as `before` to fetch the next, older page. Absent on the last page. */
+  nextBefore?: string;
+}
+
+/** Options accepted by the `terraform.runs.list` IPC channel. */
+export interface TerraformRunsListOpts {
+  /** Requested page size; the main process clamps to `[1, 100]` and defaults to `25` when omitted or invalid. */
+  limit?: number;
+  /** Cursor (a {@link RunHistoryRecord.sk} value) to fetch the page older than. */
+  before?: string;
+  /** When provided, only runs with this status are returned. */
+  status?: RunHistoryStatus;
+}
+
+/**
  * Payload accepted by the `terraform.plan` IPC channel. `tfvarsVersionId`,
  * when the configured tfvars source is S3-backed, is forwarded verbatim to
  * `TerraformService.plan`'s pre-spawn staleness check against the current
@@ -871,6 +943,27 @@ export interface GsdTerraformRunsApi {
    * payload's `error` field) if it terminated due to an error.
    */
   streamLogs: (runId: string, signal?: AbortSignal) => AsyncIterable<TerraformRunChunk>;
+  /**
+   * Returns a page of persisted run records, newest-first. `opts.limit` caps
+   * the number of records returned; `opts.before` is a pagination cursor (a
+   * {@link RunHistoryRecord.sk} value) from a previous page's `nextBefore`,
+   * used to fetch the next, older page; `opts.status` filters to a single
+   * run status.
+   *
+   * Internally this is a plain `invoke('terraform.runs.list', opts)` call —
+   * no streaming involved.
+   */
+  list: (opts?: TerraformRunsListOpts) => Promise<RunHistoryPageResult>;
+  /**
+   * Resolves a temporary, fetchable URL for a run's log once it has been
+   * offloaded to remote storage (i.e. the record's `logS3Key` is set,
+   * distinguishing it from a small enough log embedded on `logInline`).
+   *
+   * Internally this is a plain `invoke` call on the `terraform.runs.logUrl`
+   * channel, unwrapped from the channel's `url` result field to a bare
+   * string for ergonomic `fetch(url)` use at the call site.
+   */
+  logUrl: (logKey: string, expiresInSeconds?: number) => Promise<string>;
 }
 
 /**

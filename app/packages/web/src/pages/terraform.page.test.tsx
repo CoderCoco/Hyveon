@@ -75,6 +75,11 @@ describe('TerraformPage', () => {
     expect(screen.getByRole('button', { name: /Run plan/ })).toBeInTheDocument();
   });
 
+  it('should link to the run-history route', () => {
+    renderPage(<TerraformPage />);
+    expect(screen.getByRole('link', { name: 'View history' })).toHaveAttribute('href', '/terraform/history');
+  });
+
   it('should stream plan output and render the resource-change summary once the plan finishes', async () => {
     seedSuccessfulPlan();
     renderPage(<TerraformPage />);

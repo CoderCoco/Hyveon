@@ -121,8 +121,8 @@ function BusyBanner({ conflict }: { conflict: Conflict }) {
   );
 }
 
-/** Inline, non-conflict submission/approval error banner. */
-function ErrorBanner({ message }: { message: string }) {
+/** Inline, non-conflict submission/approval error banner. Reused by the read-only history detail view. */
+export function ErrorBanner({ message }: { message: string }) {
   return (
     <div
       role="alert"
@@ -318,11 +318,19 @@ export function TerraformPage() {
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Terraform</h2>
-        <p className="text-sm text-[var(--color-muted-foreground)]">
-          Plan, review, and apply infrastructure changes directly from the app.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Terraform</h2>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            Plan, review, and apply infrastructure changes directly from the app.
+          </p>
+        </div>
+        <Link
+          to="/terraform/history"
+          className="text-sm text-[var(--color-primary)] underline underline-offset-2"
+        >
+          View history
+        </Link>
       </div>
 
       {!planRunId && (
