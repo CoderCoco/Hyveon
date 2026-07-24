@@ -1,15 +1,18 @@
 import type { ReactElement, ReactNode } from 'react';
 import { render, type RenderOptions, type RenderResult } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, type Location } from 'react-router-dom';
 import { PollingProvider } from '../polling/polling-provider.component.js';
 import { GameStatusProvider } from '../polling/game-status-provider.component.js';
 
 interface RenderPageOptions extends Omit<RenderOptions, 'wrapper'> {
   /**
-   * Initial route the `MemoryRouter` should render. Override when the page
-   * under test reads `useLocation`. Defaults to `/`.
+   * Initial route(s) the `MemoryRouter` should render. Override when the
+   * page under test reads `useLocation`. A plain string sets only the
+   * pathname; pass `{ pathname, state }` when the page also reads
+   * `location.state` (e.g. the rollback flow's `RollbackNavState`). Defaults
+   * to `/`.
    */
-  initialEntries?: string[];
+  initialEntries?: Array<string | Partial<Location>>;
 }
 
 /**

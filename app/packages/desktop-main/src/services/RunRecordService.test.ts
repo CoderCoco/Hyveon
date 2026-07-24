@@ -242,6 +242,26 @@ describe('RunRecordService', () => {
       expect(record).not.toHaveProperty('planHash');
     });
 
+    it('should include rolledBackFrom on the record when present on params', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.persist(makeParams({ rolledBackFrom: 'apply-run-1' }), null);
+
+      const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
+      expect(record.rolledBackFrom).toBe('apply-run-1');
+    });
+
+    it('should omit rolledBackFrom from the record when absent from params', async () => {
+      putRecordMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.persist(makeParams(), null);
+
+      const record = putRecordMock.mock.calls[0]?.[0] as RunRecord;
+      expect(record).not.toHaveProperty('rolledBackFrom');
+    });
+
     it('should swallow a store.putRecord failure and log a warning instead of throwing', async () => {
       putRecordMock.mockRejectedValue(new Error('DynamoDB is down'));
       const service = makeService();

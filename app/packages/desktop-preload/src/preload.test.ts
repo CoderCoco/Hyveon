@@ -1194,6 +1194,73 @@ describe('preload dispatcher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // terraform.rollback
+  // -------------------------------------------------------------------------
+
+  describe('terraform.rollback', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.rollback.resolve channel with the opts payload', async () => {
+        const ack = { resolved: true, versionId: 'v-prior', lastModified: '2026-07-20T00:00:00.000Z' };
+        ipcInvoke.mockResolvedValue(ack);
+        const rollback = (bridge['terraform'] as Record<string, unknown>)['rollback'] as {
+          resolve: (opts: { applyRunId: string }) => Promise<unknown>;
+        };
+        const opts = { applyRunId: 'apply-run-1' };
+
+        const result = await rollback.resolve(opts);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.rollback.resolve', opts);
+        expect(result).toEqual(ack);
+      });
+
+      it('should invoke the terraform.rollback.confirm channel with the opts payload', async () => {
+        const ack = { confirmed: true, versionId: 'v-new-head' };
+        ipcInvoke.mockResolvedValue(ack);
+        const rollback = (bridge['terraform'] as Record<string, unknown>)['rollback'] as {
+          confirm: (opts: { applyRunId: string }) => Promise<unknown>;
+        };
+        const opts = { applyRunId: 'apply-run-1' };
+
+        const result = await rollback.confirm(opts);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.rollback.confirm', opts);
+        expect(result).toEqual(ack);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.rollback.confirm is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const ack = { confirmed: true, versionId: 'v-mock-head' };
+        const mockHandler = vi.fn().mockResolvedValue(ack);
+        testApi.mock('terraform.rollback.confirm', mockHandler);
+
+        const rollback = (bridge['terraform'] as Record<string, unknown>)['rollback'] as {
+          confirm: (opts: { applyRunId: string }) => Promise<unknown>;
+        };
+        const opts = { applyRunId: 'apply-run-mock' };
+        const result = await rollback.confirm(opts);
+
+        expect(mockHandler).toHaveBeenCalledWith(opts);
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(result).toEqual(ack);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // terraform.output
   // -------------------------------------------------------------------------
 

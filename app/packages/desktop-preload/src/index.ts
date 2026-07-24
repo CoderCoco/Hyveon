@@ -12,10 +12,13 @@ export type {
   RunHistoryPageResult,
   RunHistoryStatus,
   TerraformPlanAck,
+  TerraformPlanPayload,
   TerraformApplyPayload,
   TerraformApproveAck,
   TerraformDestroyPayload,
   TerraformDestroyMintAck,
+  TerraformRollbackResolveAck,
+  TerraformRollbackConfirmAck,
 } from './gsd-api.js';
 
 declare global {

@@ -161,4 +161,22 @@ describe('TerraformRunDetailPage', () => {
     expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
   });
+
+  it('should link to the rolled-back apply run when the record carries rolledBackFrom', async () => {
+    gsdMock.terraform.runs.list.mockResolvedValue({
+      records: [makeRecord({ kind: 'plan', logInline: 'log', rolledBackFrom: 'apply-1' })],
+    });
+    renderDetailPage('run-1');
+
+    const link = await screen.findByRole('link', { name: /apply run apply-1/ });
+    expect(link).toHaveAttribute('href', '/terraform/history/apply-1');
+  });
+
+  it('should not render a rollback tag when the record has no rolledBackFrom', async () => {
+    gsdMock.terraform.runs.list.mockResolvedValue({ records: [makeRecord({ logInline: 'log' })] });
+    renderDetailPage('run-1');
+
+    await screen.findByText('log');
+    expect(screen.queryByText(/Rollback of/)).not.toBeInTheDocument();
+  });
 });

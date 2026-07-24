@@ -1,12 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { AlertTriangle, CheckCircle2, Loader2, Play, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react';
-import type { RunDetailStatus, TerraformRunChunk, TerraformRunRecord } from '@hyveon/desktop-preload';
+import type {
+  RunDetailStatus,
+  TerraformPlanPayload,
+  TerraformRunChunk,
+  TerraformRunRecord,
+} from '@hyveon/desktop-preload';
 import { Button } from '../components/ui/button.component.js';
 import { Badge } from '../components/ui/badge.component.js';
 import { AnsiLogViewer } from '../components/ansi-log-viewer.component.js';
 import { ConfirmDialog } from '../components/confirm-dialog.component.js';
+
+/**
+ * `location.state` shape the rollback flow (#112) navigates to `/terraform`
+ * with, from a confirmed rollback in `/terraform/history` — see
+ * `RollbackAction`. `tfvarsVersionId` is the freshly-restored head version to
+ * plan against; `rolledBackFrom` is the apply run it was restored from, sent
+ * straight through to `gsd.terraform.plan` so the resulting plan's persisted
+ * record carries the same tag.
+ */
+interface RollbackNavState {
+  tfvarsVersionId: string;
+  rolledBackFrom: string;
+}
+
+/** Type guard for {@link RollbackNavState} — `location.state` is `unknown` until narrowed. */
+function isRollbackNavState(state: unknown): state is RollbackNavState {
+  return (
+    typeof state === 'object' &&
+    state !== null &&
+    typeof (state as Partial<RollbackNavState>).tfvarsVersionId === 'string' &&
+    typeof (state as Partial<RollbackNavState>).rolledBackFrom === 'string'
+  );
+}
 
 /**
  * Mirrors `APPROVAL_WINDOW_MS` in `@hyveon/shared/runs.ts` — that constant is
@@ -174,6 +202,12 @@ function ChangeSummaryBadges({ summary }: { summary: ChangeSummary }) {
  * rather than failing silently.
  */
 export function TerraformPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const rollbackState = isRollbackNavState(location.state) ? location.state : null;
+  /** Guards against re-submitting the rollback plan if this component re-renders while the same `location.state` is still present. */
+  const rollbackConsumedRef = useRef(false);
+
   const [planRunId, setPlanRunId] = useState<string | null>(null);
   const [planConflict, setPlanConflict] = useState<Conflict | null>(null);
   const [planSubmitError, setPlanSubmitError] = useState<string | null>(null);
@@ -262,7 +296,7 @@ export function TerraformPage() {
     };
   }, [destroyRunId, destroyLog.ended]);
 
-  const submitPlan = useCallback(() => {
+  const submitPlan = useCallback((payload?: TerraformPlanPayload) => {
     if (!window.gsd) {
       setPlanSubmitError('IPC bridge (window.gsd) is not available in this context.');
       return;
@@ -272,7 +306,7 @@ export function TerraformPage() {
     setPlanSubmitError(null);
     void (async () => {
       try {
-        const ack = await window.gsd!.terraform.plan();
+        const ack = await window.gsd!.terraform.plan(payload);
         if (ack.started && ack.runId) {
           setPlanRunId(ack.runId);
           setPlanStatus(null);
@@ -292,6 +326,17 @@ export function TerraformPage() {
       }
     })();
   }, []);
+
+  // Auto-submits the tagged rollback plan once, when arriving from a
+  // confirmed rollback in history (see RollbackNavState) — the restore write
+  // already happened before this navigation, so the plan just needs to run
+  // against the new head with `rolledBackFrom` set for provenance.
+  useEffect(() => {
+    if (!rollbackState || rollbackConsumedRef.current) return;
+    rollbackConsumedRef.current = true;
+    navigate('/terraform', { replace: true, state: null });
+    submitPlan({ tfvarsVersionId: rollbackState.tfvarsVersionId, rolledBackFrom: rollbackState.rolledBackFrom });
+  }, [navigate, rollbackState, submitPlan]);
 
   const submitApprove = useCallback(() => {
     if (!window.gsd || !planRunId) return;
@@ -410,7 +455,7 @@ export function TerraformPage() {
 
       {!planRunId && (
         <div className="flex flex-col gap-3">
-          <Button onClick={submitPlan} disabled={planning}>
+          <Button onClick={() => submitPlan()} disabled={planning}>
             {planning ? <Loader2 className="animate-spin" /> : <Play />}
             Run plan
           </Button>
@@ -425,6 +470,18 @@ export function TerraformPage() {
             <h3 className="text-lg font-semibold text-[var(--color-foreground)]">Plan</h3>
             {planSummary && <ChangeSummaryBadges summary={planSummary} />}
           </div>
+
+          {planRecord?.rolledBackFrom && (
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Rollback of{' '}
+              <Link
+                to={`/terraform/history/${planRecord.rolledBackFrom}`}
+                className="text-[var(--color-primary)] underline underline-offset-2"
+              >
+                apply run {planRecord.rolledBackFrom}
+              </Link>
+            </p>
+          )}
 
           <AnsiLogViewer chunks={planLog.chunks} emptyMessage="Waiting for plan output…" />
 

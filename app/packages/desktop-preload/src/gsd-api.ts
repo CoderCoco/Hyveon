@@ -557,6 +557,8 @@ export interface TerraformRunRecord {
    * `gsd.terraform.apply`'s `planHash` payload field.
    */
   planHash?: string;
+  /** The `runId` of the `apply` run this plan rolled back, if started via the rollback flow. */
+  rolledBackFrom?: string;
 }
 
 /**
@@ -633,6 +635,8 @@ export interface RunHistoryRecord {
   logInline?: string;
   /** Key identifying where the run's captured log was offloaded to, once too large to embed. Mutually exclusive with `logInline`. */
   logS3Key?: string;
+  /** The `runId` of the `apply` run this plan rolled back, if started via the rollback flow (#112). */
+  rolledBackFrom?: string;
 }
 
 /**
@@ -672,6 +676,8 @@ export interface TerraformRunsListOpts {
  */
 export interface TerraformPlanPayload {
   tfvarsVersionId?: string;
+  /** The `runId` of the `apply` run being rolled back, if this plan was started via the rollback flow (#112). */
+  rolledBackFrom?: string;
 }
 
 /**
@@ -695,6 +701,41 @@ export interface TerraformPlanAck {
   runId?: string;
   error?: string;
   conflict?: 'init' | 'plan' | 'apply' | 'destroy';
+}
+
+/**
+ * Result the `terraform.rollback.resolve` IPC channel resolves with.
+ * `resolved: true` carries the historic version identified as the rollback
+ * target — `versionId`/`lastModified` — for the confirmation dialog to
+ * display before anything is written. `resolved: false` means resolution
+ * was rejected; `error` is always a human-readable description of why.
+ *
+ * Mirrors `TerraformRollbackResolveAck` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformRollbackResolveAck {
+  resolved: boolean;
+  versionId?: string;
+  lastModified?: string;
+  error?: string;
+}
+
+/**
+ * Result the `terraform.rollback.confirm` IPC channel resolves with.
+ * `confirmed: true` means the historic tfvars content was restored as a new
+ * head version — `versionId` is the new version's id. `confirmed: false`
+ * means no write was attempted; `error` is always a human-readable
+ * description of why.
+ *
+ * Mirrors `TerraformRollbackConfirmAck` in
+ * `@hyveon/desktop-main/src/controllers/terraform.controller.ts` — that file
+ * is the source of truth; keep this copy in sync with it.
+ */
+export interface TerraformRollbackConfirmAck {
+  confirmed: boolean;
+  versionId?: string;
+  error?: string;
 }
 
 /**
@@ -1090,6 +1131,36 @@ export interface GsdTerraformApi {
   output: (force?: boolean) => Promise<TfOutputs | null>;
   /** Terraform run history: look up a single run's status and stream its log output. */
   runs: GsdTerraformRunsApi;
+  /** Rollback flow (#112): preview and restore a prior tfvars version from an apply run in history. */
+  rollback: GsdTerraformRollbackApi;
+}
+
+/**
+ * Rollback flow (#112) IPC surface. A rollback is two calls: {@link resolve}
+ * previews the target version for the confirmation dialog without writing
+ * anything, then {@link confirm} restores it as a new tfvars head version.
+ * The caller completes the rollback with an ordinary `terraform.plan` call
+ * (`{ tfvarsVersionId: confirm's returned versionId, rolledBackFrom: applyRunId }`)
+ * so the tagged plan streams and gates through the exact same channel every
+ * other plan does.
+ */
+export interface GsdTerraformRollbackApi {
+  /**
+   * Resolves the tfvars version that was live immediately before the given
+   * `apply` run, by invoking the `terraform.rollback.resolve` IPC channel.
+   * Read-only — performs no write. `resolved: false` means the target
+   * couldn't be resolved (no matching apply run, not an apply run, no
+   * recorded `tfvarsVersionId`, or no earlier version exists) — `error`
+   * describes why.
+   */
+  resolve: (opts: { applyRunId: string }) => Promise<TerraformRollbackResolveAck>;
+  /**
+   * Confirms a previewed rollback of `opts.applyRunId`, by invoking the
+   * `terraform.rollback.confirm` IPC channel — restores the historic tfvars
+   * content as a new head version. `confirmed: false` means no write was
+   * attempted — `error` describes why.
+   */
+  confirm: (opts: { applyRunId: string }) => Promise<TerraformRollbackConfirmAck>;
 }
 
 // ---------------------------------------------------------------------------

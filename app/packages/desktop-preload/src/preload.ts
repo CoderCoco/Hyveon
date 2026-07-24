@@ -64,6 +64,8 @@ import type {
   TerraformInitConfig,
   TerraformPlanAck,
   TerraformPlanPayload,
+  TerraformRollbackConfirmAck,
+  TerraformRollbackResolveAck,
   TerraformRunChunk,
   TerraformRunsGetResult,
   TerraformRunsListOpts,
@@ -615,6 +617,12 @@ const api: GsdApi = {
       list: (opts?: TerraformRunsListOpts) => invoke<RunHistoryPageResult>('terraform.runs.list', opts),
       logUrl: (logKey: string, expiresInSeconds?: number) =>
         invoke<{ url: string }>('terraform.runs.logUrl', { logKey, expiresInSeconds }).then((r) => r.url),
+    },
+    rollback: {
+      resolve: (opts: { applyRunId: string }) =>
+        invoke<TerraformRollbackResolveAck>('terraform.rollback.resolve', opts),
+      confirm: (opts: { applyRunId: string }) =>
+        invoke<TerraformRollbackConfirmAck>('terraform.rollback.confirm', opts),
     },
   },
 };
