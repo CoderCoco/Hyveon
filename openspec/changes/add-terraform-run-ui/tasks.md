@@ -27,7 +27,7 @@ One task group per GitHub issue; each group is one PR. Order matters: 1 → 2 �
 - [x] 2.8 Build the read-only run-detail view reusing the run view components from group 1, with the log-source ladder: `streamLogs` replay → `logInline` → presigned URL fetch; no approve/apply controls on terminal runs
 - [x] 2.9 Register the `/terraform/history` route + navigation from the Plan/Apply page; routed-page tests with a mocked `gsd` bridge (listing, filters, detail fallback ladder) and a Playwright page object
 - [x] 2.10 Run `npm run app:test` and `npm run app:lint` — both must pass
-- [ ] 2.11 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): apply-history view backed by runs listing API`, <70 chars); PR body's FIRST line must be `Closes #111`
+- [x] 2.11 Open PR via the `/pr` command with a Conventional Commits title (`feat(web): apply-history view backed by runs listing API`, <70 chars); PR body's FIRST line must be `Closes #111`
 
 ## 3. Issue #260 — `AwsRemoteFileStore.listVersions()` pagination fix
 
