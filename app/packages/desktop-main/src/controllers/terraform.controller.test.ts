@@ -1398,6 +1398,19 @@ describe('TerraformController', () => {
       expect(result).toEqual({ confirmed: true, versionId: 'tfvars-v-new-head' });
     });
 
+    it('should record an audit entry with action "rollback" and the new head versionId on success', async () => {
+      const terraform = makeTerraform();
+      const { audit, record } = makeAudit();
+
+      await new TerraformController(terraform, audit).confirmRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(record).toHaveBeenCalledTimes(1);
+      const recordedEntry = record.mock.calls[0]?.[0] as RecordAuditEntryParams;
+      expect(recordedEntry).toMatchObject({ action: 'rollback', versionId: 'tfvars-v-new-head' });
+    });
+
     it('should return { confirmed: false, error } and never call TerraformService.confirmRollback when applyRunId is missing', async () => {
       const terraform = makeTerraform();
 
@@ -1420,6 +1433,19 @@ describe('TerraformController', () => {
       });
 
       expect(result).toEqual({ confirmed: false, error: error.message });
+    });
+
+    it('should not record an audit entry when confirmation fails', async () => {
+      const terraform = makeTerraform();
+      const { audit, record } = makeAudit();
+      const error = new RollbackVersionMissingError('tfvars-v-expired');
+      vi.mocked(terraform.confirmRollback).mockRejectedValue(error);
+
+      await new TerraformController(terraform, audit).confirmRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(record).not.toHaveBeenCalled();
     });
   });
 });

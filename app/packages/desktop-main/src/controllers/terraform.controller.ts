@@ -1103,6 +1103,21 @@ export class TerraformController implements OnModuleInit {
 
     try {
       const result = await this.terraform.confirmRollback(payload.applyRunId);
+
+      // Best-effort: AuditService.record() never throws (failures are
+      // logged and swallowed internally), mirroring the audit entry
+      // recorded by plan()/apply()/approve() for their own accepted
+      // submissions — restoring a version as a new head is the most
+      // consequential of these writes, so it shouldn't be the one exempt
+      // from the audit trail.
+      await this.audit?.record({
+        action: 'rollback',
+        game: '',
+        before: null,
+        after: null,
+        versionId: result.versionId,
+      });
+
       return { confirmed: true, versionId: result.versionId };
     } catch (err) {
       logger.error('terraform rollback confirm error', { err, applyRunId: payload.applyRunId });

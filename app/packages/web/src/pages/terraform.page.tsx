@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CheckCircle2, Loader2, Play, RotateCcw, ShieldCheck } from 'lucide-react';
 import type { RunDetailStatus, TerraformPlanPayload, TerraformRunChunk, TerraformRunRecord } from '@hyveon/desktop-preload';
@@ -177,6 +177,7 @@ function ChangeSummaryBadges({ summary }: { summary: ChangeSummary }) {
  */
 export function TerraformPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const rollbackState = isRollbackNavState(location.state) ? location.state : null;
   /** Guards against re-submitting the rollback plan if this component re-renders while the same `location.state` is still present. */
   const rollbackConsumedRef = useRef(false);
@@ -285,8 +286,9 @@ export function TerraformPage() {
   useEffect(() => {
     if (!rollbackState || rollbackConsumedRef.current) return;
     rollbackConsumedRef.current = true;
+    navigate('/terraform', { replace: true, state: null });
     submitPlan({ tfvarsVersionId: rollbackState.tfvarsVersionId, rolledBackFrom: rollbackState.rolledBackFrom });
-  }, [rollbackState, submitPlan]);
+  }, [navigate, rollbackState, submitPlan]);
 
   const submitApprove = useCallback(() => {
     if (!window.gsd || !planRunId) return;
