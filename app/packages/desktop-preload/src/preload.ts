@@ -41,6 +41,12 @@
  * `terraform.runs.logs.end` side channels shared by every call, each tagged
  * with the `streamId` minted for that call, so overlapping subscriptions to
  * different runs' log output can never cross-terminate one another.
+ *
+ * `terraform.runs.list(opts)` and `terraform.runs.logUrl(logKey, expiresInSeconds)`
+ * are further plain-invoke examples, backing the apply-history view: `list`
+ * resolves a `RunHistoryPageResult` page of persisted run records, and
+ * `logUrl` resolves a presigned URL for a run's offloaded log, unwrapped from
+ * the IPC channel's `{ url }` result to a bare string.
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
@@ -58,6 +64,8 @@ import type {
   TerraformPlanPayload,
   TerraformRunChunk,
   TerraformRunsGetResult,
+  TerraformRunsListOpts,
+  RunHistoryPageResult,
   TfOutputs,
   UpdateGamePayload,
 } from './gsd-api.js';
@@ -600,6 +608,9 @@ const api: GsdApi = {
     runs: {
       get: (runId: string) => invoke<TerraformRunsGetResult>('terraform.runs.get', { runId }),
       streamLogs: streamTerraformRunLogs,
+      list: (opts?: TerraformRunsListOpts) => invoke<RunHistoryPageResult>('terraform.runs.list', opts),
+      logUrl: (logKey: string, expiresInSeconds?: number) =>
+        invoke<{ url: string }>('terraform.runs.logUrl', { logKey, expiresInSeconds }).then((r) => r.url),
     },
   },
 };

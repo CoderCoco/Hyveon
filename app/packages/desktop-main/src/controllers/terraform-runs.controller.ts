@@ -2,14 +2,29 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, Controller, OnModuleInit } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron';
-import { computeRunDetailStatus, type RunDetailStatus } from '@hyveon/shared';
+import { computeRunDetailStatus, type RunDetailStatus, type RunPageResult, type RunStatus } from '@hyveon/shared';
 import {
   TerraformService,
   type TerraformRunChunk,
   type TerraformRunRecord,
 } from '../services/TerraformService.js';
 import { RunService } from '../services/RunService.js';
+import { RunRecordService, type ListRunsOpts } from '../services/RunRecordService.js';
 import { logger } from '../logger.js';
+
+/** Every {@link RunStatus} value — used to validate {@link TerraformRunsController.list}'s `status` filter. */
+const RUN_STATUSES: readonly RunStatus[] = ['success', 'failed', 'aborted'];
+
+/** Result of {@link TerraformRunsController.logUrl}: a presigned/temporary URL the renderer can fetch the offloaded log from directly. */
+export interface TerraformRunsLogUrlResult {
+  url: string;
+}
+
+/** Payload accepted by {@link TerraformRunsController.logUrl}. */
+export interface TerraformRunsLogUrlPayload {
+  logKey: string;
+  expiresInSeconds?: number;
+}
 
 /** Payload accepted by {@link TerraformRunsController.get}. */
 export interface TerraformRunsGetPayload {
@@ -96,6 +111,7 @@ export class TerraformRunsController implements OnModuleInit {
   constructor(
     private readonly terraform: TerraformService,
     private readonly runService: RunService,
+    private readonly runRecordService: RunRecordService,
   ) {}
 
   /**
@@ -261,5 +277,51 @@ export class TerraformRunsController implements OnModuleInit {
     })();
 
     return { streamId };
+  }
+
+  /**
+   * Returns a page of persisted run records, newest-first — see
+   * `RunRecordService.listRuns()`. `opts` mirrors {@link ListRunsOpts}
+   * (`limit`/`before`/`status`) and defaults to `{}` when the renderer
+   * invokes `terraform.runs.list` with no arguments.
+   *
+   * @throws `BadRequestException` when `opts.status` is present but not one
+   *   of {@link RUN_STATUSES}.
+   *
+   * Reachable via the Electron IPC transport (`terraform.runs.list`).
+   */
+  @MessagePattern('terraform.runs.list')
+  async list(@Payload() opts: ListRunsOpts = {}): Promise<RunPageResult> {
+    if (opts?.status !== undefined && !RUN_STATUSES.includes(opts.status)) {
+      throw new BadRequestException({
+        success: false,
+        error: `terraform.runs.list status must be one of ${RUN_STATUSES.join(', ')}`,
+      });
+    }
+    return this.runRecordService.listRuns(opts ?? {});
+  }
+
+  /**
+   * Resolves a temporary, fetchable URL for a run's log once it has been
+   * offloaded to the store's remote file backend (i.e. the run's
+   * `RunRecord.logS3Key` is set) — see `RunRecordService.getLogUrl()`.
+   *
+   * @throws `BadRequestException` when `payload.logKey` isn't a non-empty
+   *   string.
+   *
+   * Reachable via the Electron IPC transport (`terraform.runs.logUrl`).
+   */
+  @MessagePattern('terraform.runs.logUrl')
+  async logUrl(@Payload() payload: TerraformRunsLogUrlPayload): Promise<TerraformRunsLogUrlResult> {
+    const logKey = payload?.logKey;
+    if (typeof logKey !== 'string' || logKey.length === 0) {
+      throw new BadRequestException({
+        success: false,
+        error: 'terraform.runs.logUrl requires a non-empty logKey string',
+      });
+    }
+
+    const url = await this.runRecordService.getLogUrl(logKey, payload.expiresInSeconds);
+    return { url };
   }
 }

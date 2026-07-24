@@ -25,7 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import { buildRunSk, deriveRunStatus } from '@hyveon/shared';
-import type { RunKind, RunRecord, RunRecordStore, RunStatus } from '@hyveon/shared';
+import type { RunKind, RunPageResult, RunRecord, RunRecordStore, RunStatus } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { RunService } from './RunService.js';
@@ -96,6 +96,34 @@ export class RunRecordNotSuccessfulError extends Error {
  * the item.
  */
 export const INLINE_LOG_LIMIT_BYTES = 350 * 1024;
+
+/** Default page size for {@link RunRecordService.listRuns} when `limit` is omitted or invalid. */
+const DEFAULT_LIST_LIMIT = 25;
+
+/** Maximum page size {@link RunRecordService.listRuns} will honour, regardless of the requested `limit`. */
+const MAX_LIST_LIMIT = 100;
+
+/** Input to {@link RunRecordService.listRuns} — an optional page size, pagination cursor, and status filter. */
+export interface ListRunsOpts {
+  /** Requested page size; clamped to `[1, 100]` and defaulted to `25` when omitted or invalid. */
+  limit?: number;
+  /** Cursor (a {@link RunRecord.sk} value) to fetch the page older than. */
+  before?: string;
+  /** When provided, only runs with this status are returned. */
+  status?: RunStatus;
+}
+
+/**
+ * Clamps a requested page size to a sane default (25) and hard maximum
+ * (100). Falls back to the default for anything non-finite or `<= 0`.
+ * Mirrors `AuditService`'s identically-named helper.
+ */
+function clampLimit(limit?: number): number {
+  if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
+    return DEFAULT_LIST_LIMIT;
+  }
+  return Math.max(1, Math.min(Math.floor(limit), MAX_LIST_LIMIT));
+}
 
 /**
  * Input to {@link RunRecordService.persist} — everything about a finished
@@ -303,6 +331,33 @@ export class RunRecordService {
     }
 
     return this.store.getRecordByRunId(runId);
+  }
+
+  /**
+   * Lists run records newest-first, delegating to `store.listRuns` after
+   * clamping `opts.limit` via {@link clampLimit}.
+   *
+   * Mirrors {@link getByRunId}'s missing-table guard: when `runs_table_name`
+   * isn't in the Terraform outputs yet (table not deployed), a winston
+   * warning is logged and an empty page is returned rather than letting
+   * `store.listRuns` throw — the apply-history page should render its empty
+   * state on pre-runs-table deployments, not an error state.
+   *
+   * @param opts - Listing options: optional page size, pagination cursor, and status filter.
+   * @returns The requested page of records plus a cursor for the next page.
+   */
+  async listRuns(opts: ListRunsOpts = {}): Promise<RunPageResult> {
+    const tableName = this.config.getTfOutputs()?.runs_table_name;
+    if (!tableName) {
+      logger.warn('RunRecordService.listRuns: runs_table_name not configured, returning empty run history page');
+      return { records: [] };
+    }
+
+    return this.store.listRuns({
+      limit: clampLimit(opts.limit),
+      ...(opts.before !== undefined ? { before: opts.before } : {}),
+      ...(opts.status !== undefined ? { status: opts.status } : {}),
+    });
   }
 
   /**
