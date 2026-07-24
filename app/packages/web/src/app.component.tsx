@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/dashboard.page.js';
 import { CostsPage } from './pages/costs.page.js';
 import { DiscordPage } from './pages/discord.page.js';
 import { LogsPage } from './pages/logs.page.js';
+import { TerraformPage } from './pages/terraform.page.js';
 import { SettingsPage } from './pages/settings.page.js';
 import { GamesPage } from './pages/games.page.js';
 import { GameDetailPage } from './pages/game-detail.page.js';
@@ -18,6 +19,7 @@ import { Toaster } from './components/ui/sonner.component.js';
  *   - `/costs` → Cost analysis placeholder
  *   - `/discord` → Discord settings placeholder
  *   - `/logs` → Logs placeholder
+ *   - `/terraform` → Terraform plan/apply
  *   - `/settings` → Watchdog + general settings
  *   - `/games` → Games list (read-only settings)
  *   - `/games/:name` → Per-game settings detail (read-only)
@@ -35,6 +37,7 @@ export default function App() {
               <Route path="/costs" element={<CostsPage />} />
               <Route path="/discord" element={<DiscordPage />} />
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/terraform" element={<TerraformPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/games" element={<GamesPage />} />
               <Route path="/games/:name" element={<GameDetailPage />} />

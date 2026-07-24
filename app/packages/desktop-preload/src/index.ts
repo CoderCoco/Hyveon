@@ -1,4 +1,16 @@
-export type { GsdApi, GsdTestApi, GsdMockNamespaces } from './gsd-api.js';
+export type {
+  GsdApi,
+  GsdTestApi,
+  GsdMockNamespaces,
+  TerraformRunChunk,
+  TerraformRunKind,
+  TerraformRunRecord,
+  RunDetailStatus,
+  TerraformRunsGetResult,
+  TerraformPlanAck,
+  TerraformApplyPayload,
+  TerraformApproveAck,
+} from './gsd-api.js';
 
 declare global {
   interface Window {

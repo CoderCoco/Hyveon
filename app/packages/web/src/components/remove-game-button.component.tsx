@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Trash2 } from 'lucide-react';
 import { api } from '../api.service.js';
@@ -82,9 +82,11 @@ export function RemoveGameButton({ game }: Props) {
             <AlertDialogDescription>
               This deletes the <code className="font-[var(--font-mono)] text-xs">{game}</code> entry from{' '}
               <code className="font-[var(--font-mono)] text-xs">terraform.tfvars</code>. The deployed AWS
-              resources stay live until an operator runs{' '}
-              <code className="font-[var(--font-mono)] text-xs">terraform apply</code> (or{' '}
-              <code className="font-[var(--font-mono)] text-xs">make tf-apply</code>) to apply the change.
+              resources stay live until an operator applies the change from the{' '}
+              <Link to="/terraform" className="underline underline-offset-2">
+                Terraform
+              </Link>{' '}
+              page.
             </AlertDialogDescription>
           </AlertDialogHeader>
 

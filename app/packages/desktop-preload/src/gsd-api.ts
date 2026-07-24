@@ -549,6 +549,14 @@ export interface TerraformRunRecord {
   exitCode: number | null;
   /** The tfvars version id the applied plan was generated against, if the caller supplied one. */
   tfvarsVersionId?: string;
+  /**
+   * SHA-256 hex digest of the persisted `.tfplan` artifact this record's
+   * `plan` run produced. Set only on a successful `plan` record; a failed
+   * or aborted `plan` run (and `apply`/`destroy` records generally) leave
+   * this unset. The `/terraform` page passes this straight through to
+   * `gsd.terraform.apply`'s `planHash` payload field.
+   */
+  planHash?: string;
 }
 
 /**

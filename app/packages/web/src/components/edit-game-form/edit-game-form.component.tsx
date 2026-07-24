@@ -32,6 +32,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import type { GameServerValidationIssue } from '@hyveon/shared/gameServerValidator';
 import { Button } from '@/components/ui/button.component';
@@ -209,8 +210,11 @@ export function EditGameForm({ game, onSaved }: EditGameFormProps) {
       )}
 
       <p className="text-xs text-[var(--color-muted-foreground)]">
-        Saving only updates <code>terraform.tfvars</code> — run <code>make tf-apply</code> to apply this change to
-        the live server.
+        Saving only updates <code>terraform.tfvars</code> — visit{' '}
+        <Link to="/terraform" className="underline underline-offset-2">
+          Terraform
+        </Link>{' '}
+        to apply this change to the live server.
       </p>
 
       <Button type="button" onClick={handleSave} disabled={saveDisabled}>
