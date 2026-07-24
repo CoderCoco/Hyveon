@@ -216,7 +216,7 @@ describe('TerraformPage', () => {
 
       const alerts = await screen.findAllByRole('alert');
       expect(alerts.some((el) => el.textContent?.includes('terraform apply'))).toBe(true);
-      expect(screen.queryByLabelText('Destroy run')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Destroy run' })).not.toBeInTheDocument();
     });
 
     it('should mint a fresh token on every attempt', async () => {

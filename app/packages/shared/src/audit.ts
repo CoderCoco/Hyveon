@@ -9,8 +9,9 @@ import type { GameServer } from './tfvars.js';
  * for a later `apply` (see `TerraformController.approve`, issue #109),
  * `apply` for a `terraform apply` invocation that actually mutated
  * infrastructure (see `TerraformController.apply`, issue #109), and
- * `destroy` for a confirmed `terraform destroy` invocation that tore down
- * every managed resource (see `TerraformController.destroy`, issue #307).
+ * `destroy` for a confirmed `terraform destroy` invocation that was
+ * initiated to tear down every managed resource — recorded once the run
+ * starts, not once it's confirmed successful (see `TerraformController.destroy`, issue #307).
  */
 export type AuditAction = 'add' | 'edit' | 'remove' | 'plan' | 'approve' | 'apply' | 'destroy';
 
