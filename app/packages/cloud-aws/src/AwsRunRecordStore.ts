@@ -187,6 +187,7 @@ export class AwsRunRecordStore implements RunRecordStore {
           completedAt: record.completedAt,
           exitCode: record.exitCode,
           ...(record.tfvarsVersionId !== undefined ? { tfvarsVersionId: record.tfvarsVersionId } : {}),
+          ...(record.rolledBackFrom !== undefined ? { rolledBackFrom: record.rolledBackFrom } : {}),
           ...(record.logInline !== undefined ? { logInline: record.logInline } : {}),
           ...(record.logS3Key !== undefined ? { logS3Key: record.logS3Key } : {}),
         },
@@ -324,6 +325,9 @@ export class AwsRunRecordStore implements RunRecordStore {
     };
     if (item['tfvarsVersionId'] !== undefined) {
       record.tfvarsVersionId = item['tfvarsVersionId'] as string;
+    }
+    if (item['rolledBackFrom'] !== undefined) {
+      record.rolledBackFrom = item['rolledBackFrom'] as string;
     }
     if (item['planHash'] !== undefined) {
       record.planHash = item['planHash'] as string;

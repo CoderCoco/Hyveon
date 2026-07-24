@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import type { RunHistoryRecord, RunHistoryStatus, TerraformRunKind } from '@hyveon/desktop-preload';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.component.js';
 import { Button } from '../components/ui/button.component.js';
+import { Badge } from '../components/ui/badge.component.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table.component.js';
 import { RunStatusBadge } from '../components/run-status-badge.component.js';
+import { RollbackAction, type RollbackResult } from '../components/rollback-action.component.js';
 
 /** Number of run records fetched per page (initial load and each "Load more"). */
 const PAGE_SIZE = 25;
@@ -35,6 +37,7 @@ function formatTimestamp(iso: string): string {
  * render fewer rows than {@link PAGE_SIZE} without needing a dedicated index.
  */
 export function TerraformHistoryPage() {
+  const navigate = useNavigate();
   const [records, setRecords] = useState<RunHistoryRecord[]>([]);
   const [nextBefore, setNextBefore] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -98,6 +101,14 @@ export function TerraformHistoryPage() {
   }, [nextBefore, statusFilter]);
 
   const visibleRecords = kindFilter === 'all' ? records : records.filter((r) => r.kind === kindFilter);
+
+  /** Routes a confirmed rollback into the plan/apply run view — see `TerraformPage`'s `RollbackNavState`. */
+  const handleRolledBack = useCallback(
+    ({ versionId, rolledBackFrom }: RollbackResult) => {
+      navigate('/terraform', { state: { tfvarsVersionId: versionId, rolledBackFrom } });
+    },
+    [navigate],
+  );
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -170,18 +181,26 @@ export function TerraformHistoryPage() {
                     <TableHead>Started</TableHead>
                     <TableHead>Completed</TableHead>
                     <TableHead>Approver</TableHead>
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleRecords.map((record) => (
                     <TableRow key={record.sk}>
                       <TableCell>
-                        <Link
-                          to={`/terraform/history/${record.runId}`}
-                          className="capitalize text-[var(--color-primary)] underline underline-offset-2"
-                        >
-                          {record.kind}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to={`/terraform/history/${record.runId}`}
+                            className="capitalize text-[var(--color-primary)] underline underline-offset-2"
+                          >
+                            {record.kind}
+                          </Link>
+                          {record.rolledBackFrom && (
+                            <Badge variant="cyan" title={`Rollback of apply run ${record.rolledBackFrom}`}>
+                              rollback
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <RunStatusBadge status={record.status} />
@@ -189,6 +208,11 @@ export function TerraformHistoryPage() {
                       <TableCell className="whitespace-nowrap text-xs">{formatTimestamp(record.startedAt)}</TableCell>
                       <TableCell className="whitespace-nowrap text-xs">{formatTimestamp(record.completedAt)}</TableCell>
                       <TableCell className="text-xs">{record.approvedBy ?? '—'}</TableCell>
+                      <TableCell>
+                        {record.kind === 'apply' && record.tfvarsVersionId !== undefined && (
+                          <RollbackAction applyRunId={record.runId} onRolledBack={handleRolledBack} />
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

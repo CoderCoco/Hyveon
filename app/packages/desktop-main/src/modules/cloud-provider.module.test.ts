@@ -100,6 +100,9 @@ class FakeRemoteFileStore implements RemoteFileStore {
   get(_path: string): Promise<{ body: Uint8Array; etag: string } | undefined> {
     throw new Error('not implemented in fake');
   }
+  getVersion(_path: string, _versionId: string): Promise<{ body: Uint8Array } | undefined> {
+    throw new Error('not implemented in fake');
+  }
   put(
     _path: string,
     _body: Uint8Array,

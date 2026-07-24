@@ -9,6 +9,7 @@ import { logger } from '../logger.js';
 import { ConfigService, projectTfOutputs, type TfOutputs } from './ConfigService.js';
 import { REMOTE_FILE_STORE } from '../modules/cloud-provider.tokens.js';
 import { RunRecordService } from './RunRecordService.js';
+import { TfvarsService } from './TfvarsService.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -275,6 +276,12 @@ export interface TerraformRunRecord {
    * `apply`/`destroy` records generally) leave this unset.
    */
   planHash?: string;
+  /**
+   * The `runId` of the `apply` run this plan rolled back, if this run was
+   * started via the rollback flow (#112) rather than an ordinary plan
+   * submission.
+   */
+  rolledBackFrom?: string;
 }
 
 /**
@@ -466,6 +473,65 @@ export type TerraformDestroyOutcome =
   | { kind: 'failed'; error: TerraformDestroyError };
 
 /**
+ * Thrown by {@link TerraformService.resolveRollbackTarget}/
+ * {@link TerraformService.confirmRollback} (the rollback flow, #112) when no
+ * run record exists for the given `applyRunId`.
+ */
+export class RollbackTargetNotFoundError extends Error {
+  constructor(public readonly applyRunId: string) {
+    super(`No run record found for apply run "${applyRunId}" — cannot roll it back.`);
+    this.name = 'RollbackTargetNotFoundError';
+  }
+}
+
+/**
+ * Thrown by {@link TerraformService.resolveRollbackTarget}/
+ * {@link TerraformService.confirmRollback} when the run record found for
+ * `applyRunId` isn't an `apply` run — only apply runs record the
+ * `tfvarsVersionId` a rollback resolves against.
+ */
+export class RollbackNotApplyRunError extends Error {
+  constructor(
+    public readonly applyRunId: string,
+    public readonly kind: RunKind,
+  ) {
+    super(`Run "${applyRunId}" is a "${kind}" run, not an "apply" run — only apply runs can be rolled back.`);
+    this.name = 'RollbackNotApplyRunError';
+  }
+}
+
+/**
+ * Thrown by {@link TerraformService.resolveRollbackTarget}/
+ * {@link TerraformService.confirmRollback} when the target apply run has no
+ * recorded `tfvarsVersionId` (e.g. it ran before S3 tfvars sync was
+ * configured) — there's no version history to roll back against.
+ */
+export class RollbackNoTfvarsVersionError extends Error {
+  constructor(public readonly applyRunId: string) {
+    super(`Apply run "${applyRunId}" has no recorded tfvarsVersionId — nothing to roll back.`);
+    this.name = 'RollbackNoTfvarsVersionError';
+  }
+}
+
+/**
+ * Thrown by {@link TerraformService.resolveRollbackTarget}/
+ * {@link TerraformService.confirmRollback} when the historic tfvars version a
+ * rollback would restore no longer exists — either no version predates the
+ * target apply run's own `tfvarsVersionId` in the complete version history,
+ * or that resolved version's bytes could no longer be read (e.g. it expired
+ * via S3 lifecycle policy in the window between resolution and confirm).
+ * Surfaced before any write happens — see both methods' TSDoc.
+ */
+export class RollbackVersionMissingError extends Error {
+  constructor(public readonly versionId: string) {
+    super(
+      `Historic tfvars version "${versionId}" no longer exists — it may have expired. Nothing was written.`,
+    );
+    this.name = 'RollbackVersionMissingError';
+  }
+}
+
+/**
  * Lazily resolves and caches the system `terraform` binary's absolute path
  * and semver version, and orchestrates `terraform` subcommands against it:
  * {@link TerraformService.init}, the streaming/idempotent `terraform init`
@@ -565,12 +631,18 @@ export class TerraformService {
    * configured (mirrors `TfvarsService`'s local-vs-S3 read). `runRecordService`
    * persists the run-history record to the cloud-agnostic `RunRecordStore`
    * (DynamoDB for AWS) alongside the local `<runsDir>/<runId>/run.json` write
-   * — see {@link persistRunRecord}.
+   * — see {@link persistRunRecord}. `tfvarsService`, used only by the
+   * rollback flow (#112 — {@link resolveRollbackTarget}/{@link confirmRollback}),
+   * is optional so the many existing tests constructing this class directly
+   * don't all need to pass a stub they never exercise; a rollback call made
+   * without one throws a clear configuration error rather than a null-deref
+   * (see {@link confirmRollback}).
    */
   constructor(
     private readonly config: ConfigService,
     @Inject(REMOTE_FILE_STORE) private readonly remoteFileStore: RemoteFileStore,
     private readonly runRecordService: RunRecordService,
+    private readonly tfvarsService?: TfvarsService,
   ) {}
 
   /**
@@ -844,6 +916,7 @@ export class TerraformService {
     tfvarsVersionId?: string,
     signal?: AbortSignal,
     preMintedRunId?: string,
+    rolledBackFrom?: string,
   ): AsyncGenerator<TerraformRunChunk, TerraformPlanResult | undefined> {
     if (this.workspaceInFlight) {
       throw new Error(
@@ -1046,14 +1119,32 @@ export class TerraformService {
       const completedAt = new Date().toISOString();
       const planExitCode = result.aborted ? null : result.exitCode;
       try {
-        this.writeRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId, planHash);
+        this.writeRunRecord(
+          runId,
+          'plan',
+          startedAt,
+          completedAt,
+          planExitCode,
+          tfvarsVersionId,
+          planHash,
+          rolledBackFrom,
+        );
       } catch (err) {
         throw new TerraformRunPersistError(runId, outcome, err);
       }
       // Persists the same run to the cloud-agnostic RunRecordStore (DynamoDB
       // for AWS) alongside the local run.json write above — see
       // persistRunRecord's TSDoc for why this is best-effort and awaited.
-      await this.persistRunRecord(runId, 'plan', startedAt, completedAt, planExitCode, tfvarsVersionId, planHash);
+      await this.persistRunRecord(
+        runId,
+        'plan',
+        startedAt,
+        completedAt,
+        planExitCode,
+        tfvarsVersionId,
+        planHash,
+        rolledBackFrom,
+      );
 
       if (outcome.kind === 'aborted') {
         // Aborted mid-run: the child was killed inside spawnAndStream. End
@@ -1104,7 +1195,16 @@ export class TerraformService {
         // endActiveRun() already called unconditionally above.
         const completedAt = new Date().toISOString();
         try {
-          this.writeRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
+          this.writeRunRecord(
+            runId,
+            'plan',
+            startedAt,
+            completedAt,
+            null,
+            tfvarsVersionId,
+            undefined,
+            rolledBackFrom,
+          );
         } catch {
           // Nothing meaningful to do with a persistence failure while the
           // generator is already tearing down for an unrelated reason.
@@ -1113,7 +1213,16 @@ export class TerraformService {
         // mirrors the normal-completion path above, so a force-killed run
         // still shows up in run history even though the generator itself is
         // already tearing down.
-        await this.persistRunRecord(runId, 'plan', startedAt, completedAt, null, tfvarsVersionId);
+        await this.persistRunRecord(
+          runId,
+          'plan',
+          startedAt,
+          completedAt,
+          null,
+          tfvarsVersionId,
+          undefined,
+          rolledBackFrom,
+        );
       }
       this.workspaceInFlight = null;
     }
@@ -2124,6 +2233,7 @@ export class TerraformService {
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
     planHash: string | undefined = undefined,
+    rolledBackFrom: string | undefined = undefined,
   ): void {
     TerraformService.assertValidRunId(runId);
     const runDir = join(this.config.getRunsDir(), runId);
@@ -2135,6 +2245,7 @@ export class TerraformService {
       exitCode,
       tfvarsVersionId,
       planHash,
+      rolledBackFrom,
     };
     try {
       mkdirSync(runDir, { recursive: true });
@@ -2190,10 +2301,11 @@ export class TerraformService {
     exitCode: number | null,
     tfvarsVersionId: string | undefined,
     planHash: string | undefined = undefined,
+    rolledBackFrom: string | undefined = undefined,
   ): Promise<void> {
     try {
       await this.runRecordService.persist(
-        { runId, kind, startedAt, completedAt, exitCode, tfvarsVersionId, planHash },
+        { runId, kind, startedAt, completedAt, exitCode, tfvarsVersionId, planHash, rolledBackFrom },
         this.getRunLogPath(runId),
       );
     } catch (err) {
@@ -2203,6 +2315,95 @@ export class TerraformService {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Resolves the tfvars version that was live immediately before the given
+   * `apply` run — the target the rollback flow (#112) would restore.
+   * Read-only: performs no write. Used both to preview the rollback target
+   * for the operator's confirmation dialog (`terraform.rollback.resolve`)
+   * and again, immediately before the actual restore write, by
+   * {@link confirmRollback} — so a version that expired in the window
+   * between preview and confirm is still caught before anything is written.
+   *
+   * Looks up `applyRunId`'s {@link RunRecordService.getByRunId} record,
+   * validates it's an `apply` run with a recorded `tfvarsVersionId`, then
+   * walks the complete (paginated — see issue #260) `listVersions` history
+   * for the tfvars object: since {@link RemoteFileStore.listVersions}
+   * returns versions newest-first, the version "live before" the apply run
+   * is the entry immediately *after* the apply's own `tfvarsVersionId` in
+   * that array (one step further back in time).
+   *
+   * @param applyRunId - The `runId` of the `apply` run to resolve a rollback target for.
+   * @throws {@link RollbackTargetNotFoundError} when no run record exists for `applyRunId`.
+   * @throws {@link RollbackNotApplyRunError} when the record isn't an `apply` run.
+   * @throws {@link RollbackNoTfvarsVersionError} when the apply run has no recorded `tfvarsVersionId`.
+   * @throws {@link RollbackVersionMissingError} when no earlier tfvars version exists in the complete version history.
+   */
+  async resolveRollbackTarget(applyRunId: string): Promise<{ versionId: string; lastModified: Date }> {
+    const record = await this.runRecordService.getByRunId(applyRunId);
+    if (!record) {
+      throw new RollbackTargetNotFoundError(applyRunId);
+    }
+    if (record.kind !== 'apply') {
+      throw new RollbackNotApplyRunError(applyRunId, record.kind);
+    }
+    if (!record.tfvarsVersionId) {
+      throw new RollbackNoTfvarsVersionError(applyRunId);
+    }
+
+    const key = basename(this.config.getTfvarsPath());
+    const versions = await this.remoteFileStore.listVersions(key);
+    const index = versions.findIndex((v) => v.versionId === record.tfvarsVersionId);
+    const prior = index === -1 ? undefined : versions[index + 1];
+    if (!prior) {
+      throw new RollbackVersionMissingError(record.tfvarsVersionId);
+    }
+    return prior;
+  }
+
+  /**
+   * Confirms a rollback of `applyRunId`: re-resolves the rollback target via
+   * {@link resolveRollbackTarget} (so an expiry between preview and confirm
+   * is still caught before any write), reads its bytes, and restores them as
+   * the tfvars source's new head version via `TfvarsService.restoreRawTfvars`
+   * — never deleting or reverting existing S3 history (decision 6 in the
+   * design doc). Returns the freshly-written version's id, which the caller
+   * passes straight through to {@link plan} (tagged
+   * `rolledBackFrom: applyRunId`) to complete the rollback through the
+   * normal plan → approve → apply gates, unchanged.
+   *
+   * @param applyRunId - The `runId` of the `apply` run to roll back.
+   * @throws Same as {@link resolveRollbackTarget}.
+   * @throws {@link RollbackVersionMissingError} (reused) if the resolved
+   *   version's bytes can no longer be read — the write never happens in
+   *   that case.
+   * @throws A descriptive `Error` if this instance was constructed without a
+   *   `TfvarsService` (see the constructor's TSDoc).
+   */
+  async confirmRollback(applyRunId: string): Promise<{ versionId: string }> {
+    if (!this.tfvarsService) {
+      throw new Error(
+        'TerraformService.confirmRollback: no TfvarsService was supplied to this instance — rollback is unavailable.',
+      );
+    }
+
+    const target = await this.resolveRollbackTarget(applyRunId);
+    const key = basename(this.config.getTfvarsPath());
+    const obj = await this.remoteFileStore.getVersion(key, target.versionId);
+    if (!obj) {
+      throw new RollbackVersionMissingError(target.versionId);
+    }
+
+    const hcl = new TextDecoder().decode(obj.body);
+    const result = await this.tfvarsService.restoreRawTfvars(hcl);
+    if (!result.versionId) {
+      throw new Error(
+        'TerraformService.confirmRollback: TfvarsService.restoreRawTfvars did not return a versionId — ' +
+          'is the tfvars S3 bucket configured?',
+      );
+    }
+    return { versionId: result.versionId };
   }
 
   /**

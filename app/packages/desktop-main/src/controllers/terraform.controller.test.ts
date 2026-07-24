@@ -7,6 +7,7 @@ import {
   TerraformInitError,
   TerraformPlanError,
   TerraformApplyError,
+  RollbackVersionMissingError,
   type TerraformInitConfig,
   type TerraformRunChunk,
   type TerraformPlanResult,
@@ -92,6 +93,11 @@ function makeTerraform(): TerraformService {
     apply: vi.fn().mockImplementation(async function* () { /* empty */ }),
     getWorkspaceInFlight: vi.fn().mockReturnValue(null),
     computePlanHash: vi.fn().mockReturnValue('plan-hash-abc'),
+    resolveRollbackTarget: vi.fn().mockResolvedValue({
+      versionId: 'tfvars-v-prior',
+      lastModified: new Date('2026-07-20T00:00:00.000Z'),
+    }),
+    confirmRollback: vi.fn().mockResolvedValue({ versionId: 'tfvars-v-new-head' }),
   };
   return stub as TerraformService;
 }
@@ -561,7 +567,21 @@ describe('TerraformController', () => {
       const result = await new TerraformController(terraform, audit).plan({ tfvarsVersionId: 'v123' }, ctx);
       await flushPromises();
 
-      expect(terraform.plan).toHaveBeenCalledWith('v123', expect.any(AbortSignal), result.runId);
+      expect(terraform.plan).toHaveBeenCalledWith('v123', expect.any(AbortSignal), result.runId, undefined);
+    });
+
+    it('should forward rolledBackFrom to TerraformService.plan when present on the payload', async () => {
+      const terraform = makeTerraform();
+      const { audit } = makeAudit();
+      const { ctx } = makeCtx();
+
+      const result = await new TerraformController(terraform, audit).plan(
+        { tfvarsVersionId: 'v123', rolledBackFrom: 'apply-run-1' },
+        ctx,
+      );
+      await flushPromises();
+
+      expect(terraform.plan).toHaveBeenCalledWith('v123', expect.any(AbortSignal), result.runId, 'apply-run-1');
     });
 
     it('should send an end message with exitCode 0, the resolved result, and no error when the run succeeds', async () => {
@@ -1322,6 +1342,84 @@ describe('TerraformController', () => {
 
       expect(result.approved).toBe(false);
       expect(typeof result.error).toBe('string');
+    });
+  });
+
+  describe('resolveRollback', () => {
+    it('should return resolved: true with the target versionId and lastModified on success', async () => {
+      const terraform = makeTerraform();
+
+      const result = await new TerraformController(terraform).resolveRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(terraform.resolveRollbackTarget).toHaveBeenCalledWith('apply-run-1');
+      expect(result).toEqual({
+        resolved: true,
+        versionId: 'tfvars-v-prior',
+        lastModified: '2026-07-20T00:00:00.000Z',
+      });
+    });
+
+    it('should return { resolved: false, error } and never call TerraformService.resolveRollbackTarget when applyRunId is missing', async () => {
+      const terraform = makeTerraform();
+
+      const result = await new TerraformController(terraform).resolveRollback({
+        applyRunId: '',
+      });
+
+      expect(result.resolved).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(terraform.resolveRollbackTarget).not.toHaveBeenCalled();
+    });
+
+    it('should return { resolved: false, error } with the thrown error message when resolution fails', async () => {
+      const terraform = makeTerraform();
+      const error = new RollbackVersionMissingError('tfvars-v-expired');
+      vi.mocked(terraform.resolveRollbackTarget).mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform).resolveRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(result).toEqual({ resolved: false, error: error.message });
+    });
+  });
+
+  describe('confirmRollback', () => {
+    it('should return confirmed: true with the new head versionId on success', async () => {
+      const terraform = makeTerraform();
+
+      const result = await new TerraformController(terraform).confirmRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(terraform.confirmRollback).toHaveBeenCalledWith('apply-run-1');
+      expect(result).toEqual({ confirmed: true, versionId: 'tfvars-v-new-head' });
+    });
+
+    it('should return { confirmed: false, error } and never call TerraformService.confirmRollback when applyRunId is missing', async () => {
+      const terraform = makeTerraform();
+
+      const result = await new TerraformController(terraform).confirmRollback({
+        applyRunId: '',
+      });
+
+      expect(result.confirmed).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(terraform.confirmRollback).not.toHaveBeenCalled();
+    });
+
+    it('should return { confirmed: false, error } with the thrown error message and write nothing when confirmation fails', async () => {
+      const terraform = makeTerraform();
+      const error = new RollbackVersionMissingError('tfvars-v-expired');
+      vi.mocked(terraform.confirmRollback).mockRejectedValue(error);
+
+      const result = await new TerraformController(terraform).confirmRollback({
+        applyRunId: 'apply-run-1',
+      });
+
+      expect(result).toEqual({ confirmed: false, error: error.message });
     });
   });
 });

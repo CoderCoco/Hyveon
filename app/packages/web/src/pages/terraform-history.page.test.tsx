@@ -8,11 +8,27 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock('../api.service.js', () => ({ api: apiMock }));
 
-/** Stub for `window.gsd.terraform.runs.list` — the only channel this page invokes. */
+/**
+ * Stub for `react-router-dom`'s `useNavigate`, keeping every other export
+ * (`Link`, `MemoryRouter`, ...) real — the rollback flow's `handleRolledBack`
+ * navigates to `/terraform`, and this lets tests assert on the call without
+ * standing up a second routed page.
+ */
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
+/** Stub for `window.gsd.terraform.runs.list` and the rollback flow's two IPC channels. */
 const gsdMock = {
   terraform: {
     runs: {
       list: vi.fn(),
+    },
+    rollback: {
+      resolve: vi.fn(),
+      confirm: vi.fn(),
     },
   },
 };
@@ -40,6 +56,9 @@ describe('TerraformHistoryPage', () => {
     apiMock.status.mockResolvedValue([]);
     apiMock.costsEstimate.mockResolvedValue({ games: {}, totalPerHourIfAllOn: 0 });
     gsdMock.terraform.runs.list.mockReset();
+    gsdMock.terraform.rollback.resolve.mockReset();
+    gsdMock.terraform.rollback.confirm.mockReset();
+    navigateMock.mockClear();
   });
 
   it('should render recent runs newest-first with kind, status, and timestamps', async () => {
@@ -120,5 +139,90 @@ describe('TerraformHistoryPage', () => {
     const bodyRows = rows.slice(1);
     expect(within(bodyRows[0]!).getByText('alice')).toBeInTheDocument();
     expect(within(bodyRows[1]!).getByText('—')).toBeInTheDocument();
+  });
+
+  describe('rollback action (#112)', () => {
+    it('should show a Rollback button only for apply rows that recorded a tfvarsVersionId', async () => {
+      gsdMock.terraform.runs.list.mockResolvedValue({
+        records: [
+          makeRecord({ runId: 'apply-with-version', kind: 'apply', tfvarsVersionId: 'v-1' }),
+          makeRecord({ runId: 'apply-without-version', sk: 'sk-2', kind: 'apply' }),
+          makeRecord({ runId: 'plan-with-version', sk: 'sk-3', kind: 'plan', tfvarsVersionId: 'v-2' }),
+        ],
+      });
+      renderPage(<TerraformHistoryPage />);
+      await screen.findAllByRole('row');
+
+      const rollbackButtons = await screen.findAllByRole('button', { name: 'Rollback' });
+      expect(rollbackButtons).toHaveLength(1);
+    });
+
+    it('should resolve the rollback target and open a confirmation dialog naming it on click', async () => {
+      gsdMock.terraform.runs.list.mockResolvedValue({
+        records: [makeRecord({ runId: 'apply-1', kind: 'apply', tfvarsVersionId: 'v-1' })],
+      });
+      gsdMock.terraform.rollback.resolve.mockResolvedValue({
+        resolved: true,
+        versionId: 'v-prior',
+        lastModified: '2026-07-18T00:00:00.000Z',
+      });
+      renderPage(<TerraformHistoryPage />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Rollback' }));
+
+      expect(gsdMock.terraform.rollback.resolve).toHaveBeenCalledWith({ applyRunId: 'apply-1' });
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(/v-prior/)).toBeInTheDocument();
+      expect(gsdMock.terraform.rollback.confirm).not.toHaveBeenCalled();
+    });
+
+    it('should surface a resolve failure inline without opening a confirmation dialog', async () => {
+      gsdMock.terraform.runs.list.mockResolvedValue({
+        records: [makeRecord({ runId: 'apply-1', kind: 'apply', tfvarsVersionId: 'v-1' })],
+      });
+      gsdMock.terraform.rollback.resolve.mockResolvedValue({
+        resolved: false,
+        error: 'Historic tfvars version "v-1" no longer exists — it may have expired. Nothing was written.',
+      });
+      renderPage(<TerraformHistoryPage />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Rollback' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/no longer exists/);
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('should confirm the rollback and navigate to /terraform with the new versionId and rolledBackFrom', async () => {
+      gsdMock.terraform.runs.list.mockResolvedValue({
+        records: [makeRecord({ runId: 'apply-1', kind: 'apply', tfvarsVersionId: 'v-1' })],
+      });
+      gsdMock.terraform.rollback.resolve.mockResolvedValue({
+        resolved: true,
+        versionId: 'v-prior',
+        lastModified: '2026-07-18T00:00:00.000Z',
+      });
+      gsdMock.terraform.rollback.confirm.mockResolvedValue({ confirmed: true, versionId: 'v-new-head' });
+      renderPage(<TerraformHistoryPage />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Rollback' }));
+      await screen.findByRole('alertdialog');
+      await userEvent.click(screen.getByRole('button', { name: 'Roll back' }));
+
+      expect(gsdMock.terraform.rollback.confirm).toHaveBeenCalledWith({ applyRunId: 'apply-1' });
+      await waitFor(() =>
+        expect(navigateMock).toHaveBeenCalledWith('/terraform', {
+          state: { tfvarsVersionId: 'v-new-head', rolledBackFrom: 'apply-1' },
+        }),
+      );
+    });
+
+    it('should render a rollback badge on a row whose record carries rolledBackFrom', async () => {
+      gsdMock.terraform.runs.list.mockResolvedValue({
+        records: [makeRecord({ runId: 'plan-2', kind: 'plan', rolledBackFrom: 'apply-1' })],
+      });
+      renderPage(<TerraformHistoryPage />);
+
+      expect(await screen.findByText('rollback')).toBeInTheDocument();
+    });
   });
 });

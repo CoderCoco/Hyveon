@@ -604,6 +604,31 @@ describe('TerraformService.plan run record persistence', () => {
     expect(typeof record.completedAt).toBe('string');
   });
 
+  it('should write a TerraformRunRecord with the propagated rolledBackFrom when the run was started via the rollback flow', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-record-rollback');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await collectPlanChunks(
+      service.plan('tfvars-version-abc', undefined, undefined, 'apply-run-1'),
+      () => child.close(0),
+    );
+
+    const recordCalls = writeFileSyncMock.mock.calls.filter(
+      ([path]) => path === '/repo/runs/run-record-rollback/run.json',
+    );
+    const [, contents] = recordCalls[0] as [string, string];
+    const record = JSON.parse(contents);
+    expect(record.rolledBackFrom).toBe('apply-run-1');
+  });
+
   it('should write a TerraformRunRecord with kind "plan" and the non-zero exit code when the process exits non-zero, with no planHash', async () => {
     queueSuccessfulResolution();
     randomUUIDMock.mockReturnValue('run-record-2');
@@ -857,6 +882,28 @@ describe('TerraformService.plan RunRecordService persistence', () => {
     const localRecord = JSON.parse(localContents);
     expect((params as { completedAt: string }).completedAt).toBe(localRecord.completedAt);
     expect((params as { startedAt: string }).startedAt).toBe(localRecord.startedAt);
+  });
+
+  it('should call RunRecordService.persist with the propagated rolledBackFrom when the run was started via the rollback flow', async () => {
+    queueSuccessfulResolution();
+    randomUUIDMock.mockReturnValue('run-store-rollback');
+    const child = new FakeChildProcess();
+    queueSpawn(child);
+    runRecordPersistMock.mockResolvedValue(undefined);
+
+    const service = new TerraformService(
+      stubPlanConfigService({ runsDir: '/repo/runs', tfvarsBucket: null }),
+      stubRemoteFileStore(),
+      stubRunRecordService(),
+    );
+
+    await collectPlanChunks(
+      service.plan('tfvars-version-abc', undefined, undefined, 'apply-run-1'),
+      () => child.close(0),
+    );
+
+    const [params] = runRecordPersistMock.mock.calls[0] as [{ rolledBackFrom?: string }, string];
+    expect(params.rolledBackFrom).toBe('apply-run-1');
   });
 
   it('should call RunRecordService.persist exactly once with the non-zero exit code when the process exits non-zero', async () => {

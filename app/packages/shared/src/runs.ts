@@ -80,6 +80,16 @@ export interface RunRecord {
    * embedded inline instead, or was never captured.
    */
   logS3Key?: string;
+  /**
+   * The `runId` of the `apply` {@link RunRecord} this run rolled back, when
+   * this run was started by the rollback flow (#112) rather than an ordinary
+   * plan submission. Set only on the `plan` record produced when an operator
+   * restores a prior tfvars version from history — the plan runs against the
+   * restored version, which becomes the new head, so no other field
+   * distinguishes a rollback plan from an ordinary one. Absent for every
+   * other run.
+   */
+  rolledBackFrom?: string;
 }
 
 /**
