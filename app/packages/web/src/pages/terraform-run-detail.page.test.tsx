@@ -20,10 +20,16 @@ const gsdMock = {
 };
 vi.stubGlobal('gsd', gsdMock);
 
-vi.stubGlobal(
-  'fetch',
-  vi.fn(async () => ({ ok: true, status: 200, text: async () => 'offloaded log text' })),
-);
+/**
+ * Mock for the presigned-URL log fetch. Given its own `vi.fn()` (rather than
+ * an inline `vi.stubGlobal('fetch', vi.fn(...))`) so `beforeEach` can fully
+ * reset its implementation every test — a `mockResolvedValueOnce` queued
+ * override is fragile here, since any stray extra invocation (e.g. a
+ * duplicate effect run) silently falls through to whatever default was left
+ * behind by a prior test instead of failing loudly.
+ */
+const fetchMock = vi.fn<typeof fetch>();
+vi.stubGlobal('fetch', fetchMock);
 
 import { TerraformRunDetailPage } from './terraform-run-detail.page.js';
 import { renderPage } from '../test-utils/render-page.utils.js';
@@ -62,6 +68,12 @@ describe('TerraformRunDetailPage', () => {
     gsdMock.terraform.runs.streamLogs.mockImplementation(async function* () {
       /* no local artifacts by default — subclasses override per test */
     });
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'offloaded log text',
+    } as Response);
   });
 
   it('should show a not-found message when no record matches the runId', async () => {
@@ -117,7 +129,7 @@ describe('TerraformRunDetailPage', () => {
 
     expect(await screen.findByText('offloaded log text')).toBeInTheDocument();
     expect(gsdMock.terraform.runs.logUrl).toHaveBeenCalledWith('runs/run-1.log');
-    expect(global.fetch).toHaveBeenCalledWith('https://example.com/signed-log');
+    expect(fetchMock).toHaveBeenCalledWith('https://example.com/signed-log');
   });
 
   it('should treat a non-ok presigned URL fetch as no log available rather than rendering the error body', async () => {
@@ -129,7 +141,7 @@ describe('TerraformRunDetailPage', () => {
       throw new Error('no run found for runId "run-1"');
     });
     gsdMock.terraform.runs.logUrl.mockResolvedValue('https://example.com/expired-log');
-    vi.mocked(global.fetch).mockResolvedValueOnce({
+    fetchMock.mockResolvedValue({
       ok: false,
       status: 403,
       text: async () => '<Error>AccessDenied</Error>',
