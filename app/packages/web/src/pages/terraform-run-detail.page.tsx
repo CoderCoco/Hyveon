@@ -114,6 +114,7 @@ function useRunLogLadder(runId: string | undefined, record: RunHistoryRecord | n
         try {
           const url = await window.gsd!.terraform.runs.logUrl(record.logS3Key);
           const res = await fetch(url);
+          if (!res.ok) throw new Error(`presigned log fetch failed: ${res.status}`);
           const text = await res.text();
           if (cancelled) return;
           setChunks(textToChunks(text));

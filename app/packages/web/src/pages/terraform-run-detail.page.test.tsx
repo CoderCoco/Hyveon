@@ -22,7 +22,7 @@ vi.stubGlobal('gsd', gsdMock);
 
 vi.stubGlobal(
   'fetch',
-  vi.fn(async () => ({ text: async () => 'offloaded log text' })),
+  vi.fn(async () => ({ ok: true, status: 200, text: async () => 'offloaded log text' })),
 );
 
 import { TerraformRunDetailPage } from './terraform-run-detail.page.js';
@@ -118,6 +118,27 @@ describe('TerraformRunDetailPage', () => {
     expect(await screen.findByText('offloaded log text')).toBeInTheDocument();
     expect(gsdMock.terraform.runs.logUrl).toHaveBeenCalledWith('runs/run-1.log');
     expect(global.fetch).toHaveBeenCalledWith('https://example.com/signed-log');
+  });
+
+  it('should treat a non-ok presigned URL fetch as no log available rather than rendering the error body', async () => {
+    gsdMock.terraform.runs.list.mockResolvedValue({
+      records: [makeRecord({ logS3Key: 'runs/run-1.log' })],
+    });
+    // eslint-disable-next-line require-yield -- generator must throw before yielding to simulate missing local run artifacts
+    gsdMock.terraform.runs.streamLogs.mockImplementation(async function* () {
+      throw new Error('no run found for runId "run-1"');
+    });
+    gsdMock.terraform.runs.logUrl.mockResolvedValue('https://example.com/expired-log');
+    vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => '<Error>AccessDenied</Error>',
+    } as Response);
+    renderDetailPage('run-1');
+
+    expect(await screen.findByText('This run has no replayable, inline, or offloaded log.')).toBeInTheDocument();
+    expect(gsdMock.terraform.runs.logUrl).toHaveBeenCalledWith('runs/run-1.log');
+    expect(screen.queryByText('<Error>AccessDenied</Error>')).not.toBeInTheDocument();
   });
 
   it('should not render any approve/apply controls for a terminal run', async () => {

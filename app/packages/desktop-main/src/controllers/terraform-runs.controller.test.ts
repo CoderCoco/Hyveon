@@ -5,7 +5,7 @@ import type { RunLock, RunPageResult, RunRecord } from '@hyveon/shared';
 import { TerraformRunsController } from './terraform-runs.controller.js';
 import type { TerraformService, TerraformRunChunk, TerraformRunRecord } from '../services/TerraformService.js';
 import type { RunService } from '../services/RunService.js';
-import type { RunRecordService } from '../services/RunRecordService.js';
+import type { RunRecordService, ListRunsOpts } from '../services/RunRecordService.js';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state — must be declared before any vi.mock() factory runs.
@@ -118,7 +118,7 @@ function makeRunRecordService(
   return {
     listRuns: vi.fn().mockResolvedValue(listRunsResult),
     getLogUrl: vi.fn().mockResolvedValue(logUrl),
-  } as unknown as RunRecordService;
+  } as Partial<RunRecordService> as RunRecordService;
 }
 
 /** A `RunRecord` fixture (the DynamoDB-persisted history row), overridable per-test. */
@@ -468,7 +468,7 @@ describe('TerraformRunsController.list', () => {
     const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
 
     await expect(
-      controller.list({ status: 'pending' } as unknown as { status: 'failed' }),
+      controller.list({ status: 'pending' } as unknown as ListRunsOpts),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(runRecordService.listRuns).not.toHaveBeenCalled();
   });

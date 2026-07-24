@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import type { RunHistoryRecord, RunHistoryStatus, TerraformRunKind } from '@hyveon/desktop-preload';
@@ -43,48 +43,57 @@ export function TerraformHistoryPage() {
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
+  /**
+   * Monotonically-increasing request generation counter. `loadMore`'s fetch
+   * isn't tied to the filter effect below, so without this a "Load more"
+   * click followed by a filter change could resolve after the filter effect
+   * has already reset `records` — appending a stale-filter page onto the
+   * fresh list. Each in-flight request captures the counter's value at
+   * dispatch time and only applies its result if it's still current.
+   */
+  const requestSeqRef = useRef(0);
+
   useEffect(() => {
     if (!window.gsd) {
       setLoading(false);
       setError('IPC bridge (window.gsd) is not available in this context.');
       return;
     }
-    let cancelled = false;
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     window.gsd.terraform.runs
       .list({ limit: PAGE_SIZE, status: statusFilter === 'all' ? undefined : statusFilter })
       .then((page) => {
-        if (cancelled) return;
+        if (requestSeqRef.current !== seq) return;
         setRecords(page.records);
         setNextBefore(page.nextBefore);
       })
       .catch(() => {
-        if (!cancelled) setError('Could not load the run history.');
+        if (requestSeqRef.current === seq) setError('Could not load the run history.');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (requestSeqRef.current === seq) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [statusFilter]);
 
   const loadMore = useCallback(() => {
     if (!nextBefore || !window.gsd) return;
+    const seq = ++requestSeqRef.current;
     setLoadingMore(true);
     setError(null);
     window.gsd.terraform.runs
       .list({ limit: PAGE_SIZE, before: nextBefore, status: statusFilter === 'all' ? undefined : statusFilter })
       .then((page) => {
+        if (requestSeqRef.current !== seq) return;
         setRecords((prev) => [...prev, ...page.records]);
         setNextBefore(page.nextBefore);
       })
       .catch(() => {
-        setError('Could not load more run history.');
+        if (requestSeqRef.current === seq) setError('Could not load more run history.');
       })
       .finally(() => {
-        setLoadingMore(false);
+        if (requestSeqRef.current === seq) setLoadingMore(false);
       });
   }, [nextBefore, statusFilter]);
 

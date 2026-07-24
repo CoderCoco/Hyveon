@@ -243,14 +243,25 @@ export class AwsRunRecordStore implements RunRecordStore {
    * constraining to `sk < :before` when a cursor is supplied (mirrors
    * `AwsAuditLogStore.listEntries`). The status-filtered path switches to
    * the {@link STATUS_INDEX_NAME} GSI (hash key `status`, range key
-   * `startedAt`) instead, constraining to `startedAt < :before` — since
-   * `before` is always a {@link RunRecord.sk} value (`<startedAt>#<runId>`,
-   * see `buildRunSk`), {@link parseStartedAtFromSk} recovers the `startedAt`
-   * portion the GSI's range key comparison needs. Both paths use
-   * `ScanIndexForward: false` so DynamoDB returns newest-first without an
-   * in-memory sort, and `nextBefore` is only populated when DynamoDB reports
-   * a `LastEvaluatedKey` — i.e. there are more rows beyond this page — set
-   * to the oldest (last) record's `sk` in the page.
+   * `startedAt`, `projection_type = ALL` per `terraform/aws/runs_store.tf`)
+   * instead, resuming via `ExclusiveStartKey` rather than a `startedAt < :before`
+   * boundary condition — a boundary condition would drop the remaining rows
+   * of any same-`startedAt` group that got split across a page boundary,
+   * since it excludes every item at that exact `startedAt`, not just the
+   * ones already returned. `ExclusiveStartKey` needs the table's primary key
+   * (`pk`, `sk`) plus the index's key (`status`, `startedAt`); all four are
+   * reconstructible from the caller-supplied cursor without any extra data:
+   * `pk` is always {@link PARTITION_KEY}, `sk` is `before` itself, `status`
+   * is the filter already being applied to this query, and `startedAt` is
+   * recovered from `before` via {@link parseStartedAtFromSk} (since `before`
+   * is always a {@link RunRecord.sk} value, `<startedAt>#<runId>` — see
+   * `buildRunSk`). This mirrors the exact `LastEvaluatedKey` DynamoDB itself
+   * returned for the prior page, so pagination is gap-free even across ties.
+   * Both paths use `ScanIndexForward: false` so DynamoDB returns
+   * newest-first without an in-memory sort, and `nextBefore` is only
+   * populated when DynamoDB reports a `LastEvaluatedKey` — i.e. there are
+   * more rows beyond this page — set to the oldest (last) record's `sk` in
+   * the page.
    *
    * @param opts - Listing options:
    * - `limit` - The maximum number of records to return.
@@ -267,10 +278,11 @@ export class AwsRunRecordStore implements RunRecordStore {
           new QueryCommand({
             TableName: this.getTableName(),
             IndexName: STATUS_INDEX_NAME,
-            KeyConditionExpression: before ? 'status = :status AND startedAt < :before' : 'status = :status',
-            ExpressionAttributeValues: before
-              ? { ':status': status, ':before': parseStartedAtFromSk(before) }
-              : { ':status': status },
+            KeyConditionExpression: 'status = :status',
+            ExpressionAttributeValues: { ':status': status },
+            ExclusiveStartKey: before
+              ? { pk: PARTITION_KEY, sk: before, status, startedAt: parseStartedAtFromSk(before) }
+              : undefined,
             ScanIndexForward: false,
             Limit: limit,
           }),

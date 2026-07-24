@@ -450,7 +450,7 @@ describe('AwsRunRecordStore', () => {
       expect(input.Limit).toBe(20);
     });
 
-    it('should parse startedAt out of the sk cursor for the status-index GSI condition', async () => {
+    it('should resume the status-index GSI via ExclusiveStartKey reconstructed from the sk cursor', async () => {
       ddbMock.on(QueryCommand).resolves({ Items: [] });
 
       const store = makeStore();
@@ -461,11 +461,24 @@ describe('AwsRunRecordStore', () => {
       });
 
       const input = ddbMock.commandCalls(QueryCommand)[0]!.args[0].input;
-      expect(input.KeyConditionExpression).toBe('status = :status AND startedAt < :before');
-      expect(input.ExpressionAttributeValues).toEqual({
-        ':status': 'failed',
-        ':before': '2026-07-17T00:00:00.000Z',
+      expect(input.KeyConditionExpression).toBe('status = :status');
+      expect(input.ExpressionAttributeValues).toEqual({ ':status': 'failed' });
+      expect(input.ExclusiveStartKey).toEqual({
+        pk: 'RUN',
+        sk: '2026-07-17T00:00:00.000Z#run-123',
+        status: 'failed',
+        startedAt: '2026-07-17T00:00:00.000Z',
       });
+    });
+
+    it('should not set ExclusiveStartKey on the status-index GSI query when no cursor is given', async () => {
+      ddbMock.on(QueryCommand).resolves({ Items: [] });
+
+      const store = makeStore();
+      await store.listRuns({ limit: 20, status: 'failed' });
+
+      const input = ddbMock.commandCalls(QueryCommand)[0]!.args[0].input;
+      expect(input.ExclusiveStartKey).toBeUndefined();
     });
 
     it('should restore optional fields on records returned by a listRuns page', async () => {
