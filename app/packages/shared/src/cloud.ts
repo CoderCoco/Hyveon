@@ -1,5 +1,5 @@
 import type { AuditEntry, AuditPageResult } from './audit.js';
-import type { RunLock, RunRecord } from './runs.js';
+import type { RunLock, RunPageResult, RunRecord, RunStatus } from './runs.js';
 
 /** Options for launching a game workload. Intentionally open/opaque for v1; implementations may accept provider-specific keys or refine this via intersection. */
 export interface StartOpts {
@@ -222,8 +222,7 @@ export interface AuditLogStore {
  * DynamoDB + S3, Azure Table Storage + Blob Storage, GCP Firestore + Cloud
  * Storage, or any other backend — callers depend only on this contract. No
  * `@aws-sdk/*` shapes appear in this interface or its parameter/return
- * types. Listing/pagination of persisted runs is deferred to a follow-up
- * issue (apply-history UI) and intentionally not part of this contract yet.
+ * types.
  *
  * Also owns the apply lock (see {@link RunLock} in `runs.ts`, issue #106):
  * only one non-terminal run may be in flight at a time, and the lock's
@@ -254,6 +253,22 @@ export interface RunRecordStore {
    *   that `runId` exists in the store.
    */
   getRecordByRunId(runId: string): Promise<RunRecord | undefined>;
+
+  /**
+   * Lists run records newest-first, optionally paginated and/or filtered to
+   * a single {@link RunStatus}.
+   *
+   * @param opts - Listing options:
+   * - `limit` - The maximum number of records to return.
+   * - `before` - When provided, only records older than this cursor (a
+   *   {@link RunRecord.sk} value, typically taken from a prior page's
+   *   `nextBefore`) are returned.
+   * - `status` - When provided, only records with this {@link RunStatus} are
+   *   returned, served via the `status-index` GSI rather than a scan of the
+   *   whole partition.
+   * @returns The requested page of records plus a cursor for the next page.
+   */
+  listRuns(opts: { limit: number; before?: string; status?: RunStatus }): Promise<RunPageResult>;
 
   /**
    * Writes a run's captured log to the remote file store, keyed by `runId`.

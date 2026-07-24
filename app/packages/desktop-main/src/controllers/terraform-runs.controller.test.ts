@@ -1,10 +1,11 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
-import type { RunLock } from '@hyveon/shared';
+import type { RunLock, RunPageResult, RunRecord } from '@hyveon/shared';
 import { TerraformRunsController } from './terraform-runs.controller.js';
 import type { TerraformService, TerraformRunChunk, TerraformRunRecord } from '../services/TerraformService.js';
 import type { RunService } from '../services/RunService.js';
+import type { RunRecordService } from '../services/RunRecordService.js';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state — must be declared before any vi.mock() factory runs.
@@ -109,11 +110,36 @@ function buildLock(overrides: Partial<RunLock> = {}): RunLock {
   };
 }
 
+/** Build a `RunRecordService` stub whose `listRuns`/`getLogUrl` return the given (or default) values. */
+function makeRunRecordService(
+  listRunsResult: RunPageResult = { records: [] },
+  logUrl = 'https://example.com/signed',
+): RunRecordService {
+  return {
+    listRuns: vi.fn().mockResolvedValue(listRunsResult),
+    getLogUrl: vi.fn().mockResolvedValue(logUrl),
+  } as unknown as RunRecordService;
+}
+
+/** A `RunRecord` fixture (the DynamoDB-persisted history row), overridable per-test. */
+function buildDynamoRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return {
+    sk: '2026-07-17T00:00:00.000Z#run-123',
+    runId: 'run-123',
+    kind: 'apply',
+    status: 'success',
+    startedAt: '2026-07-17T00:00:00.000Z',
+    completedAt: '2026-07-17T00:05:00.000Z',
+    exitCode: 0,
+    ...overrides,
+  };
+}
+
 describe('TerraformRunsController.get', () => {
   it('should return found: true, status: running for the runId currently holding the apply lock', async () => {
     const runService = makeRunService(buildLock({ runId: 'run-live' }));
     const terraform = makeTerraform();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'run-live' });
 
@@ -125,7 +151,7 @@ describe('TerraformRunsController.get', () => {
     const record = buildRecord({ runId: 'run-apply', kind: 'apply', exitCode: 0 });
     const terraform = makeTerraform(record);
     const runService = makeRunService();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'run-apply' });
 
@@ -136,7 +162,7 @@ describe('TerraformRunsController.get', () => {
     const record = buildRecord({ runId: 'run-failed', kind: 'plan', exitCode: 1 });
     const terraform = makeTerraform(record, false);
     const runService = makeRunService();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'run-failed' });
 
@@ -147,7 +173,7 @@ describe('TerraformRunsController.get', () => {
     const record = buildRecord({ runId: 'run-aborted', kind: 'destroy', exitCode: null });
     const terraform = makeTerraform(record);
     const runService = makeRunService();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'run-aborted' });
 
@@ -158,7 +184,7 @@ describe('TerraformRunsController.get', () => {
     const record = buildRecord({ runId: 'run-plan', kind: 'plan', exitCode: 0 });
     const terraform = makeTerraform(record, true);
     const runService = makeRunService();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'run-plan' });
 
@@ -169,7 +195,7 @@ describe('TerraformRunsController.get', () => {
   it('should return found: false when runId is neither the held lock nor a persisted run', async () => {
     const terraform = makeTerraform(null);
     const runService = makeRunService();
-    const controller = new TerraformRunsController(terraform, runService);
+    const controller = new TerraformRunsController(terraform, runService, makeRunRecordService());
 
     const result = await controller.get({ runId: 'does-not-exist' });
 
@@ -177,7 +203,7 @@ describe('TerraformRunsController.get', () => {
   });
 
   it('should reject a payload with a missing runId', async () => {
-    const controller = new TerraformRunsController(makeTerraform(), makeRunService());
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
 
     await expect(
       controller.get({} as unknown as { runId: string }),
@@ -185,7 +211,7 @@ describe('TerraformRunsController.get', () => {
   });
 
   it('should reject a payload with a non-string runId', async () => {
-    const controller = new TerraformRunsController(makeTerraform(), makeRunService());
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
 
     await expect(
       controller.get({ runId: 42 } as unknown as { runId: string }),
@@ -193,7 +219,7 @@ describe('TerraformRunsController.get', () => {
   });
 
   it('should reject a payload with an empty-string runId', async () => {
-    const controller = new TerraformRunsController(makeTerraform(), makeRunService());
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
 
     await expect(controller.get({ runId: '' })).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -221,20 +247,20 @@ describe('TerraformRunsController.onModuleInit', () => {
 
   it('should skip the ipcMain bridge when not running inside an Electron main process', async () => {
     setElectron(undefined);
-    await new TerraformRunsController(makeTerraform(), makeRunService()).onModuleInit();
+    await new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService()).onModuleInit();
 
     expect(mockIpcMainHandle).not.toHaveBeenCalled();
     expect(mockIpcMainRemoveHandler).not.toHaveBeenCalled();
   });
 
   it('should register ipcMain.handle for "terraform.runs.logs" so ipcRenderer.invoke can resolve', async () => {
-    await new TerraformRunsController(makeTerraform(), makeRunService()).onModuleInit();
+    await new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService()).onModuleInit();
 
     expect(mockIpcMainHandle).toHaveBeenCalledWith('terraform.runs.logs', expect.any(Function));
   });
 
   it('should remove any existing "terraform.runs.logs" handler before registering so hot-reload re-bootstrap does not throw', async () => {
-    await new TerraformRunsController(makeTerraform(), makeRunService()).onModuleInit();
+    await new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService()).onModuleInit();
 
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith('terraform.runs.logs');
     expect(mockIpcMainRemoveHandler.mock.invocationCallOrder[0]).toBeLessThan(
@@ -246,7 +272,7 @@ describe('TerraformRunsController.onModuleInit', () => {
 describe('TerraformRunsController.logs', () => {
   it('should return a non-empty streamId string immediately', async () => {
     const { ctx } = makeCtx();
-    const controller = new TerraformRunsController(makeTerraform(), makeRunService());
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
 
     const result = await controller.logs({ runId: 'run-1' }, ctx);
 
@@ -258,7 +284,7 @@ describe('TerraformRunsController.logs', () => {
   it('should reject a payload with a missing runId without opening a stream', async () => {
     const terraform = makeTerraform();
     const { ctx } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await expect(
       controller.logs({} as unknown as { runId: string }, ctx),
@@ -269,7 +295,7 @@ describe('TerraformRunsController.logs', () => {
   it('should reject a payload with an empty-string runId without opening a stream', async () => {
     const terraform = makeTerraform();
     const { ctx } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await expect(controller.logs({ runId: '' }, ctx)).rejects.toBeInstanceOf(BadRequestException);
     expect(terraform.streamRunOutput).not.toHaveBeenCalled();
@@ -286,7 +312,7 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(twoChunks);
     const { ctx, sender } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     const { streamId } = await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
@@ -301,7 +327,7 @@ describe('TerraformRunsController.logs', () => {
   it('should call TerraformService.streamRunOutput with the runId and an AbortSignal', async () => {
     const terraform = makeTerraform();
     const { ctx } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await controller.logs({ runId: 'run-42' }, ctx);
     await flushPromises();
@@ -314,7 +340,7 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(empty);
     const { ctx, sender } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     const { streamId } = await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
@@ -331,7 +357,7 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(throwsError);
     const { ctx, sender } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     const { streamId } = await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
@@ -361,7 +387,7 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(waitForAbort);
     const { ctx, sender, fireDestroyed } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
@@ -386,7 +412,7 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(oneChunk);
     const { ctx, sender } = makeCtx(true);
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
@@ -399,11 +425,86 @@ describe('TerraformRunsController.logs', () => {
     const terraform = makeTerraform();
     vi.mocked(terraform.streamRunOutput).mockImplementation(empty);
     const { ctx, sender } = makeCtx();
-    const controller = new TerraformRunsController(terraform, makeRunService());
+    const controller = new TerraformRunsController(terraform, makeRunService(), makeRunRecordService());
 
     await controller.logs({ runId: 'run-1' }, ctx);
     await flushPromises();
 
     expect(sender.removeListener).toHaveBeenCalledWith('destroyed', expect.any(Function));
+  });
+});
+
+describe('TerraformRunsController.list', () => {
+  it("should delegate to RunRecordService.listRuns with the given opts", async () => {
+    const runRecordService = makeRunRecordService();
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    await controller.list({ limit: 10, before: 'cursor-sk', status: 'failed' });
+
+    expect(runRecordService.listRuns).toHaveBeenCalledWith({ limit: 10, before: 'cursor-sk', status: 'failed' });
+  });
+
+  it('should default to an empty opts object when the renderer invokes with no arguments', async () => {
+    const runRecordService = makeRunRecordService();
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    await controller.list();
+
+    expect(runRecordService.listRuns).toHaveBeenCalledWith({});
+  });
+
+  it("should return the page resolved by RunRecordService.listRuns", async () => {
+    const record = buildDynamoRecord();
+    const runRecordService = makeRunRecordService({ records: [record], nextBefore: record.sk });
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    const result = await controller.list({ limit: 20 });
+
+    expect(result).toEqual({ records: [record], nextBefore: record.sk });
+  });
+
+  it('should reject a status filter that is not a known RunStatus', async () => {
+    const runRecordService = makeRunRecordService();
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    await expect(
+      controller.list({ status: 'pending' } as unknown as { status: 'failed' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(runRecordService.listRuns).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerraformRunsController.logUrl', () => {
+  it("should delegate to RunRecordService.getLogUrl and wrap the result in { url }", async () => {
+    const runRecordService = makeRunRecordService(undefined, 'https://example.com/signed-log');
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    const result = await controller.logUrl({ logKey: 'runs/run-123.log' });
+
+    expect(result).toEqual({ url: 'https://example.com/signed-log' });
+    expect(runRecordService.getLogUrl).toHaveBeenCalledWith('runs/run-123.log', undefined);
+  });
+
+  it('should forward a custom expiresInSeconds to RunRecordService.getLogUrl', async () => {
+    const runRecordService = makeRunRecordService();
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), runRecordService);
+
+    await controller.logUrl({ logKey: 'runs/run-123.log', expiresInSeconds: 60 });
+
+    expect(runRecordService.getLogUrl).toHaveBeenCalledWith('runs/run-123.log', 60);
+  });
+
+  it('should reject a payload with a missing logKey', async () => {
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
+
+    await expect(
+      controller.logUrl({} as unknown as { logKey: string }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('should reject a payload with an empty-string logKey', async () => {
+    const controller = new TerraformRunsController(makeTerraform(), makeRunService(), makeRunRecordService());
+
+    await expect(controller.logUrl({ logKey: '' })).rejects.toBeInstanceOf(BadRequestException);
   });
 });

@@ -1345,6 +1345,114 @@ describe('preload dispatcher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // terraform.runs.list
+  // -------------------------------------------------------------------------
+
+  describe('terraform.runs.list', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.runs.list channel with the given opts and resolve the page', async () => {
+        const page = { records: [{ sk: 's1', runId: 'run-001', kind: 'apply', status: 'success', startedAt: 't1', completedAt: 't2', exitCode: 0 }], nextBefore: 's1' };
+        ipcInvoke.mockResolvedValue(page);
+        const terraformRuns = (bridge['terraform'] as { runs: { list: (opts?: unknown) => Promise<unknown> } }).runs;
+
+        const actual = await terraformRuns.list({ limit: 10, before: 'cursor', status: 'failed' });
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.runs.list', { limit: 10, before: 'cursor', status: 'failed' });
+        expect(actual).toEqual(page);
+      });
+
+      it('should invoke with undefined opts when called with no arguments', async () => {
+        ipcInvoke.mockResolvedValue({ records: [] });
+        const terraformRuns = (bridge['terraform'] as { runs: { list: (opts?: unknown) => Promise<unknown> } }).runs;
+
+        await terraformRuns.list();
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.runs.list', undefined);
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.runs.list is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const page = { records: [] };
+        const mockHandler = vi.fn().mockResolvedValue(page);
+        testApi.mock('terraform.runs.list', mockHandler);
+
+        const terraformRuns = (bridge['terraform'] as { runs: { list: (opts?: unknown) => Promise<unknown> } }).runs;
+        const actual = await terraformRuns.list({ limit: 5 });
+
+        expect(mockHandler).toHaveBeenCalledWith({ limit: 5 });
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(actual).toEqual(page);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // terraform.runs.logUrl
+  // -------------------------------------------------------------------------
+
+  describe('terraform.runs.logUrl', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the terraform.runs.logUrl channel and unwrap { url } to a bare string', async () => {
+        ipcInvoke.mockResolvedValue({ url: 'https://example.com/signed-log' });
+        const terraformRuns = (bridge['terraform'] as {
+          runs: { logUrl: (logKey: string, expiresInSeconds?: number) => Promise<string> };
+        }).runs;
+
+        const actual = await terraformRuns.logUrl('runs/run-123.log', 60);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('terraform.runs.logUrl', {
+          logKey: 'runs/run-123.log',
+          expiresInSeconds: 60,
+        });
+        expect(actual).toBe('https://example.com/signed-log');
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when terraform.runs.logUrl is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const mockHandler = vi.fn().mockResolvedValue({ url: 'https://example.com/mocked' });
+        testApi.mock('terraform.runs.logUrl', mockHandler);
+
+        const terraformRuns = (bridge['terraform'] as {
+          runs: { logUrl: (logKey: string, expiresInSeconds?: number) => Promise<string> };
+        }).runs;
+        const actual = await terraformRuns.logUrl('runs/run-456.log');
+
+        expect(mockHandler).toHaveBeenCalledWith({ logKey: 'runs/run-456.log', expiresInSeconds: undefined });
+        expect(ipcInvoke).not.toHaveBeenCalled();
+        expect(actual).toBe('https://example.com/mocked');
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // terraform.runs.streamLogs
   // -------------------------------------------------------------------------
 

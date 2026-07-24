@@ -52,6 +52,7 @@ const putRecordMock = vi.fn<RunRecordStore['putRecord']>();
 const putLogMock = vi.fn<RunRecordStore['putLog']>();
 const getLogUrlMock = vi.fn<RunRecordStore['getLogUrl']>();
 const getRecordByRunIdMock = vi.fn<RunRecordStore['getRecordByRunId']>();
+const listRunsMock = vi.fn<RunRecordStore['listRuns']>();
 const releaseRunMock = vi.fn<RunService['releaseRun']>();
 
 /** Builds a `RunRecordStore`-shaped stub backed by the shared mocks above; the lock methods are unused no-ops here since `RunRecordService`'s lock release goes through the injected `RunService`, not the store directly. */
@@ -59,6 +60,7 @@ function makeStore(): RunRecordStore {
   return {
     putRecord: putRecordMock,
     getRecordByRunId: getRecordByRunIdMock,
+    listRuns: listRunsMock,
     putLog: putLogMock,
     getLogUrl: getLogUrlMock,
     acquireRunLock: vi.fn<RunRecordStore['acquireRunLock']>(),
@@ -122,6 +124,7 @@ beforeEach(() => {
   putLogMock.mockReset();
   getLogUrlMock.mockReset();
   getRecordByRunIdMock.mockReset();
+  listRunsMock.mockReset();
   releaseRunMock.mockReset();
   releaseRunMock.mockResolvedValue(undefined);
   workDir = mkdtempSync(join(tmpdir(), 'run-record-service-test-'));
@@ -379,6 +382,68 @@ describe('RunRecordService', () => {
 
       expect(result).toBeUndefined();
       expect(getRecordByRunIdMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listRuns', () => {
+    it("should delegate to the store's listRuns with a default-clamped limit when opts is omitted", async () => {
+      listRunsMock.mockResolvedValue({ records: [] });
+      const service = makeService();
+
+      const result = await service.listRuns();
+
+      expect(result).toEqual({ records: [] });
+      expect(listRunsMock).toHaveBeenCalledWith({ limit: 25 });
+    });
+
+    it('should pass through a valid limit, before cursor, and status filter', async () => {
+      listRunsMock.mockResolvedValue({ records: [] });
+      const service = makeService();
+
+      await service.listRuns({ limit: 10, before: '2026-07-17T00:00:00.000Z#run-123', status: 'failed' });
+
+      expect(listRunsMock).toHaveBeenCalledWith({
+        limit: 10,
+        before: '2026-07-17T00:00:00.000Z#run-123',
+        status: 'failed',
+      });
+    });
+
+    it('should clamp a requested limit above the maximum down to 100', async () => {
+      listRunsMock.mockResolvedValue({ records: [] });
+      const service = makeService();
+
+      await service.listRuns({ limit: 1000 });
+
+      expect(listRunsMock).toHaveBeenCalledWith({ limit: 100 });
+    });
+
+    it('should fall back to the default limit for a non-positive limit', async () => {
+      listRunsMock.mockResolvedValue({ records: [] });
+      const service = makeService();
+
+      await service.listRuns({ limit: -5 });
+
+      expect(listRunsMock).toHaveBeenCalledWith({ limit: 25 });
+    });
+
+    it('should return the page resolved by the store', async () => {
+      const record = makeRecord();
+      listRunsMock.mockResolvedValue({ records: [record], nextBefore: record.sk });
+      const service = makeService();
+
+      const result = await service.listRuns({ limit: 20 });
+
+      expect(result).toEqual({ records: [record], nextBefore: record.sk });
+    });
+
+    it('should return an empty page and not call store.listRuns when runs_table_name is not configured', async () => {
+      const service = makeService(null);
+
+      const result = await service.listRuns({ limit: 20 });
+
+      expect(result).toEqual({ records: [] });
+      expect(listRunsMock).not.toHaveBeenCalled();
     });
   });
 

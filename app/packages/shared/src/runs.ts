@@ -83,10 +83,8 @@ export interface RunRecord {
 }
 
 /**
- * A page of run records returned by a future listing API, newest-first, plus
- * an optional cursor for fetching the next page. Not yet wired into
- * {@link RunRecordStore} — listing/pagination is deferred to a follow-up
- * issue; kept here so the shape is ready when that lands.
+ * A page of run records returned by {@link RunRecordStore.listRuns},
+ * newest-first, plus an optional cursor for fetching the next page.
  */
 export interface RunPageResult {
   /** The page of records, newest-first. */

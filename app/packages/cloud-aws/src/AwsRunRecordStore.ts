@@ -9,7 +9,7 @@ import {
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { RunLockHeldError } from '@hyveon/shared';
-import type { RunLock, RunRecord, RunRecordStore } from '@hyveon/shared';
+import type { RunLock, RunPageResult, RunRecord, RunRecordStore, RunStatus } from '@hyveon/shared';
 import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
 
 /**
@@ -18,6 +18,13 @@ import { resolveDefaultAwsRegion } from './awsRegionEnv.js';
  * is `<ISO startedAt>#<runId>`, matching `terraform/aws/runs_store.tf`.
  */
 const PARTITION_KEY = 'RUN';
+
+/**
+ * Name of the `status-index` GSI (hash key `status`, range key `startedAt`)
+ * that status-filtered {@link AwsRunRecordStore.listRuns} queries switch to
+ * — see `terraform/aws/runs_store.tf`.
+ */
+const STATUS_INDEX_NAME = 'status-index';
 
 /**
  * The single, well-known item the apply lock lives under: a dedicated
@@ -45,6 +52,20 @@ const DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
  */
 function buildLogKey(runId: string): string {
   return `runs/${runId}.log`;
+}
+
+/**
+ * Recovers the `startedAt` portion of a {@link RunRecord.sk} value
+ * (`<startedAt>#<runId>`, see `buildRunSk` in `@hyveon/shared/runs.js`), so
+ * a `sk`-shaped listing cursor can be compared against the `status-index`
+ * GSI's `startedAt` range key. Splits on the first `#` — safe because ISO-8601
+ * timestamps never contain that character.
+ *
+ * @param sk - A {@link RunRecord.sk} value.
+ * @returns The `startedAt` prefix of `sk`.
+ */
+function parseStartedAtFromSk(sk: string): string {
+  return sk.slice(0, sk.indexOf('#'));
 }
 
 /**
@@ -212,6 +233,63 @@ export class AwsRunRecordStore implements RunRecordStore {
       exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
     } while (exclusiveStartKey);
     return undefined;
+  }
+
+  /**
+   * Lists run records newest-first, optionally paginated and/or filtered to
+   * a single {@link RunStatus}.
+   *
+   * The unfiltered path queries the fixed `pk = RUN` partition directly,
+   * constraining to `sk < :before` when a cursor is supplied (mirrors
+   * `AwsAuditLogStore.listEntries`). The status-filtered path switches to
+   * the {@link STATUS_INDEX_NAME} GSI (hash key `status`, range key
+   * `startedAt`) instead, constraining to `startedAt < :before` — since
+   * `before` is always a {@link RunRecord.sk} value (`<startedAt>#<runId>`,
+   * see `buildRunSk`), {@link parseStartedAtFromSk} recovers the `startedAt`
+   * portion the GSI's range key comparison needs. Both paths use
+   * `ScanIndexForward: false` so DynamoDB returns newest-first without an
+   * in-memory sort, and `nextBefore` is only populated when DynamoDB reports
+   * a `LastEvaluatedKey` — i.e. there are more rows beyond this page — set
+   * to the oldest (last) record's `sk` in the page.
+   *
+   * @param opts - Listing options:
+   * - `limit` - The maximum number of records to return.
+   * - `before` - When provided, only records older than this cursor (a
+   *   {@link RunRecord.sk} value) are returned.
+   * - `status` - When provided, only records with this {@link RunStatus} are
+   *   returned, via the `status-index` GSI.
+   * @returns The requested page of records plus a cursor for the next page.
+   */
+  async listRuns(opts: { limit: number; before?: string; status?: RunStatus }): Promise<RunPageResult> {
+    const { limit, before, status } = opts;
+    const resp = status
+      ? await this.getDynamoClient().send(
+          new QueryCommand({
+            TableName: this.getTableName(),
+            IndexName: STATUS_INDEX_NAME,
+            KeyConditionExpression: before ? 'status = :status AND startedAt < :before' : 'status = :status',
+            ExpressionAttributeValues: before
+              ? { ':status': status, ':before': parseStartedAtFromSk(before) }
+              : { ':status': status },
+            ScanIndexForward: false,
+            Limit: limit,
+          }),
+        )
+      : await this.getDynamoClient().send(
+          new QueryCommand({
+            TableName: this.getTableName(),
+            KeyConditionExpression: before ? 'pk = :pk AND sk < :before' : 'pk = :pk',
+            ExpressionAttributeValues: before
+              ? { ':pk': PARTITION_KEY, ':before': before }
+              : { ':pk': PARTITION_KEY },
+            ScanIndexForward: false,
+            Limit: limit,
+          }),
+        );
+
+    const records = (resp.Items ?? []).map((item) => this.toRunRecord(item as Record<string, unknown>));
+    const nextBefore = resp.LastEvaluatedKey ? records[records.length - 1]?.sk : undefined;
+    return nextBefore ? { records, nextBefore } : { records };
   }
 
   /**
