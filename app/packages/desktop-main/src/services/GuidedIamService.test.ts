@@ -331,6 +331,22 @@ describe('GuidedIamService', () => {
       });
     });
 
+    it('should log a warning (never the secret access key) when the bootstrap key is invalid', async () => {
+      const awsError = new Error('The security token included in the request is invalid');
+      awsError.name = 'InvalidClientTokenId';
+      stsMock.on(GetCallerIdentityCommand).rejects(awsError);
+      const loggerWarnSpy = vi.spyOn(logger, 'warn');
+
+      await expect(service.intakeBootstrapKey(BOOTSTRAP_INPUT)).rejects.toThrow();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'GuidedIamService.intakeBootstrapKey: failed to validate the pasted bootstrap key',
+        { region: BOOTSTRAP_INPUT.region, error: awsError.message },
+      );
+      const loggedPayload = loggerWarnSpy.mock.calls[0]?.[1];
+      expect(JSON.stringify(loggedPayload)).not.toContain(BOOTSTRAP_INPUT.secretAccessKey);
+    });
+
     it('should throw a clear error when a successful response is missing the Account field', async () => {
       stsMock.on(GetCallerIdentityCommand).resolves({ Arn: 'arn:aws:iam::123456789012:user/hyveon-bootstrap' });
 
@@ -370,6 +386,23 @@ describe('GuidedIamService', () => {
       await expect(service.rotate(ROTATION_INPUT)).rejects.toThrow(SafeStorageUnavailableError);
       expect(iamMock.commandCalls(CreateAccessKeyCommand)).toHaveLength(0);
       expect(store.setPastedCredentials).not.toHaveBeenCalled();
+    });
+
+    it('should log a debug entry line (never the bootstrap secret) when starting rotation', async () => {
+      stubCreateAccessKeySuccess();
+      stsMock.on(GetCallerIdentityCommand).resolves({ Account: '123456789012' });
+      iamMock.on(DeleteAccessKeyCommand).resolves({});
+      const loggerDebugSpy = vi.spyOn(logger, 'debug');
+
+      await service.rotate(ROTATION_INPUT);
+
+      expect(loggerDebugSpy).toHaveBeenCalledWith('GuidedIamService.rotate: starting bootstrap key rotation', {
+        region: REGION,
+      });
+      const loggedPayload = loggerDebugSpy.mock.calls.find(
+        (call) => call[0] === 'GuidedIamService.rotate: starting bootstrap key rotation',
+      )?.[1];
+      expect(JSON.stringify(loggedPayload)).not.toContain(BOOTSTRAP_SECRET);
     });
 
     it('should perform CreateAccessKey -> setPastedCredentials -> GetCallerIdentity(new key) -> store.set(aws) -> DeleteAccessKey(bootstrap key, new client) in exact order on success', async () => {
@@ -824,6 +857,36 @@ describe('GuidedIamService', () => {
       const result = await service.revokeBootstrapKey(REVOKE_INPUT);
 
       expect(result).toEqual({ revoked: false, message: awsError.message });
+    });
+
+    it('should log a warning when iam:DeleteAccessKey fails', async () => {
+      store = makePastedStore();
+      service = new TestableGuidedIamService(store, safeStorage);
+      const awsError = new Error('User is not authorized to perform iam:DeleteAccessKey');
+      awsError.name = 'AccessDenied';
+      iamMock.on(DeleteAccessKeyCommand).rejects(awsError);
+      const loggerWarnSpy = vi.spyOn(logger, 'warn');
+
+      await service.revokeBootstrapKey(REVOKE_INPUT);
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'GuidedIamService.revokeBootstrapKey: iam:DeleteAccessKey failed for the bootstrap key',
+        { bootstrapAccessKeyId: REVOKE_INPUT.bootstrapAccessKeyId, error: awsError.message },
+      );
+    });
+
+    it('should log a debug entry line naming the bootstrap key being revoked', async () => {
+      store = makePastedStore();
+      service = new TestableGuidedIamService(store, safeStorage);
+      iamMock.on(DeleteAccessKeyCommand).resolves({});
+      const loggerDebugSpy = vi.spyOn(logger, 'debug');
+
+      await service.revokeBootstrapKey(REVOKE_INPUT);
+
+      expect(loggerDebugSpy).toHaveBeenCalledWith(
+        'GuidedIamService.revokeBootstrapKey: revoking still-live bootstrap key',
+        { bootstrapAccessKeyId: REVOKE_INPUT.bootstrapAccessKeyId },
+      );
     });
   });
 });

@@ -137,6 +137,7 @@ export class ConfigService {
       Date.now() - this.stackOutputsNullCachedAt >= ConfigService.STACK_OUTPUTS_NULL_TTL_MS;
 
     if (this.stackOutputsCache === undefined || cacheIsStale) {
+      logger.debug('ConfigService.getStackOutputs: cache miss — fetching stack outputs from PulumiService');
       // Clear the stale-null flag BEFORE kicking off the refetch (not just
       // after it settles): otherwise a second concurrent call arriving while
       // this refetch is still in flight would see `stackOutputsCacheIsNull`
@@ -162,10 +163,16 @@ export class ConfigService {
           if (this.stackOutputsCache === pending) {
             this.stackOutputsCache = undefined;
           }
-          throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error('ConfigService.getStackOutputs: PulumiService.getStackOutputs rejected unexpectedly', {
+            error: message,
+          });
+          throw new Error(message);
         },
       );
       this.stackOutputsCache = pending;
+    } else {
+      logger.debug('ConfigService.getStackOutputs: cache hit');
     }
     return this.stackOutputsCache;
   }

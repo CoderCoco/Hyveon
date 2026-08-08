@@ -142,9 +142,24 @@ export class AwsProfileService {
    * `~/.aws/config`, sorted alphabetically by name. Only `profileName` and
    * `region` are read out of each profile's parsed fields — every other
    * field (including credential material) is left untouched.
+   *
+   * @throws `Error` if {@link parseFiles} rejects for a reason other than
+   *   missing files (which `parseKnownFiles` already degrades to an empty
+   *   map) — the underlying failure is logged via `logger.warn` first, and
+   *   only its message (never the raw error object) is rethrown.
    */
   async listProfiles(): Promise<AwsProfileSummary[]> {
-    const parsed = await this.parseFiles();
+    logger.debug('AwsProfileService.listProfiles: reading AWS CLI profiles from disk');
+    let parsed: ParsedIniData;
+    try {
+      parsed = await this.parseFiles();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('AwsProfileService.listProfiles: failed to parse ~/.aws/credentials or ~/.aws/config', {
+        error: message,
+      });
+      throw new Error(`Failed to read AWS CLI profiles: ${message}`);
+    }
     return Object.keys(parsed)
       .sort((a, b) => a.localeCompare(b))
       .map((profileName) => {
@@ -274,6 +289,7 @@ export class AwsProfileService {
    *   2) itself propagate straight to the caller, which must catch it.
    */
   async rotateActiveCredentials(): Promise<AwsProfileRotationResult> {
+    logger.debug('AwsProfileService.rotateActiveCredentials: starting active credential rotation');
     if (!this.safeStorage.isAvailable()) {
       throw new SafeStorageUnavailableError();
     }

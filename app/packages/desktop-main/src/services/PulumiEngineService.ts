@@ -535,6 +535,10 @@ export class PulumiEngineService {
     try {
       mkdirSync(versionsDir, { recursive: true });
     } catch (err) {
+      logger.error('PulumiEngineService: failed to create the Pulumi engine versions directory', {
+        versionsDir,
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw new PulumiEngineCacheWriteError(versionsDir, err);
     }
 
@@ -544,7 +548,12 @@ export class PulumiEngineService {
       this.assertExactPin(installed, pin, stagingDir);
     } catch (err) {
       removeDirBestEffort(stagingDir, 'failed install');
-      throw classifyProvisioningError(err, versionsDir);
+      const classified = classifyProvisioningError(err, versionsDir);
+      logger.error('PulumiEngineService: failed to install the pinned Pulumi engine', {
+        stagingDir,
+        error: classified.message,
+      });
+      throw classified;
     }
 
     // Swap the verified staging install into place. `root` may already be
@@ -558,6 +567,11 @@ export class PulumiEngineService {
       if (trashDir) renameSync(root, trashDir);
       renameSync(stagingDir, root);
     } catch (err) {
+      logger.error('PulumiEngineService: failed to swap the verified Pulumi engine install into place', {
+        root,
+        stagingDir,
+        error: err instanceof Error ? err.message : String(err),
+      });
       removeDirBestEffort(stagingDir, 'failed rename into place');
       // Best-effort restore: if the prior occupant was already moved aside
       // but the swap didn't complete, put it back rather than leaving
@@ -602,6 +616,11 @@ export class PulumiEngineService {
       final = await PulumiCommand.get({ root, version: pin, skipVersionCheck: false });
       this.assertExactPin(final, pin, root);
     } catch (err) {
+      const classified = classifyProvisioningError(err, versionsDir);
+      logger.error('PulumiEngineService: post-rename verification of the installed Pulumi engine failed', {
+        root,
+        error: classified.message,
+      });
       removeDirBestEffort(root, 'failed post-rename verification');
       if (trashDir) {
         try {
@@ -614,7 +633,7 @@ export class PulumiEngineService {
           });
         }
       }
-      throw classifyProvisioningError(err, versionsDir);
+      throw classified;
     }
 
     if (trashDir) removeDirBestEffort(trashDir, 'superseded by a fresh verified install');

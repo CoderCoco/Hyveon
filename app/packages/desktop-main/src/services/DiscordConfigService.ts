@@ -97,13 +97,15 @@ export class DiscordConfigService {
   private async load(): Promise<DiscordConfig> {
     if (this.cache) return this.cache;
     if (this.inflight) return this.inflight;
+    logger.debug('DiscordConfigService.load: reading Discord config from DynamoDB');
     this.inflight = (async () => {
       try {
         const cfg = await getDiscordConfig(await this.tableName());
         this.cache = cfg;
         return cfg;
       } catch (err) {
-        logger.error('Failed to load Discord config from DynamoDB', { err });
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to load Discord config from DynamoDB', { error: message });
         const empty = emptyConfig();
         this.cache = empty;
         return empty;
@@ -124,6 +126,7 @@ export class DiscordConfigService {
   private async loadBase(): Promise<BaseDiscordConfig> {
     if (this.baseCache) return this.baseCache;
     if (this.baseInflight) return this.baseInflight;
+    logger.debug('DiscordConfigService.loadBase: reading base Discord config from DynamoDB');
     this.baseInflight = (async () => {
       try {
         const tableName = (await this.config.getStackOutputs())?.discordTableName;
@@ -132,7 +135,8 @@ export class DiscordConfigService {
         this.baseCache = base;
         return base;
       } catch (err) {
-        logger.error('Failed to load base Discord config from DynamoDB', { err });
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to load base Discord config from DynamoDB', { error: message });
         return { allowedGuilds: [], admins: { userIds: [], roleIds: [] } };
       } finally {
         this.baseInflight = null;
@@ -141,8 +145,23 @@ export class DiscordConfigService {
     return this.baseInflight;
   }
 
+  /**
+   * Writes the config to DynamoDB and refreshes the in-memory cache on
+   * success. Any failure from `putDiscordConfig` (e.g. a DynamoDB SDK
+   * error) is logged and rethrown as a plain `Error` carrying just the
+   * message — never the raw SDK error object — since this is called from
+   * every write-path public method (`setAllowedGuilds`, `setAdmins`,
+   * `setGamePermission`, etc.) with no try/catch of their own.
+   */
   private async save(cfg: DiscordConfig): Promise<void> {
-    await putDiscordConfig(await this.tableName(), cfg);
+    logger.debug('DiscordConfigService.save: writing Discord config to DynamoDB');
+    try {
+      await putDiscordConfig(await this.tableName(), cfg);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Failed to save Discord config to DynamoDB', { error: message });
+      throw new Error(message);
+    }
     this.cache = cfg;
     logger.info('Discord config saved', {
       allowedGuilds: cfg.allowedGuilds.length,
@@ -189,6 +208,7 @@ export class DiscordConfigService {
     arnResolver: () => Promise<string>,
     label: string,
   ): Promise<string | undefined> {
+    logger.debug('DiscordConfigService.readSecretSafe: reading secret from Secrets Manager', { label });
     let arn: string;
     try {
       arn = await arnResolver();
@@ -239,6 +259,12 @@ export class DiscordConfigService {
     clientId?: unknown;
     publicKey?: unknown;
   }): Promise<boolean> {
+    // Only which fields were submitted is logged — values may carry the bot token/public key.
+    logger.debug('DiscordConfigService.setCredentials: updating bot credentials', {
+      botToken: params.botToken !== undefined,
+      clientId: params.clientId !== undefined,
+      publicKey: params.publicKey !== undefined,
+    });
     if (params.botToken !== undefined && typeof params.botToken !== 'string') return false;
     if (params.clientId !== undefined && typeof params.clientId !== 'string') return false;
     if (params.publicKey !== undefined && typeof params.publicKey !== 'string') return false;
@@ -255,7 +281,13 @@ export class DiscordConfigService {
       writes.push(this.secrets.put(await this.publicKeySecretArn(), params.publicKey));
     }
     if (writes.length) {
-      await Promise.all(writes);
+      try {
+        await Promise.all(writes);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to write Discord bot credentials to Secrets Manager', { error: message });
+        throw new Error(message);
+      }
     }
     return true;
   }

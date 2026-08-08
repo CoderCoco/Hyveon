@@ -1040,6 +1040,21 @@ describe('PulumiService.apply failure handling', () => {
 
     expect(runRecordPersister.persist).toHaveBeenCalledWith(expect.objectContaining({ exitCode: 1 }), expect.any(String));
   });
+
+  it('should log an error with the failure message (not a raw error object) when stack.up() rejects', async () => {
+    const cause = new Error('up command failed');
+    const workspace = makeWorkspace(async () => {
+      throw cause;
+    });
+    const service = makeService({ workspace });
+
+    await expect(collectApplyChunks(service.apply(PLAN_RUN_ID, PLAN_HASH))).rejects.toBeInstanceOf(PulumiUpError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'pulumi apply: operation failed',
+      expect.objectContaining({ planRunId: PLAN_RUN_ID, error: expect.stringContaining('up command failed') }),
+    );
+  });
 });
 
 describe('PulumiService.apply abort handling', () => {

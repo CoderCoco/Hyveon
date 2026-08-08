@@ -11,6 +11,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SecretsStore, StackOutputs } from '@hyveon/shared';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { logger } from '../logger.js';
 import { DiscordConfigService } from './DiscordConfigService.js';
 import { ConfigService } from './ConfigService.js';
 
@@ -90,6 +96,9 @@ beforeEach(() => {
   putDiscordConfigMock.mockResolvedValue(undefined);
   secretsGetMock.mockResolvedValue(undefined);
   secretsPutMock.mockResolvedValue(undefined);
+  vi.mocked(logger.debug).mockClear();
+  vi.mocked(logger.warn).mockClear();
+  vi.mocked(logger.error).mockClear();
 });
 
 describe('DiscordConfigService construction', () => {
@@ -106,6 +115,24 @@ describe('DiscordConfigService construction', () => {
       gamePermissions: {},
     });
     expect(getDiscordConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('should log a warning-level detail-free error and degrade to an empty config when the DynamoDB read fails', async () => {
+    getDiscordConfigMock.mockRejectedValueOnce(new Error('ResourceNotFoundException'));
+    const svc = makeService();
+
+    const cfg = await svc.getConfig();
+
+    expect(cfg).toEqual({
+      clientId: '',
+      allowedGuilds: [],
+      admins: { userIds: [], roleIds: [] },
+      gamePermissions: {},
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to load Discord config from DynamoDB',
+      { error: 'ResourceNotFoundException' },
+    );
   });
 });
 
@@ -209,6 +236,18 @@ describe('DiscordConfigService.setCredentials', () => {
     await svc.setCredentials({ botToken: '' });
     expect(secretsPutMock).not.toHaveBeenCalled();
   });
+
+  it('should log an error and rethrow with just the message when a Secrets Manager write fails', async () => {
+    secretsPutMock.mockRejectedValueOnce(new Error('AccessDeniedException'));
+    const svc = makeService();
+
+    await expect(svc.setCredentials({ botToken: 'tok' })).rejects.toThrow('AccessDeniedException');
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to write Discord bot credentials to Secrets Manager',
+      { error: 'AccessDeniedException' },
+    );
+  });
 });
 
 describe('DiscordConfigService.allowedGuilds mutations', () => {
@@ -266,6 +305,18 @@ describe('DiscordConfigService.allowedGuilds mutations', () => {
     expect(putDiscordConfigMock).toHaveBeenCalledWith(
       'test-discord',
       expect.objectContaining({ allowedGuilds: ['G1', 'G2'] }),
+    );
+  });
+
+  it('should log an error and rethrow with just the message when the DynamoDB write fails', async () => {
+    putDiscordConfigMock.mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
+    const svc = makeService();
+
+    await expect(svc.setAllowedGuilds(['G1'])).rejects.toThrow('ProvisionedThroughputExceededException');
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to save Discord config to DynamoDB',
+      { error: 'ProvisionedThroughputExceededException' },
     );
   });
 });

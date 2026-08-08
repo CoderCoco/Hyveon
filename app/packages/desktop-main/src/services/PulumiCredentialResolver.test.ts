@@ -12,14 +12,25 @@
  * see the two describe blocks below for how each is proven rather than
  * merely asserted.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('../logger.js', () => ({ logger: loggerMock }));
+
 import {
   resolveCredentialEnvVars,
   PulumiCredentialsNotConfiguredError,
 } from './PulumiCredentialResolver.js';
 import type { ElectronStoreService } from './ElectronStoreService.js';
+
+beforeEach(() => {
+  loggerMock.debug.mockReset();
+  loggerMock.warn.mockReset();
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -112,25 +123,91 @@ describe('resolveCredentialEnvVars — no credential source configured', () => {
 
     expect(() => resolveCredentialEnvVars(store)).toThrow(PulumiCredentialsNotConfiguredError);
   });
+
+  it('should log a warning before throwing, rather than failing silently', () => {
+    const store = makeStore(undefined);
+
+    expect(() => resolveCredentialEnvVars(store)).toThrow(PulumiCredentialsNotConfiguredError);
+
+    expect(loggerMock.warn).toHaveBeenCalledWith('resolveCredentialEnvVars: no AWS credential source is configured');
+  });
 });
 
 /**
- * "Credentials are not logged" at *this* layer: `PulumiCredentialResolver.ts`
- * imports nothing from `../logger.js` at all (verify with
- * `grep -n logger PulumiCredentialResolver.ts` — no match), so there is
- * structurally no logger call for a runtime spy to catch here; asserting
- * "the logger mock was never called" in this file would be vacuously true
- * and would prove nothing. The layer that DOES call `logger.debug` on this
- * path is `PulumiWorkspaceService.getOrCreateStack` (once, for
- * `pulumiHome`/`workDir`) — `PulumiWorkspaceService.test.ts`'s "credentials
- * are not logged" test proves that call (and every other logger call made
- * while resolving a stack with real pasted-key `credentialEnvVars`) never
- * carries the secret values, which is the meaningful place to make this
- * assertion. What is NOT covered by either test file: `PulumiService.preview`'s/
- * `.apply`'s (which calls `stack.up()`) future streaming of real CLI
- * stdout/stderr — scrubbing that stream is the responsibility of whichever
- * code implements it.
+ * "Credentials are not logged" at *this* layer: `resolveCredentialEnvVars`
+ * logs only the resolved credential SOURCE kind (`'profile'` / `'pasted'`),
+ * never a profile name, access key id, or secret access key — proven below
+ * by asserting every `logger.debug`/`logger.warn` call this function makes
+ * carries none of the secret values the stubbed store was given. The layer
+ * that additionally proves the same for `PulumiWorkspaceService.getOrCreateStack`'s
+ * OWN logger calls (`pulumiHome`/`workDir`, engine resolution, etc.) once
+ * this function's output flows through it is `PulumiWorkspaceService.test.ts`'s
+ * "credentials are not logged" test. What is NOT covered by either test file:
+ * `PulumiService.preview`'s/`.apply`'s (which calls `stack.up()`) future
+ * streaming of real CLI stdout/stderr — scrubbing that stream is the
+ * responsibility of whichever code implements it.
  */
+describe('resolveCredentialEnvVars — the underlying credential-source resolution can fail', () => {
+  it('should log a warning and rethrow (not swallow) when resolving the credential source itself throws', () => {
+    const decryptError = new Error('cannot decrypt stored pasted-credentials entry');
+    const store: ElectronStoreService = {
+      get: vi.fn().mockReturnValue({ profile: 'hyveon-pasted' }),
+      getPastedCredentials: vi.fn().mockImplementation(() => {
+        throw decryptError;
+      }),
+    } as Partial<ElectronStoreService> as ElectronStoreService;
+
+    expect(() => resolveCredentialEnvVars(store)).toThrow();
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      'resolveCredentialEnvVars: failed to resolve the AWS credential source',
+      expect.objectContaining({ error: expect.stringMatching(/cannot decrypt/i) }),
+    );
+  });
+});
+
+describe('resolveCredentialEnvVars — credential source is logged without secret values', () => {
+  /**
+   * Filters `loggerMock` calls down to the ones `resolveCredentialEnvVars`
+   * itself made (identified by its own `'resolveCredentialEnvVars: ...'`
+   * message prefix) — `resolveAwsCredentialSource` (a dependency of this
+   * function, in a different file) makes its own separate logger calls, which
+   * are out of scope for what this describe block is proving about THIS
+   * function's own logging.
+   */
+  function ownCalls(): unknown[][] {
+    return [...loggerMock.debug.mock.calls, ...loggerMock.warn.mock.calls].filter(
+      (call) => typeof call[0] === 'string' && call[0].startsWith('resolveCredentialEnvVars:'),
+    );
+  }
+
+  it('should log the resolved source kind as "profile", never the profile name itself', () => {
+    const store = makeStore('personal', undefined);
+
+    resolveCredentialEnvVars(store);
+
+    expect(loggerMock.debug).toHaveBeenCalledWith('resolveCredentialEnvVars: resolved credential source', {
+      source: 'profile',
+    });
+    for (const call of ownCalls()) {
+      expect(JSON.stringify(call)).not.toContain('personal');
+    }
+  });
+
+  it('should log the resolved source kind as "pasted", never the access key id or secret access key', () => {
+    const store = makeStore('hyveon-pasted', { accessKeyId: 'AKID123', secretAccessKey: 'SECRET456' });
+
+    resolveCredentialEnvVars(store);
+
+    expect(loggerMock.debug).toHaveBeenCalledWith('resolveCredentialEnvVars: resolved credential source', {
+      source: 'pasted',
+    });
+    for (const call of ownCalls()) {
+      expect(JSON.stringify(call)).not.toContain('AKID123');
+      expect(JSON.stringify(call)).not.toContain('SECRET456');
+    }
+  });
+});
 
 /**
  * Proves the exclusivity/clearing mechanism reaches an actual spawned child

@@ -5,9 +5,19 @@
  * cover this decision indirectly (via `store.getPastedCredentials` call
  * assertions); this file tests it directly, once, as its own unit.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 import { AwsPastedCredentialDecryptError, resolveAwsCredentialSource } from './awsCredentialSource.js';
+import { logger } from '../logger.js';
 import type { ElectronStoreService } from './ElectronStoreService.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 /** Builds an `ElectronStoreService` stub whose `aws.profile` and pasted-credentials lookup are controlled directly. */
 function makeStore(
@@ -102,5 +112,32 @@ describe('resolveAwsCredentialSource', () => {
     const store = makeStoreWithUndecryptableCredentials('hyveon-pasted', new Error('decrypt failed'));
 
     expect(() => resolveAwsCredentialSource(store)).toThrow(/hyveon-pasted/);
+  });
+
+  it('should log a warning (not let the raw decrypt error escape unlogged) when getPastedCredentials throws', () => {
+    const cause = new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+    const store = makeStoreWithUndecryptableCredentials('hyveon-pasted', cause);
+
+    expect(() => resolveAwsCredentialSource(store)).toThrow(AwsPastedCredentialDecryptError);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('resolveAwsCredentialSource'),
+      expect.objectContaining({ profile: 'hyveon-pasted' }),
+    );
+  });
+
+  it('should never log the decrypted access key ID or secret access key values', () => {
+    const store = makeStore('hyveon-pasted', { accessKeyId: 'AKIDVALUE123', secretAccessKey: 'SECRETVALUE456' });
+
+    resolveAwsCredentialSource(store);
+
+    const allLogCalls = [
+      ...vi.mocked(logger.debug).mock.calls,
+      ...vi.mocked(logger.warn).mock.calls,
+      ...vi.mocked(logger.error).mock.calls,
+    ];
+    const serialized = JSON.stringify(allLogCalls);
+    expect(serialized).not.toContain('AKIDVALUE123');
+    expect(serialized).not.toContain('SECRETVALUE456');
   });
 });

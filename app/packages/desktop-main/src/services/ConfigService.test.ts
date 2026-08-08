@@ -13,6 +13,7 @@ vi.mock('../logger.js', () => ({
 import { ConfigService } from './ConfigService.js';
 import { ElectronStoreService } from './ElectronStoreService.js';
 import { SafeStorageService } from './SafeStorageService.js';
+import { logger } from '../logger.js';
 import type { PulumiService } from './PulumiService.js';
 import type { StackOutputs } from '@hyveon/shared';
 
@@ -104,6 +105,49 @@ describe('ConfigService', () => {
       await expect(svc.getStackOutputs()).rejects.toThrow('transient AWS failure');
       await expect(svc.getStackOutputs()).resolves.toEqual({ awsRegion: 'us-west-2' });
       expect(pulumi.getStackOutputs).toHaveBeenCalledTimes(2);
+    });
+
+    it('should log an error and reject with a plain Error (never the raw rejection) when PulumiService.getStackOutputs rejects', async () => {
+      const pulumi = makePulumiService();
+      const rawError = new Error('transient AWS failure');
+      vi.mocked(pulumi.getStackOutputs).mockRejectedValueOnce(rawError);
+      const svc = new ConfigService(makeElectronStore(), pulumi);
+      vi.mocked(logger.error).mockClear();
+
+      const rejection = await svc.getStackOutputs().catch((err: unknown) => err);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBe(rawError);
+      expect((rejection as Error).message).toBe('transient AWS failure');
+      expect(logger.error).toHaveBeenCalledWith(
+        'ConfigService.getStackOutputs: PulumiService.getStackOutputs rejected unexpectedly',
+        expect.objectContaining({ error: 'transient AWS failure' }),
+      );
+    });
+
+    it('should log a debug line noting a cache miss on the first call', async () => {
+      const pulumi = makePulumiService();
+      vi.mocked(pulumi.getStackOutputs).mockResolvedValue(null);
+      const svc = new ConfigService(makeElectronStore(), pulumi);
+      vi.mocked(logger.debug).mockClear();
+
+      await svc.getStackOutputs();
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        'ConfigService.getStackOutputs: cache miss — fetching stack outputs from PulumiService',
+      );
+    });
+
+    it('should log a debug line noting a cache hit on a subsequent cached call', async () => {
+      const pulumi = makePulumiService();
+      vi.mocked(pulumi.getStackOutputs).mockResolvedValue({ awsRegion: 'us-west-2' } as StackOutputs);
+      const svc = new ConfigService(makeElectronStore(), pulumi);
+
+      await svc.getStackOutputs();
+      vi.mocked(logger.debug).mockClear();
+      await svc.getStackOutputs();
+
+      expect(logger.debug).toHaveBeenCalledWith('ConfigService.getStackOutputs: cache hit');
     });
 
     describe('null-result TTL (self-healing after a transient failure degraded to null)', () => {

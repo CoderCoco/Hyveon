@@ -43,12 +43,20 @@ export class SafeStorageService {
    *   encryption is unavailable.
    */
   encrypt(plaintext: string): string {
-    if (!this.isAvailable()) {
+    const available = this.isAvailable();
+    logger.debug('SafeStorageService.encrypt: encrypting value', { available });
+    if (!available) {
       logger.warn('SafeStorageService: encryption not available — returning plaintext unchanged');
       return plaintext;
     }
-    const buf = this.encryptString(plaintext);
-    return buf.toString('base64');
+    try {
+      const buf = this.encryptString(plaintext);
+      return buf.toString('base64');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('SafeStorageService.encrypt: safeStorage.encryptString failed', { error: message });
+      throw new Error(`Failed to encrypt value via the OS keychain: ${message}`);
+    }
   }
 
   /**
@@ -73,11 +81,19 @@ export class SafeStorageService {
    * the raw base64 blob unchanged — treat the output as untrusted.
    */
   decrypt(ciphertext: string): string {
-    if (!this.isAvailable()) {
+    const available = this.isAvailable();
+    logger.debug('SafeStorageService.decrypt: decrypting value', { available });
+    if (!available) {
       return ciphertext;
     }
     const buf = Buffer.from(ciphertext, 'base64');
-    return this.decryptString(buf);
+    try {
+      return this.decryptString(buf);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('SafeStorageService.decrypt: safeStorage.decryptString failed', { error: message });
+      throw new Error(`Failed to decrypt value via the OS keychain: ${message}`);
+    }
   }
 
   /**

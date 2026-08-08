@@ -354,6 +354,19 @@ describe('PulumiService.initializeStack', () => {
       expect((caught as PulumiStackInitializationError).cause).toBe(cause);
     });
 
+    it('should log an error with the failure message (not a raw error object) when getOrCreateStack fails', async () => {
+      const cause = new Error('bucket does not exist');
+      const workspace = makeWorkspace({ rejectWith: cause });
+      const service = makeService({ workspace });
+
+      await expect(service.initializeStack()).rejects.toBeInstanceOf(PulumiStackInitializationError);
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'PulumiService.initializeStack: getOrCreateStack failed',
+        expect.objectContaining({ error: expect.stringContaining('bucket does not exist') }),
+      );
+    });
+
     it("should tag an installPlugin failure as 'plugins'", async () => {
       const cause = new Error('plugin install failed');
       const installPlugin = vi.fn().mockRejectedValue(cause);
@@ -388,6 +401,34 @@ describe('PulumiService.initializeStack', () => {
       expect(caught).toBeInstanceOf(PulumiStackInitializationError);
       expect((caught as PulumiStackInitializationError).phase).toBe('operation');
       expect((caught as PulumiStackInitializationError).cause).toBe(cause);
+    });
+
+    it('should log an error with the failure message (not a raw error object) when installPlugin fails', async () => {
+      const cause = new Error('plugin install failed');
+      const installPlugin = vi.fn().mockRejectedValue(cause);
+      const workspace = makeWorkspace({ installPlugin });
+      const service = makeService({ workspace });
+
+      await expect(service.initializeStack()).rejects.toBeInstanceOf(PulumiStackInitializationError);
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'PulumiService.initializeStack: installPlugin("aws") failed',
+        expect.objectContaining({ error: expect.stringContaining('plugin install failed') }),
+      );
+    });
+
+    it('should log an error with the failure message (not a raw error object) when stack.refresh() fails', async () => {
+      const cause = new Error('refresh failed');
+      const refresh = vi.fn().mockRejectedValue(cause);
+      const workspace = makeWorkspace({ refresh });
+      const service = makeService({ workspace });
+
+      await expect(service.initializeStack()).rejects.toBeInstanceOf(PulumiStackInitializationError);
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'PulumiService.initializeStack: stack.refresh() failed',
+        expect.objectContaining({ error: expect.stringContaining('refresh failed') }),
+      );
     });
   });
 

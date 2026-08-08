@@ -114,6 +114,17 @@ describe('GamesWriteService', () => {
       expect(logger.info).toHaveBeenCalledWith('Game server write', { action: 'create', game: 'ark', mode: 's3' });
     });
 
+    it('should log a debug entry line naming the game being created', async () => {
+      const service = new GamesWriteService(makeConfig(), makeDeploymentConfig(), makeAudit());
+      const loggerDebugSpy = vi.spyOn(logger, 'debug');
+
+      await service.createGame({ name: 'ark', config: buildConfig() });
+
+      expect(loggerDebugSpy).toHaveBeenCalledWith('GamesWriteService.createGame: creating game server entry', {
+        game: 'ark',
+      });
+    });
+
     it('should return a validation failure without writing or recording an audit entry when the proposed config fails business-rule validation', async () => {
       const deploymentConfig = makeDeploymentConfig();
       const audit = makeAudit();
@@ -145,6 +156,21 @@ describe('GamesWriteService', () => {
         currentVersionId: 'new-etag',
       });
       expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('should log a warning with both etags when the write raises OptimisticLockError', async () => {
+      const deploymentConfig = makeDeploymentConfig();
+      deploymentConfig.addGameServer = vi.fn().mockRejectedValue(new OptimisticLockError('old-etag', 'new-etag'));
+      const service = new GamesWriteService(makeConfig(), deploymentConfig, makeAudit());
+      const loggerWarnSpy = vi.spyOn(logger, 'warn');
+
+      await service.createGame({ name: 'ark', config: buildConfig(), expectedVersionId: 'old-etag' });
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith('Game server write rejected — stale expectedVersionId', {
+        message: expect.any(String),
+        expectedVersionId: 'old-etag',
+        currentVersionId: 'new-etag',
+      });
     });
 
     it('should return a validation failure with a name-path issue without recording an audit entry when the entry name already exists', async () => {
@@ -329,6 +355,18 @@ describe('GamesWriteService', () => {
       expect(result).not.toMatchObject({ code: 'error' });
       expect(audit.record).not.toHaveBeenCalled();
     });
+
+    it('should log a debug entry line naming the game being updated', async () => {
+      const deploymentConfig = makeDeploymentConfig([buildGameServer('minecraft')]);
+      const service = new GamesWriteService(makeConfig(), deploymentConfig, makeAudit());
+      const loggerDebugSpy = vi.spyOn(logger, 'debug');
+
+      await service.updateGame({ name: 'minecraft', config: buildConfig() });
+
+      expect(loggerDebugSpy).toHaveBeenCalledWith('GamesWriteService.updateGame: updating game server entry', {
+        game: 'minecraft',
+      });
+    });
   });
 
   describe('deleteGame', () => {
@@ -372,6 +410,18 @@ describe('GamesWriteService', () => {
       await service.deleteGame({ name: 'minecraft' });
 
       expect(logger.info).toHaveBeenCalledWith('Game server write', { action: 'delete', game: 'minecraft', mode: 's3' });
+    });
+
+    it('should log a debug entry line naming the game being deleted', async () => {
+      const deploymentConfig = makeDeploymentConfig([buildGameServer('minecraft')]);
+      const service = new GamesWriteService(makeConfig(), deploymentConfig, makeAudit());
+      const loggerDebugSpy = vi.spyOn(logger, 'debug');
+
+      await service.deleteGame({ name: 'minecraft' });
+
+      expect(loggerDebugSpy).toHaveBeenCalledWith('GamesWriteService.deleteGame: deleting game server entry', {
+        game: 'minecraft',
+      });
     });
 
     it('should return a conflict result without recording an audit entry when the write raises OptimisticLockError', async () => {

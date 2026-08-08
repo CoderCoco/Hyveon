@@ -4,6 +4,12 @@
  * `DiscordBotService.registerCommandsForGuild()`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { logger } from '../logger.js';
 import { DiscordCommandRegistrar } from './DiscordCommandRegistrar.js';
 import { DiscordConfigService } from './DiscordConfigService.js';
 
@@ -103,6 +109,27 @@ describe('DiscordCommandRegistrar.registerForGuild', () => {
     const result = await registrar.registerForGuild(VALID_GUILD_ID);
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/network down/);
+  });
+
+  it('should log an error with just the error message when the request throws', async () => {
+    fetchMock.mockRejectedValue(new Error('network down'));
+    const registrar = new DiscordCommandRegistrar(makeDiscord());
+    await registrar.registerForGuild(VALID_GUILD_ID);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Discord command registration threw',
+      { error: 'network down', guildId: VALID_GUILD_ID },
+    );
+  });
+
+  it('should log a warning when Discord returns a non-2xx response', async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404, text: async () => '{"code":10004}' });
+    const registrar = new DiscordCommandRegistrar(makeDiscord());
+    await registrar.registerForGuild(VALID_GUILD_ID);
+    expect(logger.warn).toHaveBeenCalledWith('Discord command registration failed', {
+      status: 404,
+      body: '{"code":10004}',
+      guildId: VALID_GUILD_ID,
+    });
   });
 
   it('should reject non-Snowflake guildId values before they can reach the URL', async () => {

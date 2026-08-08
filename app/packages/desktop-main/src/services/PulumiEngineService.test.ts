@@ -417,6 +417,20 @@ describe('PulumiEngineService.resolve — no partial-install reuse', () => {
     // left at the final path for a later tryReuseCached to stumble on.
     expect(rmSyncMock).toHaveBeenCalledWith(PIN_ROOT, { recursive: true, force: true });
   });
+
+  it('should log an error before rejecting when the post-rename verification get() fails', async () => {
+    const service = makeService();
+    installMock.mockResolvedValueOnce(fakeCommand('/staging', PULUMI_ENGINE_VERSION));
+    const eacces: NodeJS.ErrnoException = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    getMock.mockRejectedValueOnce(eacces);
+
+    await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiEngineService: post-rename verification of the installed Pulumi engine failed',
+      expect.objectContaining({ root: PIN_ROOT }),
+    );
+  });
 });
 
 describe('PulumiEngineService.resolve — pruning superseded versions', () => {
@@ -483,6 +497,21 @@ describe('PulumiEngineService.resolve — typed provisioning errors', () => {
     expect(installMock).not.toHaveBeenCalled();
   });
 
+  it('should log an error before rejecting when the cache root cannot be created', async () => {
+    const service = makeService();
+    const eacces: NodeJS.ErrnoException = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    mkdirSyncMock.mockImplementationOnce(() => {
+      throw eacces;
+    });
+
+    await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiEngineService: failed to create the Pulumi engine versions directory',
+      expect.objectContaining({ error: 'permission denied' }),
+    );
+  });
+
   it('should reject with PulumiEngineCacheWriteError when a verified install cannot be renamed into place', async () => {
     const service = makeService();
     const erofs: NodeJS.ErrnoException = Object.assign(new Error('read-only file system'), { code: 'EROFS' });
@@ -493,12 +522,40 @@ describe('PulumiEngineService.resolve — typed provisioning errors', () => {
     await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
   });
 
+  it('should log an error before rejecting when a verified install cannot be renamed into place', async () => {
+    const service = makeService();
+    const erofs: NodeJS.ErrnoException = Object.assign(new Error('read-only file system'), { code: 'EROFS' });
+    renameSyncMock.mockImplementationOnce(() => {
+      throw erofs;
+    });
+
+    await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiEngineService: failed to swap the verified Pulumi engine install into place',
+      expect.objectContaining({ error: 'read-only file system' }),
+    );
+  });
+
   it('should classify an install failure carrying an EACCES code as a cache-write error even mid-install', async () => {
     const service = makeService();
     const eacces: NodeJS.ErrnoException = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     installMock.mockRejectedValueOnce(eacces);
 
     await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
+  });
+
+  it('should log an error before rejecting when installing the pinned engine fails', async () => {
+    const service = makeService();
+    const eacces: NodeJS.ErrnoException = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    installMock.mockRejectedValueOnce(eacces);
+
+    await expect(service.resolve()).rejects.toThrow(PulumiEngineCacheWriteError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiEngineService: failed to install the pinned Pulumi engine',
+      expect.objectContaining({ stagingDir: expect.any(String) }),
+    );
   });
 });
 

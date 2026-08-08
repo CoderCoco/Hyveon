@@ -301,12 +301,25 @@ export class GuidedIamService {
    *   it against.
    */
   async intakeBootstrapKey(input: BootstrapKeyIntakeInput): Promise<BootstrapKeyIntakeResult> {
+    logger.debug('GuidedIamService.intakeBootstrapKey: validating pasted bootstrap key', { region: input.region });
     const client = this.createStsClient(input);
-    const response = await client.send(new GetCallerIdentityCommand({}));
-    if (!response.Account) {
-      throw new Error('sts:GetCallerIdentity did not return an Account for the submitted bootstrap key.');
+    try {
+      const response = await client.send(new GetCallerIdentityCommand({}));
+      if (!response.Account) {
+        throw new Error('sts:GetCallerIdentity did not return an Account for the submitted bootstrap key.');
+      }
+      return { accountId: response.Account };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('GuidedIamService.intakeBootstrapKey: failed to validate the pasted bootstrap key', {
+        region: input.region,
+        error: message,
+      });
+      // Rethrown unchanged (not wrapped) — see this method's doc comment:
+      // the caller needs the real AWS SDK error (e.g. its `name`) to explain
+      // the failure to the operator, not a generic message.
+      throw err;
     }
-    return { accountId: response.Account };
   }
 
   /**
@@ -383,6 +396,7 @@ export class GuidedIamService {
    *   catch it.
    */
   async rotate(input: RotationInput): Promise<RotationResult> {
+    logger.debug('GuidedIamService.rotate: starting bootstrap key rotation', { region: input.region });
     if (!this.safeStorage.isAvailable()) {
       throw new SafeStorageUnavailableError();
     }
@@ -535,6 +549,9 @@ export class GuidedIamService {
    *   region to build the IAM client against.
    */
   async revokeBootstrapKey(input: RevokeBootstrapKeyInput): Promise<RevokeBootstrapKeyResult> {
+    logger.debug('GuidedIamService.revokeBootstrapKey: revoking still-live bootstrap key', {
+      bootstrapAccessKeyId: input.bootstrapAccessKeyId,
+    });
     let source: AwsCredentialSource;
     try {
       source = resolveAwsCredentialSource(this.store);
@@ -563,6 +580,10 @@ export class GuidedIamService {
       return { revoked: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      logger.warn('GuidedIamService.revokeBootstrapKey: iam:DeleteAccessKey failed for the bootstrap key', {
+        bootstrapAccessKeyId: input.bootstrapAccessKeyId,
+        error: message,
+      });
       return { revoked: false, message };
     }
   }

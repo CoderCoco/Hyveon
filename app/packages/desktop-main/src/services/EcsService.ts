@@ -196,6 +196,7 @@ export class EcsService {
    * out of the describe result — leaving the single active task, if any.
    */
   async findRunningTask(cluster: string, game: string): Promise<Task | null> {
+    logger.debug('EcsService.findRunningTask: looking up running task', { cluster, game });
     try {
       const listResp = await this.getClient().send(
         new ListTasksCommand({ cluster, family: `${game}-server`, desiredStatus: 'RUNNING' }),
@@ -223,6 +224,7 @@ export class EcsService {
    * shape so controllers see no change.
    */
   async getStatus(game: string): Promise<GameStatus> {
+    logger.debug('EcsService.getStatus: fetching workload status', { game });
     const status = await this.provider.getWorkloadStatus(game);
     return {
       game,
@@ -270,6 +272,7 @@ export class EcsService {
    * no DNS cleanup needed here.
    */
   async stop(game: string): Promise<StartResult> {
+    logger.debug('EcsService.stop: stopping game server', { game });
     try {
       await this.provider.stopWorkload(game);
       return { success: true, message: `${game} is stopping.` };
@@ -289,6 +292,7 @@ export class EcsService {
    * definition is registered on the fly).
    */
   async getTaskDefinition(game: string): Promise<{ cpu: number; memory: number; executionRoleArn: string } | null> {
+    logger.debug('EcsService.getTaskDefinition: describing task definition', { game });
     try {
       const resp = await this.getClient().send(
         new DescribeTaskDefinitionCommand({ taskDefinition: `${game}-server` }),
@@ -313,6 +317,7 @@ export class EcsService {
    * program (`app/packages/infra/src/ecs.ts`).
    */
   async registerTaskDefinition(params: Parameters<ECSClient['send']>[0] extends import('@aws-sdk/client-ecs').RegisterTaskDefinitionCommand ? never : import('@aws-sdk/client-ecs').RegisterTaskDefinitionCommandInput): Promise<string | null> {
+    logger.debug('EcsService.registerTaskDefinition: registering task definition', { family: params.family });
     const { RegisterTaskDefinitionCommand } = await import('@aws-sdk/client-ecs');
     try {
       const resp = await this.getClient().send(new RegisterTaskDefinitionCommand(params));
@@ -331,6 +336,7 @@ export class EcsService {
    * {@link EcsService.start} is the preferred entry point for game servers.
    */
   async runTask(params: import('@aws-sdk/client-ecs').RunTaskCommandInput): Promise<{ taskArn: string } | null> {
+    logger.debug('EcsService.runTask: running task', { taskDefinition: params.taskDefinition, startedBy: params.startedBy });
     try {
       const resp = await this.getClient().send(new RunTaskCommand(params));
       if (resp.tasks?.length) {
@@ -353,6 +359,7 @@ export class EcsService {
    * tasks without relying on a bespoke task-definition family.
    */
   async listTasksByStartedBy(cluster: string, startedBy: string): Promise<Task[]> {
+    logger.debug('EcsService.listTasksByStartedBy: listing tasks', { cluster, startedBy });
     try {
       const listResp = await this.getClient().send(
         new ListTasksCommand({ cluster, startedBy, desiredStatus: 'RUNNING' }),
@@ -378,6 +385,13 @@ export class EcsService {
    * performs.
    */
   async stopTask(cluster: string, taskArn: string, reason: string): Promise<void> {
-    await this.getClient().send(new StopTaskCommand({ cluster, task: taskArn, reason }));
+    logger.debug('EcsService.stopTask: stopping task', { cluster, taskArn });
+    try {
+      await this.getClient().send(new StopTaskCommand({ cluster, task: taskArn, reason }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('EcsService.stopTask: failed to stop task', { cluster, taskArn, error: message });
+      throw new Error(message);
+    }
   }
 }

@@ -1,3 +1,5 @@
+import { logger } from '../logger.js';
+
 /**
  * Default backoff schedule for {@link verifyAccessKeyWithRetry}: 5 delays
  * between 6 total attempts (1 initial + 5 retries), summing to ~23s worst
@@ -46,16 +48,30 @@ export async function verifyAccessKeyWithRetry(
 ): Promise<void> {
   const delaysMs = options.delaysMs ?? VERIFY_ACCESS_KEY_RETRY_DELAYS_MS;
   const totalAttempts = delaysMs.length + 1;
+  logger.debug('verifyAccessKeyWithRetry: starting access key verification', { totalAttempts });
 
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     try {
       await verify();
+      if (attempt > 1) {
+        logger.debug('verifyAccessKeyWithRetry: verification succeeded after retrying', { attempt, totalAttempts });
+      }
       return;
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       options.onAttemptFailed?.(attempt, totalAttempts, err);
       if (attempt === totalAttempts) {
+        logger.warn('verifyAccessKeyWithRetry: exhausted all attempts, giving up', {
+          totalAttempts,
+          error: message,
+        });
         throw err;
       }
+      logger.debug('verifyAccessKeyWithRetry: attempt failed, retrying after backoff', {
+        attempt,
+        totalAttempts,
+        error: message,
+      });
       await options.sleep(delaysMs[attempt - 1]!);
     }
   }

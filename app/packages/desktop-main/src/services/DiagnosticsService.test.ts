@@ -86,6 +86,19 @@ describe('DiagnosticsService.readTail', () => {
     await expect(service.readTail()).rejects.toThrow('EACCES');
   });
 
+  it('should log a warning before re-throwing an error that is not ENOENT', async () => {
+    vi.mocked(logger.warn).mockClear();
+    const err = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    mockOpen.mockRejectedValueOnce(err);
+
+    await expect(service.readTail()).rejects.toThrow();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'DiagnosticsService.readTail: failed to read log file',
+      { error: 'EACCES: permission denied' },
+    );
+  });
+
   it('should return all lines when the file has fewer lines than maxLines', async () => {
     const handle = makeMockHandle('line1\nline2\nline3\n');
     mockOpen.mockResolvedValueOnce(handle as unknown as fsPromises.FileHandle);

@@ -3,6 +3,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { IAMClient, SimulatePrincipalPolicyCommand } from '@aws-sdk/client-iam';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { logger } from '../logger.js';
 import { IamCheckService } from './IamCheckService.js';
 import { GUIDED_PROFILE_NAME } from './GuidedIamService.js';
 import type { ElectronStoreService } from './ElectronStoreService.js';
@@ -167,6 +173,18 @@ describe('IamCheckService', () => {
       expect(iamMock.commandCalls(SimulatePrincipalPolicyCommand)).toHaveLength(0);
     });
 
+    it('should log a warning when GetCallerIdentity fails', async () => {
+      stsMock.on(GetCallerIdentityCommand).rejects(new Error('access denied'));
+      const service = new IamCheckService(makeStore({ region: 'us-west-2' }));
+
+      await service.checkPermissions();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'IamCheckService.checkPermissions: sts:GetCallerIdentity failed — degrading to a warning',
+        { origin: 'none', error: 'access denied' },
+      );
+    });
+
     it('should degrade to a warning when SimulatePrincipalPolicy itself is not permitted', async () => {
       stsMock.on(GetCallerIdentityCommand).resolves({ Arn: 'arn:aws:iam::123456789012:user/hyveon' });
       iamMock.on(SimulatePrincipalPolicyCommand).rejects(new Error('User is not authorized to perform iam:SimulatePrincipalPolicy'));
@@ -176,6 +194,29 @@ describe('IamCheckService', () => {
 
       expect(result.status).toBe('warning');
       expect(result.message).toMatch(/not authorized/i);
+    });
+
+    it('should log a warning when SimulatePrincipalPolicy fails', async () => {
+      stsMock.on(GetCallerIdentityCommand).resolves({ Arn: 'arn:aws:iam::123456789012:user/hyveon' });
+      iamMock.on(SimulatePrincipalPolicyCommand).rejects(new Error('User is not authorized to perform iam:SimulatePrincipalPolicy'));
+      const service = new IamCheckService(makeStore({ region: 'us-west-2' }));
+
+      await service.checkPermissions();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'IamCheckService.checkPermissions: iam:SimulatePrincipalPolicy failed — degrading to a warning',
+        { origin: 'none', error: 'User is not authorized to perform iam:SimulatePrincipalPolicy' },
+      );
+    });
+
+    it('should log a debug entry line when running the permission dry-run', async () => {
+      stsMock.on(GetCallerIdentityCommand).resolves({ Arn: 'arn:aws:iam::123456789012:user/hyveon' });
+      iamMock.on(SimulatePrincipalPolicyCommand).resolves({ EvaluationResults: [] });
+      const service = new IamCheckService(makeStore({ region: 'us-west-2' }));
+
+      await service.checkPermissions();
+
+      expect(logger.debug).toHaveBeenCalledWith('IamCheckService.checkPermissions: running IAM permission dry-run');
     });
 
     it('should degrade to a warning when no region is configured, rather than throwing', async () => {

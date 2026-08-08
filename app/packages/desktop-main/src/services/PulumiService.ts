@@ -1030,6 +1030,7 @@ export class PulumiService {
    * deployed.
    */
   async getStackOutputs(): Promise<StackOutputs | null> {
+    logger.debug('PulumiService.getStackOutputs: reading stack outputs');
     if (this.stackInitInFlight || this.operationInFlight) {
       logger.warn('PulumiService.getStackOutputs: an operation is in flight, treating as not deployed', {
         stackInitInFlight: this.stackInitInFlight,
@@ -1253,6 +1254,7 @@ export class PulumiService {
    *   see "Error attribution" above.
    */
   async initializeStack(onPhase?: PulumiPhaseCallback): Promise<void> {
+    logger.debug('PulumiService.initializeStack: initializing pulumi stack');
     if (this.operationInFlight) {
       throw new PulumiOperationInFlightError(this.operationInFlight);
     }
@@ -1284,6 +1286,9 @@ export class PulumiService {
           onPhase,
         });
       } catch (err) {
+        logger.error('PulumiService.initializeStack: getOrCreateStack failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new PulumiStackInitializationError(PulumiService.classifyGetOrCreateStackFailure(err), err);
       }
 
@@ -1291,6 +1296,9 @@ export class PulumiService {
       try {
         await stack.workspace.installPlugin('aws', PulumiService.resolveAwsProviderVersion(), 'resource');
       } catch (err) {
+        logger.error('PulumiService.initializeStack: installPlugin("aws") failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new PulumiStackInitializationError('plugins', err);
       } finally {
         onPhase?.('plugins', 'end');
@@ -1319,6 +1327,9 @@ export class PulumiService {
       try {
         await stack.refresh();
       } catch (err) {
+        logger.error('PulumiService.initializeStack: stack.refresh() failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new PulumiStackInitializationError('operation', err);
       } finally {
         this.store.clearPulumiLockAttempt(lockAttemptId);
@@ -1698,6 +1709,7 @@ export class PulumiService {
     preMintedRunId?: string,
     rolledBackFrom?: string,
   ): AsyncGenerator<PulumiRunChunk, PulumiPreviewResult | undefined> {
+    logger.debug('PulumiService.preview: starting pulumi preview', { preMintedRunId });
     if (this.operationInFlight) {
       throw new Error(
         `PulumiService.preview() cannot run while ${this.operationInFlight}() is already ` +
@@ -2029,6 +2041,13 @@ export class PulumiService {
                   engineVersion: engineVersion!,
                 },
               };
+
+      if (outcome.kind === 'failed') {
+        logger.error('pulumi preview: operation failed', {
+          runId,
+          error: outcome.error.message,
+        });
+      }
 
       runRecordWritten = true;
       this.writeRunLog(runId, logLines);
@@ -2560,6 +2579,7 @@ export class PulumiService {
     planHash: string,
     signal?: AbortSignal,
   ): AsyncGenerator<PulumiRunChunk, PulumiUpResult | undefined> {
+    logger.debug('PulumiService.apply: starting pulumi apply', { planRunId });
     // Checked (never SET here — see "Nothing is reserved before step 8"
     // below) so an `apply()` call arriving while a `preview`/
     // `destroy`/already-lock-won `apply` is genuinely running the engine is
@@ -3070,6 +3090,15 @@ export class PulumiService {
               ? { kind: 'failed', error: new PulumiPartialApplyError(completedSteps, upError), partialApply: true }
               : { kind: 'failed', error: new PulumiUpError(upError), partialApply: false }
           : { kind: 'success', result: { runId, changeSummary: capturedChangeSummary } };
+
+      if (outcome.kind === 'failed') {
+        logger.error('pulumi apply: operation failed', {
+          runId,
+          planRunId,
+          partialApply: outcome.partialApply,
+          error: outcome.error.message,
+        });
+      }
 
       runRecordWritten = true;
       this.writeRunLog(runId, logLines);
@@ -3642,6 +3671,7 @@ export class PulumiService {
     signal?: AbortSignal,
     preMintedRunId?: string,
   ): AsyncGenerator<PulumiRunChunk, PulumiDestroyResult | undefined> {
+    logger.debug('PulumiService.destroy: starting pulumi destroy');
     if (this.operationInFlight) {
       throw new PulumiOperationInFlightError(this.operationInFlight);
     }
@@ -3953,6 +3983,13 @@ export class PulumiService {
             }
           : { kind: 'success', result: { runId, changeSummary: capturedChangeSummary } };
 
+      if (outcome.kind === 'failed') {
+        logger.error('pulumi destroy: operation failed', {
+          runId,
+          error: outcome.error.message,
+        });
+      }
+
       runRecordWritten = true;
       this.writeRunLog(runId, logLines);
       this.endActiveRun(runId);
@@ -4131,6 +4168,7 @@ export class PulumiService {
    * @throws {@link RollbackVersionMissingError} when no earlier configuration version exists in the version history.
    */
   async resolveRollbackTarget(applyRunId: string): Promise<{ versionId: string; lastModified: Date }> {
+    logger.debug('PulumiService.resolveRollbackTarget: resolving rollback target', { applyRunId });
     const record = await this.getRunRecordPersister().getByRunId(applyRunId);
     if (!record) {
       throw new RollbackTargetNotFoundError(applyRunId);
@@ -4218,6 +4256,7 @@ export class PulumiService {
    *   against the current head, or `undefined` if it could not be computed.
    */
   async computeRollbackDiff(targetVersionId: string): Promise<DeploymentConfigDiff | undefined> {
+    logger.debug('PulumiService.computeRollbackDiff: computing rollback diff', { targetVersionId });
     try {
       const key = CONFIGURATION_OBJECT_KEY;
       const remoteFileStore = this.getRemoteFileStore();
@@ -4387,6 +4426,7 @@ export class PulumiService {
     signal?: AbortSignal,
     preMintedRunId?: string,
   ): AsyncGenerator<PulumiRunChunk, PulumiPreviewResult | undefined> {
+    logger.debug('PulumiService.confirmRollback: confirming rollback', { applyRunId });
     if (this.operationInFlight) {
       throw new Error(
         `PulumiService.confirmRollback() cannot run while ${this.operationInFlight}() is already ` +
@@ -4435,6 +4475,11 @@ export class PulumiService {
         return yield* this.previewCore(restored.versionId, signal, preMintedRunId, applyRunId);
       } catch (err) {
         const restoredVersionId = restored.versionId ?? target.versionId;
+        logger.error('PulumiService.confirmRollback: rollback plan failed after the configuration was restored', {
+          applyRunId,
+          restoredVersionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         this.store.recordOrphanedRollback({
           applyRunId,
           restoredVersionId,
@@ -4547,6 +4592,7 @@ export class PulumiService {
    *   attempt; never swallowed silently.
    */
   async clearStaleLock(token: string): Promise<void> {
+    logger.debug('PulumiService.clearStaleLock: clearing confirmed-stale pulumi backend lock');
     if (this.operationInFlight) {
       throw new PulumiOperationInFlightError(this.operationInFlight);
     }
@@ -4583,6 +4629,10 @@ export class PulumiService {
     try {
       await stack.cancel();
     } catch (err) {
+      logger.error('PulumiService.clearStaleLock: stack.cancel() failed', {
+        stackName: PULUMI_STACK_NAME,
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw new PulumiLockClearError(err);
     }
 
@@ -5106,6 +5156,11 @@ export class PulumiService {
       mkdirSync(runDir, { recursive: true });
       writeFileSync(join(runDir, 'run.json'), JSON.stringify(record, null, 2));
     } catch (err) {
+      logger.error('PulumiService.writeRunRecord: failed to write run record to disk', {
+        runId,
+        kind,
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw new Error(
         `Failed to write pulumi run record to "${join(runDir, 'run.json')}": ` +
           `${err instanceof Error ? err.message : String(err)}`,

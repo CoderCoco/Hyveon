@@ -69,6 +69,7 @@ export class LogsService {
     signal: AbortSignal,
     pollInterval = 2000,
   ): AsyncGenerator<string> {
+    logger.debug('LogsService.streamLogs: starting log stream', { game, pollInterval });
     for await (const chunk of this.provider.streamWorkloadLogs(game, signal, pollInterval)) {
       yield chunk.message;
     }
@@ -82,6 +83,7 @@ export class LogsService {
    */
   async getRecentLogs(game: string, limit = 50): Promise<string[]> {
     const logGroup = `/ecs/${game}-server`;
+    logger.debug('LogsService.getRecentLogs: fetching recent logs', { game, limit, logGroup });
     try {
       const streams = await this.getClient().send(
         new DescribeLogStreamsCommand({
@@ -105,8 +107,9 @@ export class LogsService {
       );
       return events.events?.map((e) => e.message ?? '') ?? [];
     } catch (err) {
-      logger.error('Failed to fetch logs', { err, game, logGroup });
-      return [`Error fetching logs for ${game}: ${String(err)}`];
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('LogsService.getRecentLogs: failed to fetch logs', { game, logGroup, error: message });
+      return [`Error fetching logs for ${game}: ${message}`];
     }
   }
 }

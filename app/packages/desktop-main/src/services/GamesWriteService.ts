@@ -88,6 +88,7 @@ export class GamesWriteService {
    *    setup wizard instead of a generic failure message.
    */
   async createGame(payload: CreateGamePayload): Promise<GameWriteResult> {
+    logger.debug('GamesWriteService.createGame: creating game server entry', { game: payload.name });
     const siblings = await this.deploymentConfig.getGameServers();
     const validation = validateGameServer(payload.name, payload.config, siblings);
     if (!validation.success) {
@@ -142,6 +143,7 @@ export class GamesWriteService {
    *    setup wizard instead of a generic failure message.
    */
   async updateGame(payload: UpdateGamePayload): Promise<GameWriteResult> {
+    logger.debug('GamesWriteService.updateGame: updating game server entry', { game: payload.name });
     const siblings = await this.deploymentConfig.getGameServers();
     const validation = validateGameServer(payload.name, payload.config, siblings);
     if (!validation.success) {
@@ -190,6 +192,7 @@ export class GamesWriteService {
    *    setup wizard instead of a generic failure message.
    */
   async deleteGame(payload: DeleteGamePayload): Promise<GameWriteResult> {
+    logger.debug('GamesWriteService.deleteGame: deleting game server entry', { game: payload.name });
     const siblings = await this.deploymentConfig.getGameServers();
     const before = siblings.find((sibling) => sibling.name === payload.name) ?? null;
 
@@ -255,8 +258,19 @@ export class GamesWriteService {
     return { ok: true, game, games };
   }
 
-  /** Builds a `GameWriteConflict` from a caught {@link OptimisticLockError}, forwarding both etags. */
+  /**
+   * Builds a `GameWriteConflict` from a caught {@link OptimisticLockError},
+   * forwarding both etags. Logged at `warn` — a stale `expectedVersionId` is
+   * an expected, recoverable race (another write landed first), not an
+   * unexpected failure, but the operator still needs a record of it to
+   * explain a rejected save.
+   */
   private conflictResult(err: OptimisticLockError): GameWriteResult {
+    logger.warn('Game server write rejected — stale expectedVersionId', {
+      message: err.message,
+      expectedVersionId: err.expectedEtag,
+      currentVersionId: err.currentEtag,
+    });
     return {
       ok: false,
       code: 'conflict',

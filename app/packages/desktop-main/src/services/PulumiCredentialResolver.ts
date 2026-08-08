@@ -1,4 +1,5 @@
 import type { ElectronStoreService } from './ElectronStoreService.js';
+import { logger } from '../logger.js';
 import { resolveAwsCredentialSource } from './awsCredentialSource.js';
 
 /**
@@ -99,15 +100,16 @@ function clearedEnvVars(keys: readonly string[]): Record<string, string> {
  * absent would require running the real binary during a `preview`/`up`
  * operation, which is `PulumiService`'s territory, not this resolver's.
  *
- * ## Not logged
+ * ## What is logged, and what never is
  *
- * This function never calls `logger.*` — it has no side effects at all
- * beyond reading `store` — so no credential value it produces can reach the
- * application log by way of this code path. This file's own test suite does
- * not assert that directly (it would be a vacuous "the logger mock was never
- * called" check with no logger import to spy on in the first place — see
- * `PulumiCredentialResolver.test.ts`'s comment on why). The meaningful proof
- * is `PulumiWorkspaceService.test.ts`'s "should never pass the resolved
+ * This function logs only the resolved credential SOURCE kind (`'profile'` /
+ * `'pasted'`, or a warning when none is configured) via
+ * `logger.debug`/`logger.warn` — never a profile name, access key id, secret
+ * access key, or any other value read from `store`.
+ * `PulumiCredentialResolver.test.ts`'s "credential source is logged without
+ * secret values" describe block asserts this directly. The meaningful proof
+ * that the *values themselves* never reach the log is
+ * `PulumiWorkspaceService.test.ts`'s "should never pass the resolved
  * pasted-key values to any logger call" test, which exercises this
  * function's real output flowing through `getOrCreateStack` and inspects
  * every logger call the service makes while doing so. Neither test covers
@@ -119,16 +121,27 @@ function clearedEnvVars(keys: readonly string[]): Record<string, string> {
  *   source is selected at all (`resolveAwsCredentialSource` returns `'none'`).
  */
 export function resolveCredentialEnvVars(store: ElectronStoreService): Record<string, string> {
-  const source = resolveAwsCredentialSource(store);
+  let source: ReturnType<typeof resolveAwsCredentialSource>;
+  try {
+    source = resolveAwsCredentialSource(store);
+  } catch (err) {
+    logger.warn('resolveCredentialEnvVars: failed to resolve the AWS credential source', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
   switch (source.kind) {
     case 'none':
+      logger.warn('resolveCredentialEnvVars: no AWS credential source is configured');
       throw new PulumiCredentialsNotConfiguredError();
     case 'profile':
+      logger.debug('resolveCredentialEnvVars: resolved credential source', { source: 'profile' });
       return {
         AWS_PROFILE: source.profile,
         ...clearedEnvVars(PASTED_KEY_ENV_VARS),
       };
     case 'pasted':
+      logger.debug('resolveCredentialEnvVars: resolved credential source', { source: 'pasted' });
       return {
         AWS_ACCESS_KEY_ID: source.accessKeyId,
         AWS_SECRET_ACCESS_KEY: source.secretAccessKey,
