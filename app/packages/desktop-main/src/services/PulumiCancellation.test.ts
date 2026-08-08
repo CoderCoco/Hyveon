@@ -58,6 +58,18 @@ describe('runWithEscalatingCancellation — already-aborted signal', () => {
     );
     expect(operation).not.toHaveBeenCalled();
   });
+
+  it('should log a warning that the operation was refused rather than letting the failure pass silently', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const operation = vi.fn().mockResolvedValue('should never happen');
+
+    await runWithEscalatingCancellation(operation, controller.signal).catch(() => undefined);
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining('already aborted before the operation could start'),
+    );
+  });
 });
 
 describe('runWithEscalatingCancellation — signal triggers a graceful attempt that settles in time', () => {
@@ -111,6 +123,11 @@ describe('runWithEscalatingCancellation — signal triggers a graceful attempt t
       expect(err.cause).toBe(originalError);
       expect(err.message).toContain('interrupted by SIGINT');
     });
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      'runWithEscalatingCancellation: Pulumi operation rejected after cancellation was requested',
+      expect.objectContaining({ error: 'interrupted by SIGINT' }),
+    );
   });
 
   it('should clear the escalation timer and never call onEscalate when the operation settles before the timeout (regression: clearTimeout branch)', async () => {
@@ -195,6 +212,10 @@ describe('runWithEscalatingCancellation — no response within the escalation ti
 
     await assertion;
     expect(onEscalate).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      'Pulumi engine invocation did not exit within the escalation timeout — force-terminating',
+      expect.objectContaining({ escalationTimeoutMs: 5_000 }),
+    );
   });
 
   it('should not escalate before the timeout has fully elapsed', async () => {

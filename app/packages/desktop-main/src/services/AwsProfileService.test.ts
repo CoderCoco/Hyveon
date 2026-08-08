@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { IAMClient, CreateAccessKeyCommand, DeleteAccessKeyCommand } from '@aws-sdk/client-iam';
+import type { ParsedIniData } from '@smithy/types';
 import {
   AwsProfileService,
   DEFAULT_PASTED_PROFILE_NAME,
@@ -73,6 +74,17 @@ function makeService(home: string): AwsProfileService {
   return new FixtureAwsProfileService(home, stubSafeStorage(), stubStore());
 }
 
+/**
+ * Test-only subclass whose `parseFiles()` seam always rejects — exercises
+ * `listProfiles()`'s failure path (log-and-rethrow-a-plain-Error) without
+ * needing a real unreadable `~/.aws` file on disk.
+ */
+class FailingParseAwsProfileService extends AwsProfileService {
+  protected override async parseFiles(): Promise<ParsedIniData> {
+    throw new Error('EACCES: permission denied');
+  }
+}
+
 describe('AwsProfileService.listProfiles', () => {
   it('should list profiles merged from both credentials and config files, sorted by name', async () => {
     const profiles = await makeService(FIXTURE_HOME).listProfiles();
@@ -114,6 +126,26 @@ describe('AwsProfileService.listProfiles', () => {
     const noregion = profiles.find((p) => p.profileName === 'noregion');
     expect(noregion).toEqual({ profileName: 'noregion' });
     expect(noregion).not.toHaveProperty('region');
+  });
+
+  it('should log a debug line on entry before reading the AWS CLI files', async () => {
+    const debugSpy = vi.spyOn(logger, 'debug');
+
+    await makeService(FIXTURE_HOME).listProfiles();
+
+    expect(debugSpy).toHaveBeenCalledWith('AwsProfileService.listProfiles: reading AWS CLI profiles from disk');
+  });
+
+  it('should log a warning and rethrow a plain Error (never the raw error object) when parsing the AWS CLI files fails', async () => {
+    const service = new FailingParseAwsProfileService(stubSafeStorage(), stubStore());
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    await expect(service.listProfiles()).rejects.toThrow('EACCES: permission denied');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      'AwsProfileService.listProfiles: failed to parse ~/.aws/credentials or ~/.aws/config',
+      expect.objectContaining({ error: 'EACCES: permission denied' }),
+    );
   });
 });
 
@@ -605,6 +637,15 @@ describe('AwsProfileService.rotateActiveCredentials', () => {
 
     await expect(service.rotateActiveCredentials()).rejects.toThrow(/did not return a new access key pair/);
     expect(store.setPastedCredentials).not.toHaveBeenCalled();
+  });
+
+  it('should log a debug line on entry before the keychain gate or any AWS call', async () => {
+    const debugSpy = vi.spyOn(logger, 'debug');
+    service = new TestableAwsProfileService(stubSafeStorage(false), store);
+
+    await expect(service.rotateActiveCredentials()).rejects.toThrow(SafeStorageUnavailableError);
+
+    expect(debugSpy).toHaveBeenCalledWith('AwsProfileService.rotateActiveCredentials: starting active credential rotation');
   });
 
   it('should never log the current or newly minted secret access key across a full successful rotation', async () => {

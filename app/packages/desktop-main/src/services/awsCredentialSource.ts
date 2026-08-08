@@ -1,3 +1,4 @@
+import { logger } from '../logger.js';
 import type { ElectronStoreService } from './ElectronStoreService.js';
 
 /**
@@ -76,18 +77,27 @@ export type AwsCredentialSource =
  *   an unrelated failure.
  */
 export function resolveAwsCredentialSource(store: ElectronStoreService): AwsCredentialSource {
+  logger.debug('resolveAwsCredentialSource: resolving active AWS credential source');
   const profile = store.get('aws')?.profile;
   if (!profile) {
+    logger.debug('resolveAwsCredentialSource: resolved to "none" — no profile stored');
     return { kind: 'none' };
   }
   let pasted: { accessKeyId: string; secretAccessKey: string; region?: string } | undefined;
   try {
     pasted = store.getPastedCredentials(profile);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('resolveAwsCredentialSource: failed to decrypt stored pasted-credentials entry', {
+      profile,
+      error: message,
+    });
     throw new AwsPastedCredentialDecryptError(profile, err);
   }
   if (pasted) {
+    logger.debug('resolveAwsCredentialSource: resolved to "pasted" credentials entry', { profile });
     return { kind: 'pasted', profile, accessKeyId: pasted.accessKeyId, secretAccessKey: pasted.secretAccessKey };
   }
+  logger.debug('resolveAwsCredentialSource: resolved to a CLI profile', { profile });
   return { kind: 'profile', profile };
 }

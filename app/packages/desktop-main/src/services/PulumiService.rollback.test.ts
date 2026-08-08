@@ -598,4 +598,24 @@ describe('PulumiService.confirmRollback: compensating semantics when the plan fa
     // "rollback() is already running" busy error a leaked lock would produce.
     await expect(drainToCompletion(service.preview())).rejects.toBeInstanceOf(PulumiPreviewError);
   });
+
+  it('should log an error with the failure message (not a raw error object) when the follow-up plan fails after the restore', async () => {
+    const workspace = makeWorkspace(async () => {
+      throw new Error('engine provisioning failed');
+    });
+    const store = makeFullyConfiguredStore();
+    const { remoteFileStore, deploymentConfigRestorer } = makeConfigStores();
+    const service = makeService({ workspace, store, remoteFileStore, deploymentConfigRestorer });
+
+    await collectRollbackChunks(service.confirmRollback(APPLY_RUN_ID)).catch((e: unknown) => e);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiService.confirmRollback: rollback plan failed after the configuration was restored',
+      expect.objectContaining({
+        applyRunId: APPLY_RUN_ID,
+        restoredVersionId: RESTORED_CONFIG_VERSION_ID,
+        error: expect.stringContaining('engine provisioning failed'),
+      }),
+    );
+  });
 });

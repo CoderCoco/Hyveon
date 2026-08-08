@@ -624,6 +624,21 @@ describe('PulumiService.preview run persistence', () => {
 
     await expect(collectPreviewChunks(service.preview())).rejects.toBeInstanceOf(PulumiRunPersistError);
   });
+
+  it('should log an error with the failure message (not a raw error object) when the local run.json write fails', async () => {
+    const workspace = makeWorkspace(makeHappyPathPreview());
+    const service = makeService({ workspace });
+    writeFileSyncMock.mockImplementation((path: string) => {
+      if (String(path).endsWith('run.json')) throw new Error('disk full');
+    });
+
+    await expect(collectPreviewChunks(service.preview())).rejects.toBeInstanceOf(PulumiRunPersistError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiService.writeRunRecord: failed to write run record to disk',
+      expect.objectContaining({ error: expect.stringContaining('disk full') }),
+    );
+  });
 });
 
 describe('PulumiService.preview failure handling', () => {
@@ -649,6 +664,21 @@ describe('PulumiService.preview failure handling', () => {
     expect(runRecordPersister.persist).toHaveBeenCalledWith(
       expect.objectContaining({ exitCode: 1 }),
       expect.any(String),
+    );
+  });
+
+  it('should log an error with the failure message (not a raw error object) when stack.preview() rejects', async () => {
+    const cause = new Error('preview command failed');
+    const workspace = makeWorkspace(async () => {
+      throw cause;
+    });
+    const service = makeService({ workspace });
+
+    await expect(collectPreviewChunks(service.preview())).rejects.toBeInstanceOf(PulumiPreviewError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'pulumi preview: operation failed',
+      expect.objectContaining({ error: expect.stringContaining('preview command failed') }),
     );
   });
 });

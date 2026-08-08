@@ -935,6 +935,22 @@ describe('PulumiService.destroy failure handling', () => {
 
     expect(runRecordPersister.persist).toHaveBeenCalledWith(expect.objectContaining({ exitCode: 1 }), expect.any(String));
   });
+
+  it('should log an error with the failure message (not a raw error object) when stack.destroy() rejects', async () => {
+    const cause = new Error('destroy command failed');
+    const workspace = makeWorkspace(async () => {
+      throw cause;
+    });
+    const service = makeService({ workspace });
+    const token = service.mintDestroyConfirmationToken();
+
+    await expect(collectDestroyChunks(service.destroy(token))).rejects.toBeInstanceOf(PulumiDestroyError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'pulumi destroy: operation failed',
+      expect.objectContaining({ error: expect.stringContaining('destroy command failed') }),
+    );
+  });
 });
 
 describe('PulumiService.destroy abort handling', () => {

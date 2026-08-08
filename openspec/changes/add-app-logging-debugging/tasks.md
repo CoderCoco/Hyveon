@@ -22,32 +22,32 @@
 
 ## 4. Service-layer diagnostic logging sweep (Group 2 PR: `logging-2-service-layer-sweep`)
 
-- [ ] 4.1 `AuditService.ts` — entry `logger.debug` + failure logging on AWS SDK calls
-- [ ] 4.2 `AwsProfileService.ts` — same
-- [ ] 4.3 `ConfigService.ts` — same
-- [ ] 4.4 `CostService.ts` — same
-- [ ] 4.5 `DiagnosticsService.ts` — same (excluding the Group-1-added forwarding method, which already gets its own entry log in Group 1)
-- [ ] 4.6 `DiscordCommandRegistrar.ts` — same
-- [ ] 4.7 `DiscordConfigService.ts` — same
-- [ ] 4.8 `DriftService.ts` — same
-- [ ] 4.9 `EcsService.ts` — same
-- [ ] 4.10 `GamesWriteService.ts` — same
-- [ ] 4.11 `GuidedIamService.ts` — same (already follows the modeled-result pattern in places; confirm every AWS-calling method has entry debug logging, fill gaps only)
-- [ ] 4.12 `IamCheckService.ts` — same
-- [ ] 4.13 `LogsService.ts` — same
-- [ ] 4.14 `PulumiCancellation.ts` — same
-- [ ] 4.15 `PulumiCredentialResolver.ts` — same
-- [ ] 4.16 `PulumiEngineService.ts` — same
-- [ ] 4.17 `PulumiLeakedPromise.ts` — same
-- [ ] 4.18 `PulumiLockRecovery.ts` — same
-- [ ] 4.19 `PulumiService.ts` — same
-- [ ] 4.20 `RunRecordService.ts` — same
-- [ ] 4.21 `RunService.ts` — same
-- [ ] 4.22 `SafeStorageService.ts` — same
-- [ ] 4.23 `awsCredentialSource.ts` — same
-- [ ] 4.24 `verifyAccessKeyWithRetry.ts` — same
-- [ ] 4.25 Confirm `mergeGameLists.ts` and `sleep.ts` are deliberately left untouched (pure helpers, no failure mode) — no task needed, just verify no debug lines were added there
-- [ ] 4.26 Unit tests: for each file touched, at least one test asserting a failure path logs via `logger.warn`/`logger.error` rather than letting a raw error escape (extend existing test files; do not create parallel logging-only test suites)
+- [x] 4.1 `AuditService.ts` — entry `logger.debug` + failure logging on AWS SDK calls
+- [x] 4.2 `AwsProfileService.ts` — same
+- [x] 4.3 `ConfigService.ts` — same
+- [x] 4.4 `CostService.ts` — same
+- [x] 4.5 `DiagnosticsService.ts` — same (excluding the Group-1-added forwarding method, which already gets its own entry log in Group 1)
+- [x] 4.6 `DiscordCommandRegistrar.ts` — same
+- [x] 4.7 `DiscordConfigService.ts` — same
+- [x] 4.8 `DriftService.ts` — same
+- [x] 4.9 `EcsService.ts` — same
+- [x] 4.10 `GamesWriteService.ts` — same
+- [x] 4.11 `GuidedIamService.ts` — same (already follows the modeled-result pattern in places; confirm every AWS-calling method has entry debug logging, fill gaps only)
+- [x] 4.12 `IamCheckService.ts` — same
+- [x] 4.13 `LogsService.ts` — same
+- [x] 4.14 `PulumiCancellation.ts` — same
+- [x] 4.15 `PulumiCredentialResolver.ts` — same
+- [x] 4.16 `PulumiEngineService.ts` — same
+- [x] 4.17 `PulumiLeakedPromise.ts` — same
+- [x] 4.18 `PulumiLockRecovery.ts` — same
+- [x] 4.19 `PulumiService.ts` — same
+- [x] 4.20 `RunRecordService.ts` — same
+- [x] 4.21 `RunService.ts` — same
+- [x] 4.22 `SafeStorageService.ts` — same
+- [x] 4.23 `awsCredentialSource.ts` — same
+- [x] 4.24 `verifyAccessKeyWithRetry.ts` — same
+- [x] 4.25 Confirm `mergeGameLists.ts` and `sleep.ts` are deliberately left untouched (pure helpers, no failure mode) — no task needed, just verify no debug lines were added there
+- [x] 4.26 Unit tests: for each file touched, at least one test asserting a failure path logs via `logger.warn`/`logger.error` rather than letting a raw error escape (extend existing test files; do not create parallel logging-only test suites)
 
 ## 5. Diagnostics panel UX (Group 3 PR: `logging-3-diagnostics-panel-ux`)
 

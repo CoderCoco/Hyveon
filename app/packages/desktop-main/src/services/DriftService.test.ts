@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { GameServer, StackOutputs } from '@hyveon/shared';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { logger } from '../logger.js';
 import { DriftService, computeDrift } from './DriftService.js';
 import type { ConfigService } from './ConfigService.js';
 import type { DeploymentConfigService } from './DeploymentConfigService.js';
@@ -285,6 +291,38 @@ describe('DriftService', () => {
           { game: 'minecraft', kind: 'config_drift', changedFields: ['cpu'] },
           { game: 'zomboid', kind: 'pending_delete' },
         ],
+      });
+    });
+
+    it('should log a warning and rethrow with just the message when getGameServers fails', async () => {
+      vi.mocked(logger.warn).mockClear();
+      const deploymentConfig = {
+        invalidateCache: vi.fn(),
+        getGameServers: vi.fn().mockRejectedValue(new Error('S3 access denied')),
+      } as Partial<DeploymentConfigService> as DeploymentConfigService;
+
+      await expect(new DriftService(deploymentConfig, makeConfig()).getDrift()).rejects.toThrow(
+        'S3 access denied',
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith('DriftService.getDrift: failed to compute drift', {
+        error: 'S3 access denied',
+      });
+    });
+
+    it('should log a warning and rethrow with just the message when getStackOutputs fails', async () => {
+      vi.mocked(logger.warn).mockClear();
+      const config = {
+        invalidateCache: vi.fn(),
+        getStackOutputs: vi.fn().mockRejectedValue(new Error('Pulumi engine unavailable')),
+      } as Partial<ConfigService> as ConfigService;
+
+      await expect(new DriftService(makeDeploymentConfig([]), config).getDrift()).rejects.toThrow(
+        'Pulumi engine unavailable',
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith('DriftService.getDrift: failed to compute drift', {
+        error: 'Pulumi engine unavailable',
       });
     });
   });

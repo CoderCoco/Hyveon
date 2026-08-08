@@ -8,9 +8,10 @@
 import * as os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditLogStore, AuditPageResult, GameServer, StackOutputs } from '@hyveon/shared';
-import { AuditService } from './AuditService.js';
-import { ConfigService } from './ConfigService.js';
 
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 vi.mock('node:os', async () => {
   const actual = await vi.importActual<typeof import('node:os')>('node:os');
   return {
@@ -18,6 +19,10 @@ vi.mock('node:os', async () => {
     userInfo: vi.fn(() => ({ username: 'test-actor' })),
   };
 });
+
+import { AuditService } from './AuditService.js';
+import { ConfigService } from './ConfigService.js';
+import { logger } from '../logger.js';
 
 /** Minimal `StackOutputs` stub exposing just `auditTableName`. */
 const STACK_OUTPUTS: StackOutputs = {
@@ -71,6 +76,8 @@ beforeEach(() => {
   putEntryMock.mockReset();
   listEntriesMock.mockReset();
   vi.mocked(os.userInfo).mockReturnValue({ username: 'test-actor' } as ReturnType<typeof os.userInfo>);
+  vi.mocked(logger.debug).mockClear();
+  vi.mocked(logger.warn).mockClear();
 });
 
 describe('AuditService', () => {
@@ -121,6 +128,18 @@ describe('AuditService', () => {
 
       expect(putEntryMock).not.toHaveBeenCalled();
     });
+
+    it('should log a debug line on entry naming the action and game, never payload contents', async () => {
+      putEntryMock.mockResolvedValue(undefined);
+      const service = makeService();
+
+      await service.record({ action: 'add', game: 'minecraft', before: null, after: sampleGameServer });
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        'AuditService.record: recording audit entry',
+        expect.objectContaining({ action: 'add', game: 'minecraft' }),
+      );
+    });
   });
 
   describe('list', () => {
@@ -160,6 +179,18 @@ describe('AuditService', () => {
 
       expect(result).toEqual({ entries: [] });
       expect(listEntriesMock).not.toHaveBeenCalled();
+    });
+
+    it('should log a debug line on entry naming the requested limit and cursor', async () => {
+      listEntriesMock.mockResolvedValue({ entries: [] });
+      const service = makeService();
+
+      await service.list({ limit: 10, before: 'cursor' });
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        'AuditService.list: listing audit entries',
+        expect.objectContaining({ limit: 10, before: 'cursor' }),
+      );
     });
   });
 });

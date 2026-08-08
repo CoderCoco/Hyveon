@@ -16,6 +16,7 @@ vi.mock('../logger.js', () => ({
 
 import { DEFAULT_LOCK_TTL_MS, RunService } from './RunService.js';
 import { ConfigService } from './ConfigService.js';
+import { logger } from '../logger.js';
 import type { StackOutputs } from '@hyveon/shared';
 
 /** Minimal `StackOutputs` stub exposing just `runsTableName`. */
@@ -121,6 +122,36 @@ describe('RunService', () => {
       acquireRunLockMock.mockResolvedValueOnce(undefined);
       const nextLock = await service.createRun('plan', 'dave');
       expect(nextLock.initiator).toBe('dave');
+    });
+
+    it('should log a warning (not throw a raw SDK error uncaught) when the DynamoDB apply lock acquisition fails', async () => {
+      const service = makeService();
+      const remoteLock: RunLock = {
+        runId: 'remote-run',
+        kind: 'destroy',
+        initiator: 'carol',
+        acquiredAt: '2026-07-20T00:00:00.000Z',
+        expiresAt: '2026-07-20T01:00:00.000Z',
+      };
+      acquireRunLockMock.mockRejectedValueOnce(new RunLockHeldError(remoteLock));
+
+      await expect(service.createRun('apply', 'alice')).rejects.toBeInstanceOf(RunLockHeldError);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('RunService.createRun'),
+        expect.objectContaining({ runId: expect.any(String) }),
+      );
+    });
+
+    it('should log a debug entry line when starting to acquire the apply lock', async () => {
+      const service = makeService();
+
+      await service.createRun('apply', 'alice');
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('RunService.createRun'),
+        expect.objectContaining({ kind: 'apply', initiator: 'alice' }),
+      );
     });
 
     it('should skip the DynamoDB call but still enforce the in-memory mutex when runs_table_name is not configured', async () => {
@@ -259,6 +290,18 @@ describe('RunService', () => {
       // self-heals via TTL expiry regardless.
       await expect(service.releaseRun(lock.runId)).resolves.toBeUndefined();
       expect(service.getCurrentLock()).toBeUndefined();
+    });
+
+    it('should log a debug entry line when starting to release the apply lock', async () => {
+      const service = makeService();
+      const lock = await service.createRun('apply', 'alice');
+
+      await service.releaseRun(lock.runId);
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('RunService.releaseRun'),
+        expect.objectContaining({ runId: lock.runId }),
+      );
     });
   });
 });

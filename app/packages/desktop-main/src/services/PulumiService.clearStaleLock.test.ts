@@ -301,6 +301,21 @@ describe('PulumiService.clearStaleLock', () => {
     expect((caught as Error).message).toContain('cancel command failed');
   });
 
+  it('should log an error with the failure message (not a raw error object) when stack.cancel() itself fails', async () => {
+    const cause = new Error('cancel command failed');
+    const cancelMock = vi.fn().mockRejectedValue(cause);
+    const workspace = makeWorkspace(cancelMock);
+    const service = makeService({ workspace });
+    const token = service.mintLockClearConfirmationToken();
+
+    await expect(service.clearStaleLock(token)).rejects.toBeInstanceOf(PulumiLockClearError);
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'PulumiService.clearStaleLock: stack.cancel() failed',
+      expect.objectContaining({ error: expect.stringContaining('cancel command failed') }),
+    );
+  });
+
   it('should allow a fresh clearStaleLock() call after a prior one succeeded', async () => {
     const cancelMock = vi.fn().mockResolvedValue(undefined);
     const workspace = makeWorkspace(cancelMock);

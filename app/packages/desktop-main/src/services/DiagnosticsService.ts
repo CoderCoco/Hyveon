@@ -58,6 +58,7 @@ export class DiagnosticsService {
    */
   async readTail(maxLines = 500): Promise<string[]> {
     const filePath = this.getTodayLogPath();
+    logger.debug('DiagnosticsService.readTail: reading log file tail', { maxLines });
     let fh: fs.FileHandle | undefined;
     try {
       fh = await fs.open(filePath, 'r');
@@ -79,7 +80,9 @@ export class DiagnosticsService {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
       }
-      throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('DiagnosticsService.readTail: failed to read log file', { error: message });
+      throw new Error(message);
     } finally {
       await fh?.close();
     }

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { DriftChangedField, DriftEntry, DriftReport, GameServer } from '@hyveon/shared';
+import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
 import { DeploymentConfigService } from './DeploymentConfigService.js';
 
@@ -181,13 +182,20 @@ export class DriftService {
    * is invalidated on write instead, not on every read here.
    */
   async getDrift(): Promise<DriftReport> {
-    this.deploymentConfig.invalidateCache();
-    const declared = await this.deploymentConfig.getGameServers();
-    const stackOutputs = await this.config.getStackOutputs();
-    const applied = stackOutputs?.appliedGameServers ?? null;
-    const deployedNames = stackOutputs?.appliedGameServers
-      ? Object.keys(stackOutputs.appliedGameServers)
-      : (stackOutputs?.gameNames ?? []);
-    return computeDrift(declared, applied, deployedNames);
+    logger.debug('DriftService.getDrift: computing deployment drift');
+    try {
+      this.deploymentConfig.invalidateCache();
+      const declared = await this.deploymentConfig.getGameServers();
+      const stackOutputs = await this.config.getStackOutputs();
+      const applied = stackOutputs?.appliedGameServers ?? null;
+      const deployedNames = stackOutputs?.appliedGameServers
+        ? Object.keys(stackOutputs.appliedGameServers)
+        : (stackOutputs?.gameNames ?? []);
+      return computeDrift(declared, applied, deployedNames);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('DriftService.getDrift: failed to compute drift', { error: message });
+      throw new Error(message);
+    }
   }
 }

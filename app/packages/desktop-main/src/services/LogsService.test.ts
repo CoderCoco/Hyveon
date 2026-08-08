@@ -8,9 +8,10 @@ import {
   GetLogEventsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
 
-vi.mock('../logger.js', () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+vi.mock('../logger.js', () => ({ logger: loggerMock }));
 
 import { LogsService } from './LogsService.js';
 import { createAwsCloudProvider } from './EcsService.js';
@@ -81,6 +82,8 @@ describe('LogsService', () => {
 
   beforeEach(() => {
     cwMock.reset();
+    loggerMock.debug.mockReset();
+    loggerMock.error.mockReset();
     service = makeService(makeConfig());
   });
 
@@ -152,6 +155,28 @@ describe('LogsService', () => {
     expect(lines[0]).toMatch(/error fetching logs for minecraft/i);
     expect(lines[0]).toContain('denied');
   });
+
+  it('should log a warning-level failure via logger.error when the API throws, without letting the raw error escape', async () => {
+    cwMock.on(DescribeLogStreamsCommand).rejects(new Error('denied'));
+
+    await service.getRecentLogs('minecraft');
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      'LogsService.getRecentLogs: failed to fetch logs',
+      expect.objectContaining({ game: 'minecraft', logGroup: '/ecs/minecraft-server', error: 'denied' }),
+    );
+  });
+
+  it('should log a debug entry line before fetching recent logs', async () => {
+    cwMock.on(DescribeLogStreamsCommand).resolves({ logStreams: [] });
+
+    await service.getRecentLogs('minecraft', 25);
+
+    expect(loggerMock.debug).toHaveBeenCalledWith(
+      'LogsService.getRecentLogs: fetching recent logs',
+      expect.objectContaining({ game: 'minecraft', limit: 25 }),
+    );
+  });
 });
 
 describe('LogsService.streamLogs', () => {
@@ -160,7 +185,21 @@ describe('LogsService.streamLogs', () => {
 
   beforeEach(() => {
     cwMock.reset();
+    loggerMock.debug.mockReset();
     service = makeService(makeConfig());
+  });
+
+  it('should log a debug entry line before starting the log stream', async () => {
+    const ac = new AbortController();
+    ac.abort();
+
+    const gen = service.streamLogs('minecraft', ac.signal, 0);
+    await gen.next(); // already-aborted signal yields nothing, but the debug entry log fires first
+
+    expect(loggerMock.debug).toHaveBeenCalledWith(
+      'LogsService.streamLogs: starting log stream',
+      expect.objectContaining({ game: 'minecraft', pollInterval: 0 }),
+    );
   });
 
   it('should terminate immediately when signal is already aborted before the first poll', async () => {

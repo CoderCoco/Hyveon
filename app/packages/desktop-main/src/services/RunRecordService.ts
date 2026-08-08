@@ -319,6 +319,7 @@ export class RunRecordService {
    *   on disk, or `null` when no log was captured for this run.
    */
   async persist(params: PersistRunRecordParams, logFilePath: string | null): Promise<void> {
+    logger.debug('RunRecordService.persist: persisting run record', { runId: params.runId, kind: params.kind });
     try {
       const tableName = await this.resolveRunsTableName();
       if (!tableName) {
@@ -441,8 +442,12 @@ export class RunRecordService {
    *   marker never landed" from "it did."
    */
   async writePreflightMarker(params: PreflightMarkerParams): Promise<void> {
+    logger.debug('RunRecordService.writePreflightMarker: writing pre-flight apply marker', { runId: params.runId });
     const tableName = await this.resolveRunsTableName();
     if (!tableName) {
+      logger.warn('RunRecordService.writePreflightMarker: runs_table_name not configured, cannot write marker', {
+        runId: params.runId,
+      });
       throw new Error(
         `RunRecordService.writePreflightMarker: runs_table_name not configured, cannot write pre-flight marker for run "${params.runId}"`,
       );
@@ -462,7 +467,15 @@ export class RunRecordService {
       ...(params.engineVersion !== undefined ? { engineVersion: params.engineVersion } : {}),
     };
 
-    await this.store.putRecord(record);
+    try {
+      await this.store.putRecord(record);
+    } catch (err) {
+      logger.error('RunRecordService.writePreflightMarker: failed to write pre-flight marker', {
+        runId: params.runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -478,7 +491,16 @@ export class RunRecordService {
    * @returns The store's presigned/temporary URL the caller can fetch the log from directly.
    */
   async getLogUrl(logKey: string, expiresInSeconds?: number): Promise<string> {
-    return this.store.getLogUrl(logKey, expiresInSeconds);
+    logger.debug('RunRecordService.getLogUrl: resolving run log URL', { logKey });
+    try {
+      return await this.store.getLogUrl(logKey, expiresInSeconds);
+    } catch (err) {
+      logger.error('RunRecordService.getLogUrl: failed to resolve run log URL', {
+        logKey,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -499,6 +521,7 @@ export class RunRecordService {
    *   configured yet).
    */
   async getByRunId(runId: string): Promise<RunRecord | undefined> {
+    logger.debug('RunRecordService.getByRunId: looking up run record', { runId });
     const tableName = await this.resolveRunsTableName();
     if (!tableName) {
       logger.warn('RunRecordService.getByRunId: runs_table_name not configured, returning undefined', {
@@ -507,7 +530,15 @@ export class RunRecordService {
       return undefined;
     }
 
-    return this.store.getRecordByRunId(runId);
+    try {
+      return await this.store.getRecordByRunId(runId);
+    } catch (err) {
+      logger.error('RunRecordService.getByRunId: failed to look up run record', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -524,17 +555,25 @@ export class RunRecordService {
    * @returns The requested page of records plus a cursor for the next page.
    */
   async listRuns(opts: ListRunsOpts = {}): Promise<RunPageResult> {
+    logger.debug('RunRecordService.listRuns: listing run history', { limit: opts.limit, status: opts.status });
     const tableName = await this.resolveRunsTableName();
     if (!tableName) {
       logger.warn('RunRecordService.listRuns: runs_table_name not configured, returning empty run history page');
       return { records: [] };
     }
 
-    return this.store.listRuns({
-      limit: clampLimit(opts.limit),
-      ...(opts.before !== undefined ? { before: opts.before } : {}),
-      ...(opts.status !== undefined ? { status: opts.status } : {}),
-    });
+    try {
+      return await this.store.listRuns({
+        limit: clampLimit(opts.limit),
+        ...(opts.before !== undefined ? { before: opts.before } : {}),
+        ...(opts.status !== undefined ? { status: opts.status } : {}),
+      });
+    } catch (err) {
+      logger.error('RunRecordService.listRuns: failed to list run history', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -564,12 +603,22 @@ export class RunRecordService {
    * @returns The updated {@link RunRecord}, with `approvedBy`/`approvedAt` set.
    */
   async approveRun(runId: string, approvedBy: string): Promise<RunRecord> {
+    logger.debug('RunRecordService.approveRun: approving plan run', { runId });
     const tableName = await this.resolveRunsTableName();
     if (!tableName) {
       throw new RunRecordTableNotConfiguredError(runId);
     }
 
-    const record = await this.store.getRecordByRunId(runId);
+    let record: RunRecord | undefined;
+    try {
+      record = await this.store.getRecordByRunId(runId);
+    } catch (err) {
+      logger.error('RunRecordService.approveRun: failed to look up run record', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     if (!record) {
       throw new RunRecordNotFoundError(runId);
     }
@@ -588,7 +637,15 @@ export class RunRecordService {
       approvedAt: new Date().toISOString(),
     };
 
-    await this.store.putRecord(updated);
+    try {
+      await this.store.putRecord(updated);
+    } catch (err) {
+      logger.error('RunRecordService.approveRun: failed to persist run approval', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     return updated;
   }
 }

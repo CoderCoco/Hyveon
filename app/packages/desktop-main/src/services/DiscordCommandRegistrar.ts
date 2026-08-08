@@ -63,6 +63,7 @@ export class DiscordCommandRegistrar {
    *  - Network/unexpected error: `Request failed: <error>`.
    */
   async registerForGuild(guildId: string): Promise<RegisterResult> {
+    logger.debug('DiscordCommandRegistrar.registerForGuild: registering slash commands', { guildId });
     if (!guildId) return { success: false, message: 'guildId is required' };
     // Reject anything that isn't a plain Snowflake ID so it can never
     // manipulate the URL path — e.g. `123/../../../evil`. CodeQL flagged
@@ -106,8 +107,9 @@ export class DiscordCommandRegistrar {
       logger.info('Discord commands registered', { guildId, count: COMMAND_DESCRIPTORS.length });
       return { success: true, message: `Registered ${COMMAND_DESCRIPTORS.length} commands in guild ${guildId}.` };
     } catch (err) {
-      logger.error('Discord command registration threw', { err, guildId });
-      return { success: false, message: `Request failed: ${String(err)}` };
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Discord command registration threw', { error: message, guildId });
+      return { success: false, message: `Request failed: ${message}` };
     }
   }
 }

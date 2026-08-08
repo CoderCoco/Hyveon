@@ -86,6 +86,7 @@ export class AuditService {
    * blocked or failed by an audit-logging problem.
    */
   async record(params: RecordAuditEntryParams): Promise<void> {
+    logger.debug('AuditService.record: recording audit entry', { action: params.action, game: params.game });
     const tableName = (await this.config.getStackOutputs())?.auditTableName;
     if (!tableName) {
       logger.warn('AuditService.record: audit_table_name not configured, skipping audit log entry', {
@@ -129,6 +130,7 @@ export class AuditService {
    * its empty state on pre-audit-table deployments, not an error state.
    */
   async list(opts: ListAuditEntriesOpts = {}): Promise<AuditPageResult> {
+    logger.debug('AuditService.list: listing audit entries', { limit: opts.limit, before: opts.before });
     const tableName = (await this.config.getStackOutputs())?.auditTableName;
     if (!tableName) {
       logger.warn('AuditService.list: audit_table_name not configured, returning empty audit log page');

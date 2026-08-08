@@ -123,6 +123,56 @@ describe('SafeStorageService', () => {
 
       expect(encryptSpy).toHaveBeenCalledWith('my-secret');
     });
+
+    it('should log a debug entry line noting encryption was available, without the plaintext value', () => {
+      stubElectron();
+      vi.spyOn(service as unknown as { encryptString(p: string): Buffer }, 'encryptString').mockReturnValue(
+        Buffer.from('encrypted'),
+      );
+
+      service.encrypt('my-secret');
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('SafeStorageService.encrypt'),
+        expect.objectContaining({ available: true }),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // encrypt() — failure path
+  // ---------------------------------------------------------------------------
+
+  describe('encrypt() failure path', () => {
+    it('should log an error and throw a plain Error (not the raw Electron error) when encryptString throws', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
+      vi.spyOn(service as unknown as { encryptString(p: string): Buffer }, 'encryptString').mockImplementation(() => {
+        throw new Error('keychain locked');
+      });
+
+      expect(() => service.encrypt('my-secret-value')).toThrow(
+        'Failed to encrypt value via the OS keychain: keychain locked',
+      );
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('should never include the plaintext value in any logged message or metadata when encryption fails', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
+      vi.spyOn(service as unknown as { encryptString(p: string): Buffer }, 'encryptString').mockImplementation(() => {
+        throw new Error('keychain locked');
+      });
+
+      expect(() => service.encrypt('super-secret-plaintext-marker')).toThrow();
+
+      const allLogCalls = [
+        ...vi.mocked(logger.debug).mock.calls,
+        ...vi.mocked(logger.warn).mock.calls,
+        ...vi.mocked(logger.error).mock.calls,
+      ];
+      expect(JSON.stringify(allLogCalls)).not.toContain('super-secret-plaintext-marker');
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -175,6 +225,59 @@ describe('SafeStorageService', () => {
       service.decrypt(ciphertext);
 
       expect(decryptSpy).toHaveBeenCalledWith(Buffer.from(ciphertext, 'base64'));
+    });
+
+    it('should log a debug entry line noting decryption was available, without the ciphertext value', () => {
+      stubElectron();
+      vi.spyOn(service as unknown as { decryptString(b: Buffer): string }, 'decryptString').mockReturnValue('hello');
+
+      service.decrypt(Buffer.from('encrypted').toString('base64'));
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('SafeStorageService.decrypt'),
+        expect.objectContaining({ available: true }),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // decrypt() — failure path
+  // ---------------------------------------------------------------------------
+
+  describe('decrypt() failure path', () => {
+    it('should log an error and throw a plain Error (not the raw Electron error) when decryptString throws', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
+      vi.spyOn(service as unknown as { decryptString(b: Buffer): string }, 'decryptString').mockImplementation(() => {
+        throw new Error('corrupt ciphertext');
+      });
+
+      const ciphertext = Buffer.from('encrypted-secret').toString('base64');
+      expect(() => service.decrypt(ciphertext)).toThrow(
+        'Failed to decrypt value via the OS keychain: corrupt ciphertext',
+      );
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('should never include the ciphertext value in any logged message or metadata when decryption fails', () => {
+      vi.spyOn(service as unknown as { readIsElectron(): boolean }, 'readIsElectron').mockReturnValue(true);
+      vi.spyOn(service as unknown as { readIsAvailable(): boolean }, 'readIsAvailable').mockReturnValue(true);
+      vi.spyOn(service as unknown as { decryptString(b: Buffer): string }, 'decryptString').mockImplementation(() => {
+        throw new Error('corrupt ciphertext');
+      });
+
+      const secretMarker = 'super-secret-ciphertext-marker';
+      const ciphertext = Buffer.from(secretMarker).toString('base64');
+      expect(() => service.decrypt(ciphertext)).toThrow();
+
+      const allLogCalls = [
+        ...vi.mocked(logger.debug).mock.calls,
+        ...vi.mocked(logger.warn).mock.calls,
+        ...vi.mocked(logger.error).mock.calls,
+      ];
+      const serialized = JSON.stringify(allLogCalls);
+      expect(serialized).not.toContain(ciphertext);
+      expect(serialized).not.toContain(secretMarker);
     });
   });
 

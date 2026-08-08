@@ -96,6 +96,7 @@ export class RunService {
    *   observed in-memory or in DynamoDB.
    */
   async createRun(kind: RunKind, initiator: string, runId?: string): Promise<RunLock> {
+    logger.debug('RunService.createRun: acquiring apply lock', { kind, initiator });
     const now = new Date();
     if (this.currentLock !== null && !isRunLockExpired(this.currentLock, now)) {
       throw new RunLockHeldError(this.currentLock);
@@ -121,6 +122,11 @@ export class RunService {
         if (this.currentLock?.runId === lock.runId) {
           this.currentLock = null;
         }
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn('RunService.createRun: failed to acquire DynamoDB apply lock, rolling back in-memory lock', {
+          runId: lock.runId,
+          error: message,
+        });
         throw err;
       }
     }
@@ -155,6 +161,7 @@ export class RunService {
    *   {@link RunLock.runId}).
    */
   async releaseRun(runId: string): Promise<void> {
+    logger.debug('RunService.releaseRun: releasing apply lock', { runId });
     if (this.currentLock?.runId === runId) {
       this.currentLock = null;
     }

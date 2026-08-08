@@ -12,6 +12,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteFileStore, RunRecord, RunRecordStore, StackOutputs } from '@hyveon/shared';
+
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('../logger.js', () => ({ logger: loggerMock }));
+
 import {
   INLINE_LOG_LIMIT_BYTES,
   RunRecordNotFoundError,
@@ -149,6 +155,10 @@ beforeEach(() => {
   listRunsMock.mockReset();
   releaseRunMock.mockReset();
   releaseRunMock.mockResolvedValue(undefined);
+  loggerMock.debug.mockReset();
+  loggerMock.info.mockReset();
+  loggerMock.warn.mockReset();
+  loggerMock.error.mockReset();
   workDir = mkdtempSync(join(tmpdir(), 'run-record-service-test-'));
 });
 
@@ -470,6 +480,20 @@ describe('RunRecordService', () => {
       ).rejects.toThrow('DynamoDB is down');
     });
 
+    it('should log an error with the failure message (not a raw error object) when store.putRecord fails', async () => {
+      putRecordMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await expect(
+        service.writePreflightMarker({ runId: 'run-123', startedAt: '2026-07-17T00:00:00.000Z' }),
+      ).rejects.toThrow();
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.writePreflightMarker: failed to write pre-flight marker',
+        expect.objectContaining({ runId: 'run-123', error: 'DynamoDB is down' }),
+      );
+    });
+
     it('should throw, rather than silently no-op, when runs_table_name is not configured', async () => {
       const service = makeService(null, undefined, undefined, makeRemoteFileStore(undefined));
 
@@ -508,6 +532,18 @@ describe('RunRecordService', () => {
 
       expect(getLogUrlMock).toHaveBeenCalledWith('runs/run-123.log', 60);
     });
+
+    it('should log an error and rethrow (not swallow) when store.getLogUrl fails', async () => {
+      getLogUrlMock.mockRejectedValue(new Error('presign failed'));
+      const service = makeService();
+
+      await expect(service.getLogUrl('runs/run-123.log')).rejects.toThrow('presign failed');
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.getLogUrl: failed to resolve run log URL',
+        expect.objectContaining({ logKey: 'runs/run-123.log', error: 'presign failed' }),
+      );
+    });
   });
 
   describe('getByRunId', () => {
@@ -538,6 +574,18 @@ describe('RunRecordService', () => {
 
       expect(result).toBeUndefined();
       expect(getRecordByRunIdMock).not.toHaveBeenCalled();
+    });
+
+    it('should log an error and rethrow (not swallow) when store.getRecordByRunId fails', async () => {
+      getRecordByRunIdMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await expect(service.getByRunId('run-123')).rejects.toThrow('DynamoDB is down');
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.getByRunId: failed to look up run record',
+        expect.objectContaining({ runId: 'run-123', error: 'DynamoDB is down' }),
+      );
     });
   });
 
@@ -601,6 +649,18 @@ describe('RunRecordService', () => {
       expect(result).toEqual({ records: [] });
       expect(listRunsMock).not.toHaveBeenCalled();
     });
+
+    it('should log an error and rethrow (not swallow) when store.listRuns fails', async () => {
+      listRunsMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await expect(service.listRuns()).rejects.toThrow('DynamoDB is down');
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.listRuns: failed to list run history',
+        expect.objectContaining({ error: 'DynamoDB is down' }),
+      );
+    });
   });
 
   describe('approveRun', () => {
@@ -649,6 +709,33 @@ describe('RunRecordService', () => {
 
       await expect(service.approveRun('run-123', 'alice')).rejects.toThrow(RunRecordNotSuccessfulError);
       expect(putRecordMock).not.toHaveBeenCalled();
+    });
+
+    it('should log an error and rethrow (not swallow) when store.getRecordByRunId fails', async () => {
+      getRecordByRunIdMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await expect(service.approveRun('run-123', 'alice')).rejects.toThrow('DynamoDB is down');
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.approveRun: failed to look up run record',
+        expect.objectContaining({ runId: 'run-123', error: 'DynamoDB is down' }),
+      );
+      expect(putRecordMock).not.toHaveBeenCalled();
+    });
+
+    it('should log an error and rethrow (not swallow) when store.putRecord fails while persisting the approval', async () => {
+      const record = makeRecord();
+      getRecordByRunIdMock.mockResolvedValue(record);
+      putRecordMock.mockRejectedValue(new Error('DynamoDB is down'));
+      const service = makeService();
+
+      await expect(service.approveRun('run-123', 'alice')).rejects.toThrow('DynamoDB is down');
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'RunRecordService.approveRun: failed to persist run approval',
+        expect.objectContaining({ runId: 'run-123', error: 'DynamoDB is down' }),
+      );
     });
   });
 

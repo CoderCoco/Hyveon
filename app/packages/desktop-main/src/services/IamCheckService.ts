@@ -3,6 +3,7 @@ import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { IAMClient, SimulatePrincipalPolicyCommand } from '@aws-sdk/client-iam';
 import { fromIni } from '@aws-sdk/credential-providers';
 import { HYVEON_DEPLOY_ALL_ACTIONS } from '@hyveon/shared';
+import { logger } from '../logger.js';
 import { ElectronStoreService } from './ElectronStoreService.js';
 import { resolveAwsCredentialSource, type AwsCredentialSource } from './awsCredentialSource.js';
 import { GUIDED_PROFILE_NAME } from './GuidedIamService.js';
@@ -92,6 +93,7 @@ export class IamCheckService {
    * *different* credential source.
    */
   async checkPermissions(): Promise<IamCheckResult> {
+    logger.debug('IamCheckService.checkPermissions: running IAM permission dry-run');
     let source: AwsCredentialSource;
     try {
       source = resolveAwsCredentialSource(this.store);
@@ -116,7 +118,12 @@ export class IamCheckService {
     try {
       callerArn = await this.getCallerArn(region, source);
     } catch (err) {
-      return { status: 'warning', message: this.describeError(err), origin, blocking: false };
+      const message = this.describeError(err);
+      logger.warn('IamCheckService.checkPermissions: sts:GetCallerIdentity failed — degrading to a warning', {
+        origin,
+        error: message,
+      });
+      return { status: 'warning', message, origin, blocking: false };
     }
 
     const actions = this.actionsToCheck();
@@ -134,7 +141,12 @@ export class IamCheckService {
         }
       }
     } catch (err) {
-      return { status: 'warning', message: this.describeError(err), origin, blocking: false };
+      const message = this.describeError(err);
+      logger.warn('IamCheckService.checkPermissions: iam:SimulatePrincipalPolicy failed — degrading to a warning', {
+        origin,
+        error: message,
+      });
+      return { status: 'warning', message, origin, blocking: false };
     }
 
     if (denied.length === 0) {

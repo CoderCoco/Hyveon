@@ -1,5 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 import { verifyAccessKeyWithRetry, VERIFY_ACCESS_KEY_RETRY_DELAYS_MS } from './verifyAccessKeyWithRetry.js';
+import { logger } from '../logger.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('verifyAccessKeyWithRetry', () => {
   it('should resolve without calling sleep when verify succeeds on the first attempt', async () => {
@@ -105,5 +115,46 @@ describe('verifyAccessKeyWithRetry', () => {
     await expect(verifyAccessKeyWithRetry(verify, { sleep })).rejects.toThrow(error);
 
     expect(sleep.mock.calls.map((call) => call[0])).toEqual([...VERIFY_ACCESS_KEY_RETRY_DELAYS_MS]);
+  });
+
+  it('should log a debug entry line with the total attempt count when starting verification', async () => {
+    const verify = vi.fn().mockResolvedValue(undefined);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await verifyAccessKeyWithRetry(verify, { sleep });
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('verifyAccessKeyWithRetry'),
+      expect.objectContaining({ totalAttempts: VERIFY_ACCESS_KEY_RETRY_DELAYS_MS.length + 1 }),
+    );
+  });
+
+  it('should log a warning with only the error message (never the raw error object) once all attempts are exhausted', async () => {
+    const error = new Error('InvalidClientTokenId');
+    const verify = vi.fn().mockRejectedValue(error);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(verifyAccessKeyWithRetry(verify, { sleep })).rejects.toThrow(error);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('exhausted'),
+      expect.objectContaining({ error: 'InvalidClientTokenId' }),
+    );
+  });
+
+  it('should never log the access key or secret access key values (verify never exposes them to this module)', async () => {
+    const error = new Error('The security token included in the request is invalid');
+    const verify = vi.fn().mockRejectedValue(error);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const secretMarker = 'AKIDSHOULDNEVERAPPEAR';
+
+    await expect(verifyAccessKeyWithRetry(verify, { sleep })).rejects.toThrow(error);
+
+    const allLogCalls = [
+      ...vi.mocked(logger.debug).mock.calls,
+      ...vi.mocked(logger.warn).mock.calls,
+      ...vi.mocked(logger.error).mock.calls,
+    ];
+    expect(JSON.stringify(allLogCalls)).not.toContain(secretMarker);
   });
 });

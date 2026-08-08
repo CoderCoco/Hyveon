@@ -243,7 +243,14 @@ export function runWithEscalatingCancellation<T>(
   userSignal: AbortSignal | undefined,
   options: EscalatingCancellationOptions = {},
 ): Promise<T> {
+  logger.debug('runWithEscalatingCancellation: invoking Pulumi operation', {
+    hasSignal: userSignal !== undefined,
+  });
+
   if (userSignal?.aborted) {
+    logger.warn(
+      'runWithEscalatingCancellation: userSignal was already aborted before the operation could start — refusing to invoke it',
+    );
     return Promise.reject(new PulumiOperationNotStartedError());
   }
 
@@ -295,7 +302,14 @@ export function runWithEscalatingCancellation<T>(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(abortRequested ? new PulumiOperationAbortedError(err) : err);
+      if (abortRequested) {
+        logger.warn('runWithEscalatingCancellation: Pulumi operation rejected after cancellation was requested', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        reject(new PulumiOperationAbortedError(err));
+      } else {
+        reject(err);
+      }
     };
 
     // `operation` is expected to return a promise, but a caller/underlying

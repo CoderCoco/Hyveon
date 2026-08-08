@@ -18,6 +18,7 @@ vi.mock('../logger.js', () => ({
 }));
 
 import { EcsService, createAwsCloudProvider, buildProviderConfig } from './EcsService.js';
+import { logger } from '../logger.js';
 import type { ConfigService } from './ConfigService.js';
 import type { Ec2Service } from './Ec2Service.js';
 import type { StackOutputs } from '@hyveon/shared';
@@ -492,6 +493,20 @@ describe('EcsService', () => {
       expect(input.cluster).toBe('cluster');
       expect(input.task).toBe('arn');
       expect(input.reason).toBe('because');
+    });
+
+    it('should log an error and rethrow a plain Error with the SDK message when StopTaskCommand fails', async () => {
+      ecsMock.on(StopTaskCommand).rejects(new Error('access-denied'));
+      const service = makeService(makeConfig(), makeEc2());
+      const loggerErrorSpy = vi.spyOn(logger, 'error');
+
+      await expect(service.stopTask('cluster', 'arn', 'because')).rejects.toThrow('access-denied');
+
+      expect(loggerErrorSpy).toHaveBeenCalledWith('EcsService.stopTask: failed to stop task', {
+        cluster: 'cluster',
+        taskArn: 'arn',
+        error: 'access-denied',
+      });
     });
   });
 });
