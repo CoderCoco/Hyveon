@@ -2200,4 +2200,65 @@ describe('preload dispatcher', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // diagnostics.reportLog
+  // -------------------------------------------------------------------------
+
+  describe('diagnostics.reportLog', () => {
+    describe('real-IPC fallthrough', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('0');
+      });
+
+      it('should invoke the diagnostics.reportLog channel with the entries and dropped count', async () => {
+        ipcInvoke.mockResolvedValue(undefined);
+        const diagnostics = bridge['diagnostics'] as {
+          reportLog: (entries: Array<{ level: string; message: string }>, droppedCount?: number) => Promise<void>;
+        };
+        const entries = [{ level: 'log', message: 'hello' }];
+
+        await diagnostics.reportLog(entries, 2);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('diagnostics.reportLog', { entries, droppedCount: 2 });
+      });
+
+      it('should forward an undefined droppedCount unchanged', async () => {
+        ipcInvoke.mockResolvedValue(undefined);
+        const diagnostics = bridge['diagnostics'] as {
+          reportLog: (entries: Array<{ level: string; message: string }>, droppedCount?: number) => Promise<void>;
+        };
+        const entries = [{ level: 'error', message: 'oh no' }];
+
+        await diagnostics.reportLog(entries);
+
+        expect(ipcInvoke).toHaveBeenCalledWith('diagnostics.reportLog', { entries, droppedCount: undefined });
+      });
+    });
+
+    describe('mock-override', () => {
+      let bridge: Record<string, unknown>;
+
+      beforeEach(async () => {
+        bridge = await loadPreloadBridge('1');
+      });
+
+      it('should call the registered mock instead of ipcRenderer.invoke when diagnostics.reportLog is mocked', async () => {
+        const testApi = bridge['__test'] as { mock: (channel: string, handler: unknown) => void };
+        const mockHandler = vi.fn().mockResolvedValue(undefined);
+        testApi.mock('diagnostics.reportLog', mockHandler);
+
+        const diagnostics = bridge['diagnostics'] as {
+          reportLog: (entries: Array<{ level: string; message: string }>, droppedCount?: number) => Promise<void>;
+        };
+        const entries = [{ level: 'warn', message: 'careful' }];
+        await diagnostics.reportLog(entries, 1);
+
+        expect(mockHandler).toHaveBeenCalledWith({ entries, droppedCount: 1 });
+        expect(ipcInvoke).not.toHaveBeenCalled();
+      });
+    });
+  });
 });

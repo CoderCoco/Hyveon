@@ -13,6 +13,7 @@ function makeDiagnostics(): DiagnosticsService {
     readTail: vi.fn().mockResolvedValue(['line1', 'line2', 'line3']),
     getTodayLogPath: vi.fn().mockReturnValue('/var/log/app/main-2026-05-23.log'),
     logRendererError: vi.fn(),
+    logRendererConsoleBatch: vi.fn(),
   } as unknown as DiagnosticsService;
 }
 
@@ -73,6 +74,36 @@ describe('DiagnosticsController', () => {
         message: 'boom',
         source: 'window-error',
       });
+
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe('reportLog', () => {
+    it('should call DiagnosticsService.logRendererConsoleBatch with the entries and dropped count', () => {
+      const svc = makeDiagnostics();
+      const entries = [
+        { level: 'log' as const, message: 'first' },
+        { level: 'warn' as const, message: 'second' },
+      ];
+
+      new DiagnosticsController(svc).reportLog({ entries, droppedCount: 3 });
+
+      expect(svc.logRendererConsoleBatch).toHaveBeenCalledWith(entries, 3);
+    });
+
+    it('should pass through an undefined droppedCount unchanged', () => {
+      const svc = makeDiagnostics();
+      const entries = [{ level: 'info' as const, message: 'hello' }];
+
+      new DiagnosticsController(svc).reportLog({ entries });
+
+      expect(svc.logRendererConsoleBatch).toHaveBeenCalledWith(entries, undefined);
+    });
+
+    it('should return undefined', () => {
+      const svc = makeDiagnostics();
+      const result = new DiagnosticsController(svc).reportLog({ entries: [] });
 
       expect(result).toBeUndefined();
     });

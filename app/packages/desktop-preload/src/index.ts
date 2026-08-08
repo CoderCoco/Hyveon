@@ -38,6 +38,8 @@ export type {
   GuidedIamSubState,
   WizardProgress,
   SaveWizardProgressInput,
+  RendererConsoleLevel,
+  RendererLogEntry,
 } from './hyveon-api.js';
 
 export { GUIDED_PROFILE_NAME } from './hyveon-api.js';

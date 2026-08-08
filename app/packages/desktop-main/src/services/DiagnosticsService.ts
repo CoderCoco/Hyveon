@@ -2,9 +2,25 @@ import { Injectable, Inject } from '@nestjs/common';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { logger } from '../logger.js';
+import type { RendererConsoleLevel, RendererLogEntry } from '../controllers/diagnostics.controller.js';
 
 /** Maximum bytes read from the end of the log file per tail call (~200 KB covers ~500 typical log lines). */
 const TAIL_READ_BYTES = 200 * 1024;
+
+/**
+ * Defensive server-side cap on entries processed from one `diagnostics.reportLog`
+ * batch, independent of the renderer's own client-side batching cap — a batch
+ * this large would already indicate a bug in the caller.
+ */
+const MAX_LOG_BATCH_ENTRIES = 200;
+
+/** Maps a renderer `console.*` level to the winston level it is logged at. */
+const CONSOLE_LEVEL_TO_WINSTON_LEVEL: Record<RendererConsoleLevel, 'debug' | 'info' | 'warn' | 'error'> = {
+  log: 'debug',
+  info: 'info',
+  warn: 'warn',
+  error: 'error',
+};
 
 /** Injection token for the directory where DailyRotateFile writes logs. */
 export const DIAGNOSTICS_LOG_DIR = 'DIAGNOSTICS_LOG_DIR';
@@ -80,5 +96,29 @@ export class DiagnosticsService {
    */
   logRendererError(message: string, stack: string | undefined, source: 'boundary' | 'window-error' | 'unhandled-rejection'): void {
     logger.error(`renderer error (${source}): ${message}`, { stack });
+  }
+
+  /**
+   * Logs a batch of renderer-side `console.*` calls into the same winston
+   * log `readTail`/`getTodayLogPath` already expose. Never throws — a
+   * failure to log console output must never itself crash anything.
+   *
+   * @param entries - Batched console calls, in the order they were made.
+   * @param droppedCount - Entries the renderer's own client-side batch cap
+   *   already dropped before sending, if any.
+   */
+  logRendererConsoleBatch(entries: RendererLogEntry[], droppedCount?: number): void {
+    const overflow = Math.max(0, entries.length - MAX_LOG_BATCH_ENTRIES);
+    const toLog = overflow > 0 ? entries.slice(0, MAX_LOG_BATCH_ENTRIES) : entries;
+
+    for (const entry of toLog) {
+      const winstonLevel = CONSOLE_LEVEL_TO_WINSTON_LEVEL[entry.level] ?? 'debug';
+      logger[winstonLevel](`renderer console (${entry.level}): ${entry.message}`);
+    }
+
+    const totalDropped = (droppedCount ?? 0) + overflow;
+    if (totalDropped > 0) {
+      logger.warn(`renderer console: ${totalDropped} entries dropped (queue capacity exceeded)`);
+    }
   }
 }

@@ -1560,6 +1560,15 @@ export interface HyveonDriftApi {
   get: () => Promise<DriftReport>;
 }
 
+/** The `console.*` method a forwarded renderer log entry originated from. */
+export type RendererConsoleLevel = 'log' | 'info' | 'warn' | 'error';
+
+/** A single batched renderer `console.*` call, as queued client-side before a flush. */
+export interface RendererLogEntry {
+  level: RendererConsoleLevel;
+  message: string;
+}
+
 /** Local application log diagnostics: tail recent lines or retrieve the log file path. */
 export interface HyveonDiagnosticsApi {
   /** Returns the last 500 lines from today's local log file. */
@@ -1571,6 +1580,16 @@ export interface HyveonDiagnosticsApi {
    * into today's local log file via `DiagnosticsService.logRendererError`.
    */
   reportError: (message: string, stack: string | undefined, source: 'boundary' | 'window-error' | 'unhandled-rejection') => Promise<void>;
+  /**
+   * Forwards a batch of renderer-side `console.*` calls to the main process,
+   * where they are written into today's local log file via
+   * `DiagnosticsService.logRendererConsoleBatch`.
+   *
+   * @param entries - Batched console calls, in the order they were made.
+   * @param droppedCount - Entries already dropped client-side by the
+   *   caller's own batch cap, if any.
+   */
+  reportLog: (entries: RendererLogEntry[], droppedCount?: number) => Promise<void>;
 }
 
 /** Audit log: paginated history of `game_servers` mutations from DynamoDB. */

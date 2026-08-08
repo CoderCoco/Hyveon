@@ -138,6 +138,7 @@ import type {
   RotationResult,
   RevokeBootstrapKeyInput,
   RevokeBootstrapKeyResult,
+  RendererLogEntry,
 } from './hyveon-api.js';
 import type { StackOutputs } from '@hyveon/shared';
 
@@ -753,6 +754,8 @@ const api: HyveonApi = {
     path: () => invoke('diagnostics.path'),
     reportError: (message: string, stack: string | undefined, source: 'boundary' | 'window-error' | 'unhandled-rejection') =>
       invoke('diagnostics.reportError', { message, stack, source }),
+    reportLog: (entries: RendererLogEntry[], droppedCount?: number) =>
+      invoke('diagnostics.reportLog', { entries, droppedCount }),
   },
 
   audit: {
