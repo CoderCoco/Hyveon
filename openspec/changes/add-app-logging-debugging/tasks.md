@@ -51,11 +51,11 @@
 
 ## 5. Diagnostics panel UX (Group 3 PR: `logging-3-diagnostics-panel-ux`)
 
-- [ ] 5.1 Add pause/resume state to `DiagnosticsPanel.tsx`: polling continues in the background; while paused, each poll response updates only an internal "latest fetched" reference, not the rendered view; on resume, the view is replaced with that latest snapshot in one step (never appended poll-by-poll, since `diagnostics.tail` returns a cumulative snapshot, not a delta — appending would duplicate/misorder lines)
-- [ ] 5.2 Add level classification (reuse the regex classification `/logs`'s `ansi-log-viewer.component.tsx` already applies) and level-filter toggles (INFO/WARN/ERROR/DEBUG)
-- [ ] 5.3 Add substring search with match highlighting, no regex support, matching `/logs`'s existing scope
-- [ ] 5.4 Preserve today's autoscroll-to-bottom-on-update behavior, but only while not paused — a paused view must not autoscroll out from under the operator
-- [ ] 5.5 Component tests (Vitest + jsdom): pause freezes the view, resume swaps to the latest snapshot with no duplicated/reordered lines across several paused poll cycles, level filter narrows the visible set, search highlights matches without removing non-matching lines, autoscroll follows updates when not paused and is inert while paused
+- [x] 5.1 Add pause/resume state to `DiagnosticsPanel.tsx`: polling continues in the background; while paused, each poll response updates only an internal "latest fetched" reference, not the rendered view; on resume, the view is replaced with that latest snapshot in one step (never appended poll-by-poll, since `diagnostics.tail` returns a cumulative snapshot, not a delta — appending would duplicate/misorder lines)
+- [x] 5.2 Add level classification (reuse the regex classification `/logs`'s `ansi-log-viewer.component.tsx` already applies) and level-filter toggles (INFO/WARN/ERROR/DEBUG)
+- [x] 5.3 Add substring search with match highlighting, no regex support, matching `/logs`'s existing scope
+- [x] 5.4 Preserve today's autoscroll-to-bottom-on-update behavior, but only while not paused — a paused view must not autoscroll out from under the operator
+- [x] 5.5 Component tests (Vitest + jsdom): pause freezes the view, resume swaps to the latest snapshot with no duplicated/reordered lines across several paused poll cycles, level filter narrows the visible set, search highlights matches without removing non-matching lines, autoscroll follows updates when not paused and is inert while paused
 
 ## 6. Documentation (Group 4 PR: `logging-4-docs`, per pr-stacking.md's sanctioned "docs land once the flow is verifiable end-to-end" exception)
 

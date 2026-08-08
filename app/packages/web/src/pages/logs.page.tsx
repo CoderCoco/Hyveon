@@ -17,20 +17,16 @@ import {
 import { GameCombobox } from '../components/game-combobox.component.js';
 import { cn } from '../lib/utils.utils.js';
 import { PollingIndicator } from '../polling/polling-indicator.component.js';
+import { ALL_LOG_LEVELS, LOG_LEVEL_BADGE, detectLogLevel, type LogLevel } from '../lib/log-level.utils.js';
 
 const MAX_LINES = 1000;
 const AGE_TICK_MS = 10_000;
-
-type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
-const ALL_LEVELS: LogLevel[] = ['INFO', 'WARN', 'ERROR', 'DEBUG'];
 
 interface LogLine {
   text: string;
   level: LogLevel | null;
   receivedAt: number;
 }
-
-const LEVEL_PATTERN = /\b(INFO|WARN(?:ING)?|ERROR|ERR|DEBUG|DBG)\b/i;
 
 /** Shape of the react-router navigation state `GameCard` passes via `<Link to="/logs" state={{ game }}>`. */
 interface LogsNavState {
@@ -47,25 +43,6 @@ function gameFromLocationState(state: unknown): string | null {
   const game = (state as LogsNavState).game;
   return typeof game === 'string' ? game : null;
 }
-
-/** Detect a log level from a single CloudWatch line, or null if no match. */
-function detectLevel(line: string): LogLevel | null {
-  const m = LEVEL_PATTERN.exec(line);
-  if (!m) return null;
-  const tok = m[1]!.toUpperCase();
-  if (tok === 'WARNING' || tok === 'WARN') return 'WARN';
-  if (tok === 'ERR' || tok === 'ERROR') return 'ERROR';
-  if (tok === 'DBG' || tok === 'DEBUG') return 'DEBUG';
-  if (tok === 'INFO') return 'INFO';
-  return null;
-}
-
-const LEVEL_BADGE: Record<LogLevel, { variant: 'cyan' | 'warning' | 'destructive' | 'secondary'; label: string }> = {
-  INFO: { variant: 'cyan', label: 'INFO' },
-  WARN: { variant: 'warning', label: 'WARN' },
-  ERROR: { variant: 'destructive', label: 'ERROR' },
-  DEBUG: { variant: 'secondary', label: 'DEBUG' },
-};
 
 /** Format a millisecond age as a compact "Xs ago" / "Xm ago" / "Xh ago" string. */
 function formatAge(ms: number): string {
@@ -167,7 +144,7 @@ export function LogsPage() {
   const bufferRef = useRef<LogLine[]>([]);
 
   const appendLine = useCallback((text: string) => {
-    const entry: LogLine = { text, level: detectLevel(text), receivedAt: Date.now() };
+    const entry: LogLine = { text, level: detectLogLevel(text), receivedAt: Date.now() };
     if (pausedRef.current) {
       bufferRef.current.push(entry);
       setBufferedCount(bufferRef.current.length);
@@ -286,7 +263,7 @@ export function LogsPage() {
         if (cancelled) return;
         const seeded: LogLine[] = data.lines.map((text) => ({
           text,
-          level: detectLevel(text),
+          level: detectLogLevel(text),
           receivedAt: Date.now(),
         }));
         setLines(seeded);
@@ -459,10 +436,10 @@ export function LogsPage() {
             <div key={i} className="flex gap-2 whitespace-pre-wrap break-all">
               {line.level ? (
                 <Badge
-                  variant={LEVEL_BADGE[line.level].variant}
+                  variant={LOG_LEVEL_BADGE[line.level].variant}
                   className="h-4 shrink-0 px-1.5 py-0 text-[10px] leading-4"
                 >
-                  {LEVEL_BADGE[line.level].label}
+                  {LOG_LEVEL_BADGE[line.level].label}
                 </Badge>
               ) : (
                 <span className="inline-block w-12 shrink-0" aria-hidden />
@@ -520,7 +497,7 @@ function LevelFilterMenu({
   hidden: Set<LogLevel>;
   onToggle: (lvl: LogLevel) => void;
 }) {
-  const visibleCount = ALL_LEVELS.length - hidden.size;
+  const visibleCount = ALL_LOG_LEVELS.length - hidden.size;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -528,14 +505,14 @@ function LevelFilterMenu({
           <Filter className="h-3.5 w-3.5" />
           Levels
           <span className="text-[var(--color-muted-foreground)]">
-            ({visibleCount}/{ALL_LEVELS.length})
+            ({visibleCount}/{ALL_LOG_LEVELS.length})
           </span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-44">
         <DropdownMenuLabel>Show levels</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {ALL_LEVELS.map((lvl) => (
+        {ALL_LOG_LEVELS.map((lvl) => (
           <DropdownMenuCheckboxItem
             key={lvl}
             checked={!hidden.has(lvl)}
@@ -543,10 +520,10 @@ function LevelFilterMenu({
             onSelect={(e) => e.preventDefault()}
           >
             <Badge
-              variant={LEVEL_BADGE[lvl].variant}
+              variant={LOG_LEVEL_BADGE[lvl].variant}
               className="h-4 px-1.5 py-0 text-[10px] leading-4"
             >
-              {LEVEL_BADGE[lvl].label}
+              {LOG_LEVEL_BADGE[lvl].label}
             </Badge>
           </DropdownMenuCheckboxItem>
         ))}
