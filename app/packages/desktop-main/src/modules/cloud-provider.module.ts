@@ -16,7 +16,11 @@ import type {
   RunRecordStore,
 } from '@hyveon/shared';
 import { ConfigModule } from './config.module.js';
+import { ElectronStoreModule } from './electron-store.module.js';
 import { ConfigService } from '../services/ConfigService.js';
+import { ElectronStoreService } from '../services/ElectronStoreService.js';
+import { resolveAwsClientCredentialsWithSignature } from '../services/awsCredentialSource.js';
+import type { AwsClientCredentials } from '../services/awsCredentialSource.js';
 import { createAwsCloudProvider } from '../services/EcsService.js';
 import {
   CLOUD_PROVIDER,
@@ -37,18 +41,18 @@ import {
  * implementation without duplicating the cloud switch six times.
  */
 export interface CloudBindings {
-  cloudProvider: (config: ConfigService) => CloudProvider;
-  secretsStore: (config: ConfigService) => SecretsStore;
-  remoteFileStore: (config: ConfigService) => RemoteFileStore;
+  cloudProvider: (config: ConfigService, store: ElectronStoreService) => CloudProvider;
+  secretsStore: (config: ConfigService, store: ElectronStoreService) => SecretsStore;
+  remoteFileStore: (config: ConfigService, store: ElectronStoreService) => RemoteFileStore;
   discordReceiver: (config: ConfigService) => DiscordEventReceiver;
-  auditLogStore: (config: ConfigService) => AuditLogStore;
+  auditLogStore: (config: ConfigService, store: ElectronStoreService) => AuditLogStore;
   /**
    * Takes `remoteFileStore` as a second argument (unlike every other
    * `CloudBindings` factory) because {@link resolveRunRecordStoreConfig}'s
    * pre-apply fallback needs it to read the persisted `DeploymentConfig`
    * directly — see that function's own doc comment.
    */
-  runRecordStore: (config: ConfigService, remoteFileStore: RemoteFileStore) => RunRecordStore;
+  runRecordStore: (config: ConfigService, remoteFileStore: RemoteFileStore, store: ElectronStoreService) => RunRecordStore;
 }
 
 /**
@@ -58,13 +62,25 @@ export interface CloudBindings {
  * — an empty bucket name — when no bucket is configured, so
  * `AwsRemoteFileStore` surfaces its own "bucket not configured" error rather
  * than this factory silently defaulting somewhere), and the region from
- * `getRegion()`. Exported as a standalone function (rather than inlined in
+ * `getRegion()`. `credentials` comes from `resolveAwsClientCredentials(store)`
+ * — omitting it left `AwsRemoteFileStore`'s `S3Client` falling back to the
+ * SDK's default provider chain, which resolves nothing in a GUI-launched
+ * Electron process. Exported as a standalone function (rather than inlined in
  * {@link CLOUD_BINDINGS}) so a unit test can exercise the resolution logic
  * directly without constructing an `@aws-sdk/client-s3`-backed store, which
  * `@hyveon/desktop-main` tests aren't permitted to import.
  */
-export function resolveDeploymentConfigFileStoreConfig(config: ConfigService): { bucket: string; region: string } {
-  return { bucket: config.getConfigurationBucket() ?? '', region: config.getRegion() };
+export function resolveDeploymentConfigFileStoreConfig(
+  config: ConfigService,
+  store: ElectronStoreService,
+): { bucket: string; region: string; credentials: AwsClientCredentials; credentialsSignature: string } {
+  const { credentials, signature } = resolveAwsClientCredentialsWithSignature(store);
+  return {
+    bucket: config.getConfigurationBucket() ?? '',
+    region: config.getRegion(),
+    credentials,
+    credentialsSignature: signature,
+  };
 }
 
 /**
@@ -99,10 +115,23 @@ export function resolveDeploymentConfigFileStoreConfig(config: ConfigService): {
  * `Promise`-returning closure costs nothing extra. See `AwsAuditLogStore`'s
  * constructor doc comment for the same reasoning spelled out at the
  * consumer end.
+ *
+ * `credentials` comes from `resolveAwsClientCredentials(store)` — see
+ * {@link resolveDeploymentConfigFileStoreConfig}'s doc comment for why this
+ * field is required.
  */
-export async function resolveAuditLogStoreConfig(config: ConfigService): Promise<{ tableName: string; region: string }> {
+export async function resolveAuditLogStoreConfig(
+  config: ConfigService,
+  store: ElectronStoreService,
+): Promise<{ tableName: string; region: string; credentials: AwsClientCredentials; credentialsSignature: string }> {
   const outputs = await config.getStackOutputs();
-  return { tableName: outputs?.auditTableName ?? '', region: outputs?.awsRegion ?? config.getRegion() };
+  const { credentials, signature } = resolveAwsClientCredentialsWithSignature(store);
+  return {
+    tableName: outputs?.auditTableName ?? '',
+    region: outputs?.awsRegion ?? config.getRegion(),
+    credentials,
+    credentialsSignature: signature,
+  };
 }
 
 /**
@@ -140,18 +169,29 @@ export async function resolveAuditLogStoreConfig(config: ConfigService): Promise
  * Exported as a standalone function — see {@link resolveDeploymentConfigFileStoreConfig}
  * for why. Async for the same reason, and with the same "not a DI-factory
  * hazard" and "prefer `outputs.awsRegion` once deployed" reasoning, as
- * {@link resolveAuditLogStoreConfig} — see its doc comment.
+ * {@link resolveAuditLogStoreConfig} — see its doc comment. `credentials`
+ * comes from `resolveAwsClientCredentials(store)` for the same reason too.
  */
 export async function resolveRunRecordStoreConfig(
   config: ConfigService,
   remoteFileStore: RemoteFileStore,
-): Promise<{ tableName: string; bucket: string; region: string }> {
+  store: ElectronStoreService,
+): Promise<{
+  tableName: string;
+  bucket: string;
+  region: string;
+  credentials: AwsClientCredentials;
+  credentialsSignature: string;
+}> {
   const outputs = await config.getStackOutputs();
   const tableName = outputs?.runsTableName || (await resolvePreApplyRunsTableName(remoteFileStore));
+  const { credentials, signature } = resolveAwsClientCredentialsWithSignature(store);
   return {
     tableName: tableName ?? '',
     bucket: config.getConfigurationBucket() ?? '',
     region: outputs?.awsRegion ?? config.getRegion(),
+    credentials,
+    credentialsSignature: signature,
   };
 }
 
@@ -164,12 +204,19 @@ export async function resolveRunRecordStoreConfig(
  */
 export const CLOUD_BINDINGS: Record<string, CloudBindings> = {
   aws: {
-    cloudProvider: (config) => createAwsCloudProvider(config),
-    secretsStore: (config) => new AwsSecretsStore(() => config.getRegion()),
-    remoteFileStore: (config) => new AwsRemoteFileStore(() => resolveDeploymentConfigFileStoreConfig(config)),
+    cloudProvider: (config, store) => createAwsCloudProvider(config, store),
+    secretsStore: (config, store) =>
+      new AwsSecretsStore(
+        () => config.getRegion(),
+        () => resolveAwsClientCredentialsWithSignature(store).credentials,
+        () => resolveAwsClientCredentialsWithSignature(store).signature,
+      ),
+    remoteFileStore: (config, store) =>
+      new AwsRemoteFileStore(() => resolveDeploymentConfigFileStoreConfig(config, store)),
     discordReceiver: () => new AwsDiscordEventReceiver(),
-    auditLogStore: (config) => new AwsAuditLogStore(() => resolveAuditLogStoreConfig(config)),
-    runRecordStore: (config, remoteFileStore) => new AwsRunRecordStore(() => resolveRunRecordStoreConfig(config, remoteFileStore)),
+    auditLogStore: (config, store) => new AwsAuditLogStore(() => resolveAuditLogStoreConfig(config, store)),
+    runRecordStore: (config, remoteFileStore, store) =>
+      new AwsRunRecordStore(() => resolveRunRecordStoreConfig(config, remoteFileStore, store)),
   },
 };
 
@@ -211,22 +258,25 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
  * plain, non-circular import it always was.
  */
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, ElectronStoreModule],
   providers: [
     {
       provide: CLOUD_PROVIDER,
-      useFactory: (config: ConfigService) => resolveCloudBindings(config).cloudProvider(config),
-      inject: [ConfigService],
+      useFactory: (config: ConfigService, store: ElectronStoreService) =>
+        resolveCloudBindings(config).cloudProvider(config, store),
+      inject: [ConfigService, ElectronStoreService],
     },
     {
       provide: SECRETS_STORE,
-      useFactory: (config: ConfigService) => resolveCloudBindings(config).secretsStore(config),
-      inject: [ConfigService],
+      useFactory: (config: ConfigService, store: ElectronStoreService) =>
+        resolveCloudBindings(config).secretsStore(config, store),
+      inject: [ConfigService, ElectronStoreService],
     },
     {
       provide: REMOTE_FILE_STORE,
-      useFactory: (config: ConfigService) => resolveCloudBindings(config).remoteFileStore(config),
-      inject: [ConfigService],
+      useFactory: (config: ConfigService, store: ElectronStoreService) =>
+        resolveCloudBindings(config).remoteFileStore(config, store),
+      inject: [ConfigService, ElectronStoreService],
     },
     {
       provide: DISCORD_RECEIVER,
@@ -235,8 +285,9 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
     },
     {
       provide: AUDIT_LOG_STORE,
-      useFactory: (config: ConfigService) => resolveCloudBindings(config).auditLogStore(config),
-      inject: [ConfigService],
+      useFactory: (config: ConfigService, store: ElectronStoreService) =>
+        resolveCloudBindings(config).auditLogStore(config, store),
+      inject: [ConfigService, ElectronStoreService],
     },
     {
       provide: RUN_RECORD_STORE,
@@ -244,9 +295,9 @@ export function resolveCloudBindings(config: ConfigService): CloudBindings {
       // — both tokens are declared in THIS module's own `providers:`, so
       // this needs no `imports:` edge) for `resolveRunRecordStoreConfig`'s
       // pre-apply table-name fallback — see that function's own doc comment.
-      useFactory: (config: ConfigService, remoteFileStore: RemoteFileStore) =>
-        resolveCloudBindings(config).runRecordStore(config, remoteFileStore),
-      inject: [ConfigService, REMOTE_FILE_STORE],
+      useFactory: (config: ConfigService, remoteFileStore: RemoteFileStore, store: ElectronStoreService) =>
+        resolveCloudBindings(config).runRecordStore(config, remoteFileStore, store),
+      inject: [ConfigService, REMOTE_FILE_STORE, ElectronStoreService],
     },
   ],
   exports: [

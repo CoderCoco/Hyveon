@@ -195,4 +195,22 @@ describe('AwsSecretsStore', () => {
       expect(observedRegions).toEqual(['us-east-1', 'eu-west-1']);
     });
   });
+
+  describe('credentials resolution', () => {
+    it('should build the Secrets Manager client with the credentials returned by the getCredentials callback', async () => {
+      let observedCredentials: unknown;
+      secretsMock.on(GetSecretValueCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { SecretString: 'a-value' };
+      });
+
+      const store = new AwsSecretsStore(
+        () => 'us-east-1',
+        () => ({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' }),
+      );
+      await store.get('my-secret');
+
+      expect(observedCredentials).toMatchObject({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' });
+    });
+  });
 });

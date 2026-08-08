@@ -15,6 +15,7 @@ vi.mock('../logger.js', () => ({
 import { LogsService } from './LogsService.js';
 import { createAwsCloudProvider } from './EcsService.js';
 import type { ConfigService } from './ConfigService.js';
+import type { ElectronStoreService } from './ElectronStoreService.js';
 import type { StackOutputs } from '@hyveon/shared';
 
 /** Typed stand-in for the AWS CloudWatch Logs SDK client. */
@@ -63,6 +64,17 @@ function makeConfig(): ConfigService {
 }
 
 /**
+ * Build a minimal `ElectronStoreService` stub reporting no wizard-configured
+ * AWS profile — `resolveAwsClientCredentials` resolves this to `undefined`
+ * credentials, letting the globally-patched `cwMock` client intercept calls
+ * regardless of what `credentials` the client was constructed with.
+ */
+function makeStore(): ElectronStoreService {
+  const stub: Partial<ElectronStoreService> = { get: vi.fn().mockReturnValue(undefined) };
+  return stub as ElectronStoreService;
+}
+
+/**
  * Constructs a `LogsService` for tests, standing in for the constructor
  * default that used to build an `AwsCloudProvider` internally — the service
  * now requires its `CloudProvider` to be passed explicitly (as Nest's DI
@@ -72,7 +84,8 @@ function makeConfig(): ConfigService {
  * globally-patched `cwMock` client, so behaviour is unchanged.
  */
 function makeService(config: ConfigService): LogsService {
-  return new LogsService(config, createAwsCloudProvider(config));
+  const store = makeStore();
+  return new LogsService(config, createAwsCloudProvider(config, store), store);
 }
 
 describe('LogsService', () => {

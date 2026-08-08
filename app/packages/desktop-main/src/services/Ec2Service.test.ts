@@ -12,6 +12,7 @@ vi.mock('../logger.js', () => ({
 
 import { Ec2Service } from './Ec2Service.js';
 import type { ConfigService } from './ConfigService.js';
+import type { ElectronStoreService } from './ElectronStoreService.js';
 
 /** Typed stand-in for the AWS EC2 SDK client. */
 const ec2Mock = mockClient(EC2Client);
@@ -25,13 +26,24 @@ function makeConfig(): ConfigService {
   return stub as ConfigService;
 }
 
+/**
+ * Build a minimal `ElectronStoreService` stub reporting no wizard-configured
+ * AWS profile — `resolveAwsClientCredentials` resolves this to `undefined`
+ * credentials, letting the globally-patched `ec2Mock` client intercept calls
+ * regardless of what `credentials` the client was constructed with.
+ */
+function makeStore(): ElectronStoreService {
+  const stub: Partial<ElectronStoreService> = { get: vi.fn().mockReturnValue(undefined) };
+  return stub as ElectronStoreService;
+}
+
 describe('Ec2Service', () => {
   /** Service under test, freshly constructed per test. */
   let service: Ec2Service;
 
   beforeEach(() => {
     ec2Mock.reset();
-    service = new Ec2Service(makeConfig());
+    service = new Ec2Service(makeConfig(), makeStore());
   });
 
   describe('getPublicIp', () => {
@@ -83,6 +95,25 @@ describe('Ec2Service', () => {
     it('should return null on API error', async () => {
       ec2Mock.on(DescribeNetworkInterfacesCommand).rejects(new Error('nope'));
       expect(await service.getPrivateIp('eni-abc')).toBeNull();
+    });
+  });
+
+  describe('credentials resolution', () => {
+    it('should build the EC2 client with the credentials resolveAwsClientCredentials(store) resolves', async () => {
+      const store: Partial<ElectronStoreService> = {
+        get: vi.fn().mockReturnValue({ profile: 'my-profile' }),
+        getPastedCredentials: vi.fn().mockReturnValue({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' }),
+      };
+      const credentialedService = new Ec2Service(makeConfig(), store as ElectronStoreService);
+
+      let observedCredentials: unknown;
+      ec2Mock.on(DescribeNetworkInterfacesCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { NetworkInterfaces: [] };
+      });
+      await credentialedService.getPublicIp('eni-abc');
+
+      expect(observedCredentials).toMatchObject({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' });
     });
   });
 });

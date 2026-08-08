@@ -424,4 +424,41 @@ describe('AwsRemoteFileStore', () => {
       expect(observedRegion).toBe('ap-northeast-1');
     });
   });
+
+  describe('credentials resolution', () => {
+    it('should build the S3 client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      s3Mock.on(GetObjectCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { Body: fakeBody(new Uint8Array([1])) as never, ETag: '"e"' };
+      });
+
+      const store = new AwsRemoteFileStore(() => ({
+        bucket: 'my-bucket',
+        credentials: { accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' },
+      }));
+      await store.get('foo.txt');
+
+      expect(observedCredentials).toMatchObject({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' });
+    });
+
+    it('should fall back to the SDK default provider chain when getConfig omits credentials', async () => {
+      // Regression coverage for the root cause fixed here: omitting
+      // `credentials` used to be the ONLY behaviour (see getClient's history)
+      // and resolved to CredentialsProviderError in a GUI-launched Electron
+      // process with no env/~/.aws credentials — this proves the field is
+      // still optional (Lambda-style default-chain callers keep working)
+      // without asserting anything about which provider resolves it.
+      let clientConstructed = false;
+      s3Mock.on(GetObjectCommand).callsFake(async (_input, getClient) => {
+        clientConstructed = getClient().config.credentials !== undefined;
+        return { Body: fakeBody(new Uint8Array([1])) as never, ETag: '"e"' };
+      });
+
+      const store = new AwsRemoteFileStore(() => ({ bucket: 'my-bucket' }));
+      await store.get('foo.txt');
+
+      expect(clientConstructed).toBe(true);
+    });
+  });
 });

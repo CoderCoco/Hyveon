@@ -6,7 +6,11 @@
  * assertions); this file tests it directly, once, as its own unit.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { AwsPastedCredentialDecryptError, resolveAwsCredentialSource } from './awsCredentialSource.js';
+import {
+  AwsPastedCredentialDecryptError,
+  resolveAwsCredentialSource,
+  resolveAwsClientCredentialsWithSignature,
+} from './awsCredentialSource.js';
 import type { ElectronStoreService } from './ElectronStoreService.js';
 
 /** Builds an `ElectronStoreService` stub whose `aws.profile` and pasted-credentials lookup are controlled directly. */
@@ -102,5 +106,78 @@ describe('resolveAwsCredentialSource', () => {
     const store = makeStoreWithUndecryptableCredentials('hyveon-pasted', new Error('decrypt failed'));
 
     expect(() => resolveAwsCredentialSource(store)).toThrow(/hyveon-pasted/);
+  });
+});
+
+/**
+ * Regression coverage for the stale-AWS-client-cache defect flagged in
+ * review of #452: `EcsService`/`Ec2Service`/`LogsService`/`SchedulerService`
+ * and every `@hyveon/cloud-aws` store cache their SDK client keyed on a
+ * signature derived from this function's output. A signature that doesn't
+ * actually change when the underlying credentials do would silently
+ * reintroduce that bug, so these tests assert the signature both stays
+ * stable for an unchanged source and changes for every kind of rotation.
+ */
+describe('resolveAwsClientCredentialsWithSignature', () => {
+  it('should resolve credentials undefined and signature "none" when no profile is stored', () => {
+    const store = makeStore(undefined);
+
+    const resolved = resolveAwsClientCredentialsWithSignature(store);
+
+    expect(resolved.credentials).toBeUndefined();
+    expect(resolved.signature).toBe('none');
+  });
+
+  it('should resolve static keys and a signature derived from the profile and access key for a pasted entry', () => {
+    const store = makeStore('hyveon-pasted', { accessKeyId: 'AKID', secretAccessKey: 'SECRET' });
+
+    const resolved = resolveAwsClientCredentialsWithSignature(store);
+
+    expect(resolved.credentials).toEqual({ accessKeyId: 'AKID', secretAccessKey: 'SECRET' });
+    expect(resolved.signature).toBe('pasted:hyveon-pasted:AKID');
+  });
+
+  it('should resolve a fromIni provider function and a signature derived from the profile name for a real CLI profile', () => {
+    const store = makeStore('default', undefined);
+
+    const resolved = resolveAwsClientCredentialsWithSignature(store);
+
+    expect(typeof resolved.credentials).toBe('function');
+    expect(resolved.signature).toBe('profile:default');
+  });
+
+  it('should produce the same signature across repeated calls when the stored profile is unchanged', () => {
+    const store = makeStore('hyveon-pasted', { accessKeyId: 'AKID', secretAccessKey: 'SECRET' });
+
+    const first = resolveAwsClientCredentialsWithSignature(store);
+    const second = resolveAwsClientCredentialsWithSignature(store);
+
+    expect(second.signature).toBe(first.signature);
+  });
+
+  it('should change the signature when the pasted access key rotates under the same profile name', () => {
+    const before = resolveAwsClientCredentialsWithSignature(
+      makeStore('hyveon-pasted', { accessKeyId: 'AKID-OLD', secretAccessKey: 'SECRET-OLD' }),
+    );
+    const after = resolveAwsClientCredentialsWithSignature(
+      makeStore('hyveon-pasted', { accessKeyId: 'AKID-NEW', secretAccessKey: 'SECRET-NEW' }),
+    );
+
+    expect(after.signature).not.toBe(before.signature);
+  });
+
+  it('should change the signature when switching from a pasted entry to a real CLI profile', () => {
+    const pasted = resolveAwsClientCredentialsWithSignature(
+      makeStore('default', { accessKeyId: 'AKID', secretAccessKey: 'SECRET' }),
+    );
+    const profile = resolveAwsClientCredentialsWithSignature(makeStore('default', undefined));
+
+    expect(profile.signature).not.toBe(pasted.signature);
+  });
+
+  it('should throw AwsPastedCredentialDecryptError when the underlying source can\'t be resolved', () => {
+    const store = makeStoreWithUndecryptableCredentials('hyveon-pasted', new Error('decrypt failed'));
+
+    expect(() => resolveAwsClientCredentialsWithSignature(store)).toThrow(AwsPastedCredentialDecryptError);
   });
 });

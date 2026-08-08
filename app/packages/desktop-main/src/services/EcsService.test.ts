@@ -20,6 +20,7 @@ vi.mock('../logger.js', () => ({
 import { EcsService, createAwsCloudProvider, buildProviderConfig } from './EcsService.js';
 import type { ConfigService } from './ConfigService.js';
 import type { Ec2Service } from './Ec2Service.js';
+import type { ElectronStoreService } from './ElectronStoreService.js';
 import type { StackOutputs } from '@hyveon/shared';
 
 /** Typed stand-in for the AWS ECS SDK client. */
@@ -85,6 +86,20 @@ function makeEc2(ip: string | null = '1.2.3.4'): Ec2Service {
 }
 
 /**
+ * Build a minimal `ElectronStoreService` stub reporting no wizard-configured
+ * AWS profile — `resolveAwsClientCredentials` resolves this to `undefined`
+ * credentials, letting the globally-patched `ecsMock`/`ec2Mock` clients
+ * intercept calls regardless of what `credentials` the client was
+ * constructed with.
+ */
+function makeStore(): ElectronStoreService {
+  const stub: Partial<ElectronStoreService> = {
+    get: vi.fn().mockReturnValue(undefined),
+  };
+  return stub as ElectronStoreService;
+}
+
+/**
  * Constructs an `EcsService` for tests, standing in for the constructor
  * default `EcsService` used before the `CLOUD_PROVIDER` token replaced it —
  * the service now requires its `CloudProvider` to be passed explicitly (as
@@ -94,7 +109,8 @@ function makeEc2(ip: string | null = '1.2.3.4'): Ec2Service {
  * clients, so `getStatus` / `start` / `stop` behave exactly as before.
  */
 function makeService(config: ConfigService, ec2: Ec2Service): EcsService {
-  return new EcsService(config, ec2, createAwsCloudProvider(config));
+  const store = makeStore();
+  return new EcsService(config, ec2, createAwsCloudProvider(config, store), store);
 }
 
 describe('EcsService', () => {
@@ -494,11 +510,73 @@ describe('EcsService', () => {
       expect(input.reason).toBe('because');
     });
   });
+
+  describe('credentials resolution', () => {
+    it('should build the raw ECS client with the credentials resolveAwsClientCredentials(store) resolves', async () => {
+      const store: Partial<ElectronStoreService> = {
+        get: vi.fn().mockReturnValue({ profile: 'my-profile' }),
+        getPastedCredentials: vi.fn().mockReturnValue({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' }),
+      };
+      const credentialedService = new EcsService(
+        makeConfig(),
+        makeEc2(),
+        createAwsCloudProvider(makeConfig(), store as ElectronStoreService),
+        store as ElectronStoreService,
+      );
+
+      let observedCredentials: unknown;
+      ecsMock.on(StopTaskCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return {};
+      });
+      await credentialedService.stopTask('cluster', 'arn', 'because');
+
+      expect(observedCredentials).toMatchObject({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' });
+    });
+
+    /**
+     * Regression test for the stale-client-cache defect flagged in review of
+     * #452: `getClient()` used to cache the `ECSClient` forever after first
+     * construction (`if (!this.client)`), so a credentials rotation mid-session
+     * (e.g. the operator replacing a pasted key via Settings) kept every
+     * subsequent call signed with the original credentials until the app
+     * restarted. `getClient()` now keys its cache on region + a credentials
+     * signature so a rotation is picked up on the very next call.
+     */
+    it('should rebuild the raw ECS client when the stored credentials rotate between calls', async () => {
+      const store: Partial<ElectronStoreService> = {
+        get: vi.fn().mockReturnValue({ profile: 'hyveon-pasted' }),
+        getPastedCredentials: vi
+          .fn()
+          .mockReturnValueOnce({ accessKeyId: 'AKIA-old', secretAccessKey: 'secret-old' })
+          .mockReturnValueOnce({ accessKeyId: 'AKIA-new', secretAccessKey: 'secret-new' }),
+      };
+      const config = makeConfig();
+      const service = new EcsService(
+        config,
+        makeEc2(),
+        createAwsCloudProvider(config, store as ElectronStoreService),
+        store as ElectronStoreService,
+      );
+
+      const observed: unknown[] = [];
+      ecsMock.on(StopTaskCommand).callsFake(async (_input, getClient) => {
+        observed.push(await getClient().config.credentials());
+        return {};
+      });
+
+      await service.stopTask('cluster', 'arn-1', 'first call');
+      await service.stopTask('cluster', 'arn-2', 'second call, after rotation');
+
+      expect(observed[0]).toMatchObject({ accessKeyId: 'AKIA-old', secretAccessKey: 'secret-old' });
+      expect(observed[1]).toMatchObject({ accessKeyId: 'AKIA-new', secretAccessKey: 'secret-new' });
+    });
+  });
 });
 
 describe('buildProviderConfig', () => {
   it('should return null before anything has been deployed', async () => {
-    await expect(buildProviderConfig(makeConfig(null))).resolves.toBeNull();
+    await expect(buildProviderConfig(makeConfig(null), makeStore())).resolves.toBeNull();
   });
 
   it('should prefer the deployed stack outputs awsRegion over ConfigService.getRegion() once deployed', async () => {
@@ -506,6 +584,6 @@ describe('buildProviderConfig', () => {
     // getRegion() stays 'us-east-1' (the makeConfig stub default) — proving
     // the resolved config prefers the stack's own deployed region, not the
     // wizard-configured fallback, once a stack actually exists.
-    await expect(buildProviderConfig(config)).resolves.toMatchObject({ region: 'eu-central-1' });
+    await expect(buildProviderConfig(config, makeStore())).resolves.toMatchObject({ region: 'eu-central-1' });
   });
 });

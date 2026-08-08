@@ -637,4 +637,44 @@ describe('AwsRunRecordStore', () => {
       await expect(store.releaseRunLock('run-123')).rejects.toThrow('boom');
     });
   });
+
+  describe('credentials resolution', () => {
+    const credentials = { accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' };
+
+    it('should build the DynamoDB client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      ddbMock.on(PutCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return {};
+      });
+
+      const store = new AwsRunRecordStore(() => ({
+        tableName: 'hyveon-runs',
+        bucket: 'hyveon-runs-logs',
+        region: 'us-east-1',
+        credentials,
+      }));
+      await store.putRecord(makeRecord());
+
+      expect(observedCredentials).toMatchObject(credentials);
+    });
+
+    it('should build the S3 client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      s3Mock.on(PutObjectCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return {};
+      });
+
+      const store = new AwsRunRecordStore(() => ({
+        tableName: 'hyveon-runs',
+        bucket: 'hyveon-runs-logs',
+        region: 'us-east-1',
+        credentials,
+      }));
+      await store.putLog('run-123', new Uint8Array([1]));
+
+      expect(observedCredentials).toMatchObject(credentials);
+    });
+  });
 });

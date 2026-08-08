@@ -6,7 +6,7 @@ import {
   PutCommand,
   QueryCommand,
 } from '@aws-sdk/lib-dynamodb';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client, type S3ClientConfig } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { RunLockHeldError } from '@hyveon/shared';
 import type { RunLock, RunPageResult, RunRecord, RunRecordStore, RunStatus } from '@hyveon/shared';
@@ -83,9 +83,9 @@ function parseStartedAtFromSk(sk: string): string {
  */
 export class AwsRunRecordStore implements RunRecordStore {
   private dynamoClient: DynamoDBDocumentClient | null = null;
-  private dynamoClientRegion: string | null = null;
+  private dynamoClientCacheKey: string | null = null;
   private s3Client: S3Client | null = null;
-  private s3ClientRegion: string | null = null;
+  private s3ClientCacheKey: string | null = null;
 
   /**
    * @param getConfig - Resolves the DynamoDB table and S3 bucket (and
@@ -105,11 +105,36 @@ export class AwsRunRecordStore implements RunRecordStore {
    *   doc comment for why this is safe (every real invocation happens inside
    *   this class's own already-`async` methods) and why existing sync
    *   closures are unaffected.
+   *
+   *   `credentials`, when supplied, is passed straight through to both
+   *   `DynamoDBClient` and `S3Client` — omitting it leaves the SDK's own
+   *   default provider chain in effect, which resolves nothing in a
+   *   GUI-launched Electron process (see `desktop-main`'s
+   *   `resolveAwsClientCredentials`, the real caller's source for this
+   *   field). `credentialsSignature`, when supplied, is a cheap, comparable
+   *   fingerprint of `credentials` — see `desktop-main`'s
+   *   `resolveAwsClientCredentialsWithSignature` for why `credentials` itself
+   *   can't be compared to detect a rotation. {@link getDynamoClient}/
+   *   {@link getS3Client} key their cache on this alongside region so a
+   *   same-region credentials rotation still rebuilds the client instead of
+   *   staying pinned to a stale key indefinitely.
    */
   constructor(
     private readonly getConfig?: () => (
-      | { tableName: string; bucket: string; region?: string }
-      | Promise<{ tableName: string; bucket: string; region?: string }>
+      | {
+          tableName: string;
+          bucket: string;
+          region?: string;
+          credentials?: S3ClientConfig['credentials'];
+          credentialsSignature?: string;
+        }
+      | Promise<{
+          tableName: string;
+          bucket: string;
+          region?: string;
+          credentials?: S3ClientConfig['credentials'];
+          credentialsSignature?: string;
+        }>
     ),
   ) {}
 
@@ -143,39 +168,41 @@ export class AwsRunRecordStore implements RunRecordStore {
   }
 
   /**
-   * Resolves the region to build clients with, falling back to
-   * {@link resolveDefaultAwsRegion} when `getConfig` omits one.
-   */
-  private async getRegion(): Promise<string> {
-    return (await this.getConfig?.())?.region ?? resolveDefaultAwsRegion();
-  }
-
-  /**
    * Lazily constructs the DynamoDB document client, recreating it whenever
-   * the freshly-resolved region differs from the region the cached client
-   * was built with — mirrors `AwsAuditLogStore.getClient`'s
-   * rebuild-on-region-change pattern.
+   * the freshly-resolved region or credentials signature differs from what
+   * the cached client was built with — mirrors `AwsAuditLogStore.getClient`'s
+   * rebuild-on-region-or-credentials-change pattern. Reads `getConfig()`
+   * exactly once per call (not once for region and again for credentials),
+   * since `getConfig` may be an async stack-outputs read that shouldn't be
+   * paid for twice.
    */
   private async getDynamoClient(): Promise<DynamoDBDocumentClient> {
-    const region = await this.getRegion();
-    if (!this.dynamoClient || this.dynamoClientRegion !== region) {
-      this.dynamoClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
-      this.dynamoClientRegion = region;
+    const config = await this.getConfig?.();
+    const region = config?.region ?? resolveDefaultAwsRegion();
+    const cacheKey = `${region}::${config?.credentialsSignature ?? ''}`;
+    if (!this.dynamoClient || this.dynamoClientCacheKey !== cacheKey) {
+      this.dynamoClient = DynamoDBDocumentClient.from(
+        new DynamoDBClient({ region, credentials: config?.credentials }),
+      );
+      this.dynamoClientCacheKey = cacheKey;
     }
     return this.dynamoClient;
   }
 
   /**
    * Lazily constructs the S3 client, recreating it whenever the
-   * freshly-resolved region differs from the region the cached client was
-   * built with — same rebuild-on-region-change pattern as
+   * freshly-resolved region or credentials signature differs from what the
+   * cached client was built with — same rebuild-on-region-or-credentials-
+   * change pattern, and same single-`getConfig()`-read-per-call rule, as
    * {@link getDynamoClient}.
    */
   private async getS3Client(): Promise<S3Client> {
-    const region = await this.getRegion();
-    if (!this.s3Client || this.s3ClientRegion !== region) {
-      this.s3Client = new S3Client({ region });
-      this.s3ClientRegion = region;
+    const config = await this.getConfig?.();
+    const region = config?.region ?? resolveDefaultAwsRegion();
+    const cacheKey = `${region}::${config?.credentialsSignature ?? ''}`;
+    if (!this.s3Client || this.s3ClientCacheKey !== cacheKey) {
+      this.s3Client = new S3Client({ region, credentials: config?.credentials });
+      this.s3ClientCacheKey = cacheKey;
     }
     return this.s3Client;
   }

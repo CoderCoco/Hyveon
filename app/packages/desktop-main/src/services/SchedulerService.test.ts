@@ -14,6 +14,7 @@ vi.mock('../logger.js', () => ({
 
 import { SchedulerService } from './SchedulerService.js';
 import type { ConfigService } from './ConfigService.js';
+import type { ElectronStoreService } from './ElectronStoreService.js';
 
 /** Typed stand-in for the AWS EventBridge Scheduler SDK client. */
 const schedulerMock = mockClient(SchedulerClient);
@@ -24,13 +25,24 @@ function makeConfig(): ConfigService {
   return stub as ConfigService;
 }
 
+/**
+ * Build a minimal `ElectronStoreService` stub reporting no wizard-configured
+ * AWS profile — `resolveAwsClientCredentials` resolves this to `undefined`
+ * credentials, letting the globally-patched `schedulerMock` client intercept
+ * calls regardless of what `credentials` the client was constructed with.
+ */
+function makeStore(): ElectronStoreService {
+  const stub: Partial<ElectronStoreService> = { get: vi.fn().mockReturnValue(undefined) };
+  return stub as ElectronStoreService;
+}
+
 describe('SchedulerService', () => {
   /** Service under test, freshly constructed per test. */
   let service: SchedulerService;
 
   beforeEach(() => {
     schedulerMock.reset();
-    service = new SchedulerService(makeConfig());
+    service = new SchedulerService(makeConfig(), makeStore());
   });
 
   describe('createStopSchedule', () => {

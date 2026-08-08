@@ -175,4 +175,23 @@ describe('AwsAuditLogStore', () => {
       expect(result.entries.map((e) => e.sk)).toEqual(['sk-1', 'sk-2']);
     });
   });
+
+  describe('credentials resolution', () => {
+    it('should build the DynamoDB client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      ddbMock.on(PutCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return {};
+      });
+
+      const store = new AwsAuditLogStore(() => ({
+        tableName: 'hyveon-audit',
+        region: 'us-east-1',
+        credentials: { accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' },
+      }));
+      await store.putEntry(makeEntry());
+
+      expect(observedCredentials).toMatchObject({ accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' });
+    });
+  });
 });

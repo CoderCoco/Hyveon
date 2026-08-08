@@ -6,6 +6,7 @@ import {
   NoSuchKey,
   S3ServiceException,
   type ObjectVersion,
+  type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { RemoteFileConflictError, type RemoteFileStore } from '@hyveon/shared';
 
@@ -36,7 +37,7 @@ function unquoteEtag(etag: string): string {
  */
 export class AwsRemoteFileStore implements RemoteFileStore {
   private client: S3Client | null = null;
-  private clientRegion: string | null = null;
+  private clientCacheKey: string | null = null;
 
   /**
    * @param getConfig - Resolves the S3 bucket (and optional region) this
@@ -49,8 +50,26 @@ export class AwsRemoteFileStore implements RemoteFileStore {
    *   rather than sending a malformed request. `region` falls back to
    *   `AWS_REGION_` (Lambda's reserved-name workaround, see CLAUDE.md), then
    *   `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1` when omitted.
+   *   `credentials`, when supplied, is passed straight through to
+   *   `S3Client` — omitting it leaves the SDK's own default provider chain
+   *   in effect, which resolves nothing in a GUI-launched Electron process
+   *   (see `desktop-main`'s `resolveAwsClientCredentials`, the real caller's
+   *   source for this field). `credentialsSignature`, when supplied, is a
+   *   cheap, comparable fingerprint of `credentials` — see `desktop-main`'s
+   *   `resolveAwsClientCredentialsWithSignature` for why `credentials` itself
+   *   can't be compared to detect a rotation. {@link getClient} keys its
+   *   cache on this alongside region so a same-region credentials rotation
+   *   still rebuilds the client instead of staying pinned to a stale key
+   *   indefinitely.
    */
-  constructor(private readonly getConfig?: () => { bucket: string; region?: string }) {}
+  constructor(
+    private readonly getConfig?: () => {
+      bucket: string;
+      region?: string;
+      credentials?: S3ClientConfig['credentials'];
+      credentialsSignature?: string;
+    },
+  ) {}
 
   /**
    * Resolves the configured bucket name, throwing a clear error instead of
@@ -68,21 +87,24 @@ export class AwsRemoteFileStore implements RemoteFileStore {
 
   /**
    * Lazily constructs the S3 client, recreating it whenever the
-   * freshly-resolved region differs from the region the cached client was
-   * built with — mirrors `AwsSecretsStore.getClient`'s rebuild-on-region-
-   * change pattern.
+   * freshly-resolved region or credentials signature differs from what the
+   * cached client was built with — mirrors `AwsSecretsStore.getClient`'s
+   * rebuild-on-region-or-credentials-change pattern. Reads `getConfig()`
+   * exactly once per call (not once for region and again for credentials).
    */
   private getClient(): S3Client {
+    const config = this.getConfig?.();
     const region =
-      this.getConfig?.()?.region ??
+      config?.region ??
       process.env['AWS_REGION_'] ??
       process.env['AWS_REGION'] ??
       process.env['AWS_DEFAULT_REGION'] ??
       'us-east-1';
+    const cacheKey = `${region}::${config?.credentialsSignature ?? ''}`;
 
-    if (!this.client || this.clientRegion !== region) {
-      this.client = new S3Client({ region });
-      this.clientRegion = region;
+    if (!this.client || this.clientCacheKey !== cacheKey) {
+      this.client = new S3Client({ region, credentials: config?.credentials });
+      this.clientCacheKey = cacheKey;
     }
     return this.client;
   }

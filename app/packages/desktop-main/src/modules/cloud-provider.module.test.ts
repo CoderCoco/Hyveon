@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   AwsSecretsStore,
   AwsRemoteFileStore,
@@ -33,6 +33,7 @@ import {
   type CloudBindings,
 } from './cloud-provider.module.js';
 import type { ConfigService, ActiveCloud } from '../services/ConfigService.js';
+import type { ElectronStoreService } from '../services/ElectronStoreService.js';
 import type { StackOutputs } from '@hyveon/shared';
 
 /**
@@ -55,6 +56,16 @@ function makeConfig(
     getStackOutputs: async () => ({ auditTableName, runsTableName, awsRegion } as StackOutputs),
   };
   return stub as ConfigService;
+}
+
+/**
+ * Build a minimal `ElectronStoreService` stub reporting no wizard-configured
+ * AWS profile — `resolveAwsClientCredentials` resolves this to `undefined`
+ * credentials, matching a store nothing has been written to yet.
+ */
+function makeStore(): ElectronStoreService {
+  const stub: Partial<ElectronStoreService> = { get: vi.fn().mockReturnValue(undefined) };
+  return stub as ElectronStoreService;
 }
 
 /**
@@ -199,29 +210,39 @@ describe('resolveCloudBindings', () => {
     it('should produce an AwsCloudProvider from the aws cloudProvider factory', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
-      expect(bindings.cloudProvider(config)).toBeInstanceOf(AwsCloudProvider);
+      expect(bindings.cloudProvider(config, makeStore())).toBeInstanceOf(AwsCloudProvider);
     });
 
     it('should produce an AwsSecretsStore from the aws secretsStore factory', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
-      expect(bindings.secretsStore(config)).toBeInstanceOf(AwsSecretsStore);
+      expect(bindings.secretsStore(config, makeStore())).toBeInstanceOf(AwsSecretsStore);
     });
 
     it('should produce an AwsRemoteFileStore from the aws remoteFileStore factory', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
-      expect(bindings.remoteFileStore(config)).toBeInstanceOf(AwsRemoteFileStore);
+      expect(bindings.remoteFileStore(config, makeStore())).toBeInstanceOf(AwsRemoteFileStore);
     });
 
     it('should resolve the deployment config file store bucket from ConfigService.getConfigurationBucket() and region from getRegion()', () => {
       const config = makeConfig('aws', 'my-config-bucket');
-      expect(resolveDeploymentConfigFileStoreConfig(config)).toEqual({ bucket: 'my-config-bucket', region: 'us-east-1' });
+      expect(resolveDeploymentConfigFileStoreConfig(config, makeStore())).toEqual({
+        bucket: 'my-config-bucket',
+        region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should fall back to an empty bucket name when getConfigurationBucket() reports no bucket configured', () => {
       const config = makeConfig('aws', null);
-      expect(resolveDeploymentConfigFileStoreConfig(config)).toEqual({ bucket: '', region: 'us-east-1' });
+      expect(resolveDeploymentConfigFileStoreConfig(config, makeStore())).toEqual({
+        bucket: '',
+        region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should produce an AwsDiscordEventReceiver from the aws discordReceiver factory', () => {
@@ -233,12 +254,17 @@ describe('resolveCloudBindings', () => {
     it('should produce an AwsAuditLogStore from the aws auditLogStore factory', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
-      expect(bindings.auditLogStore(config)).toBeInstanceOf(AwsAuditLogStore);
+      expect(bindings.auditLogStore(config, makeStore())).toBeInstanceOf(AwsAuditLogStore);
     });
 
     it('should resolve the audit log store table from ConfigService.getStackOutputs().auditTableName and region from getRegion()', async () => {
       const config = makeConfig('aws', 'test-config-bucket', 'my-audit-table');
-      await expect(resolveAuditLogStoreConfig(config)).resolves.toEqual({ tableName: 'my-audit-table', region: 'us-east-1' });
+      await expect(resolveAuditLogStoreConfig(config, makeStore())).resolves.toEqual({
+        tableName: 'my-audit-table',
+        region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should fall back to an empty table name when getStackOutputs() reports no audit table name', async () => {
@@ -246,12 +272,22 @@ describe('resolveCloudBindings', () => {
         ...makeConfig('aws'),
         getStackOutputs: async () => null,
       } as ConfigService;
-      await expect(resolveAuditLogStoreConfig(config)).resolves.toEqual({ tableName: '', region: 'us-east-1' });
+      await expect(resolveAuditLogStoreConfig(config, makeStore())).resolves.toEqual({
+        tableName: '',
+        region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should prefer the deployed stack outputs awsRegion over getRegion() once a stack is deployed', async () => {
       const config = makeConfig('aws', 'test-config-bucket', 'my-audit-table', 'test-runs-table', 'eu-west-1');
-      await expect(resolveAuditLogStoreConfig(config)).resolves.toEqual({ tableName: 'my-audit-table', region: 'eu-west-1' });
+      await expect(resolveAuditLogStoreConfig(config, makeStore())).resolves.toEqual({
+        tableName: 'my-audit-table',
+        region: 'eu-west-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should fall back to getRegion() for the audit log store region when nothing is deployed yet', async () => {
@@ -259,21 +295,28 @@ describe('resolveCloudBindings', () => {
         ...makeConfig('aws'),
         getStackOutputs: async () => null,
       } as ConfigService;
-      await expect(resolveAuditLogStoreConfig(config)).resolves.toEqual({ tableName: '', region: 'us-east-1' });
+      await expect(resolveAuditLogStoreConfig(config, makeStore())).resolves.toEqual({
+        tableName: '',
+        region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
+      });
     });
 
     it('should produce an AwsRunRecordStore from the aws runRecordStore factory', () => {
       const config = makeConfig('aws');
       const bindings = resolveCloudBindings(config);
-      expect(bindings.runRecordStore(config, throwingRemoteFileStore)).toBeInstanceOf(AwsRunRecordStore);
+      expect(bindings.runRecordStore(config, throwingRemoteFileStore, makeStore())).toBeInstanceOf(AwsRunRecordStore);
     });
 
     it('should resolve the run record store table from ConfigService.getStackOutputs().runsTableName, bucket from getConfigurationBucket(), and region from getRegion()', async () => {
       const config = makeConfig('aws', 'my-config-bucket', 'test-audit-table', 'my-runs-table');
-      await expect(resolveRunRecordStoreConfig(config, throwingRemoteFileStore)).resolves.toEqual({
+      await expect(resolveRunRecordStoreConfig(config, throwingRemoteFileStore, makeStore())).resolves.toEqual({
         tableName: 'my-runs-table',
         bucket: 'my-config-bucket',
         region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
       });
     });
 
@@ -282,19 +325,23 @@ describe('resolveCloudBindings', () => {
         ...makeConfig('aws', null),
         getStackOutputs: async () => null,
       } as ConfigService;
-      await expect(resolveRunRecordStoreConfig(config, makeConfigRemoteFileStore(undefined))).resolves.toEqual({
+      await expect(resolveRunRecordStoreConfig(config, makeConfigRemoteFileStore(undefined), makeStore())).resolves.toEqual({
         tableName: '',
         bucket: '',
         region: 'us-east-1',
+        credentials: undefined,
+        credentialsSignature: 'none',
       });
     });
 
     it('should prefer the deployed stack outputs awsRegion over getRegion() once a stack is deployed', async () => {
       const config = makeConfig('aws', 'my-config-bucket', 'test-audit-table', 'my-runs-table', 'ap-southeast-2');
-      await expect(resolveRunRecordStoreConfig(config, throwingRemoteFileStore)).resolves.toEqual({
+      await expect(resolveRunRecordStoreConfig(config, throwingRemoteFileStore, makeStore())).resolves.toEqual({
         tableName: 'my-runs-table',
         bucket: 'my-config-bucket',
         region: 'ap-southeast-2',
+        credentials: undefined,
+        credentialsSignature: 'none',
       });
     });
 
@@ -311,10 +358,12 @@ describe('resolveCloudBindings', () => {
         } as ConfigService;
         const remoteFileStore = makeConfigRemoteFileStore({ projectName: 'hyveon', runsTableName: '' });
 
-        await expect(resolveRunRecordStoreConfig(config, remoteFileStore)).resolves.toEqual({
+        await expect(resolveRunRecordStoreConfig(config, remoteFileStore, makeStore())).resolves.toEqual({
           tableName: 'hyveon-runs',
           bucket: 'my-config-bucket',
           region: 'us-east-1',
+          credentials: undefined,
+          credentialsSignature: 'none',
         });
       });
 
@@ -325,10 +374,12 @@ describe('resolveCloudBindings', () => {
         } as ConfigService;
         const remoteFileStore = makeConfigRemoteFileStore({ projectName: 'hyveon', runsTableName: 'custom-runs-table' });
 
-        await expect(resolveRunRecordStoreConfig(config, remoteFileStore)).resolves.toEqual({
+        await expect(resolveRunRecordStoreConfig(config, remoteFileStore, makeStore())).resolves.toEqual({
           tableName: 'custom-runs-table',
           bucket: 'my-config-bucket',
           region: 'us-east-1',
+          credentials: undefined,
+          credentialsSignature: 'none',
         });
       });
 
@@ -339,10 +390,12 @@ describe('resolveCloudBindings', () => {
         // deployed value wins, not just that the fallback is reachable.
         const remoteFileStore = makeConfigRemoteFileStore({ projectName: 'stale-project', runsTableName: '' });
 
-        await expect(resolveRunRecordStoreConfig(config, remoteFileStore)).resolves.toEqual({
+        await expect(resolveRunRecordStoreConfig(config, remoteFileStore, makeStore())).resolves.toEqual({
           tableName: 'deployed-runs-table',
           bucket: 'my-config-bucket',
           region: 'us-east-1',
+          credentials: undefined,
+          credentialsSignature: 'none',
         });
       });
 
@@ -352,10 +405,12 @@ describe('resolveCloudBindings', () => {
           getStackOutputs: async () => null,
         } as ConfigService;
 
-        await expect(resolveRunRecordStoreConfig(config, makeConfigRemoteFileStore(undefined))).resolves.toEqual({
+        await expect(resolveRunRecordStoreConfig(config, makeConfigRemoteFileStore(undefined), makeStore())).resolves.toEqual({
           tableName: '',
           bucket: 'my-config-bucket',
           region: 'us-east-1',
+          credentials: undefined,
+          credentialsSignature: 'none',
         });
       });
     });
@@ -369,12 +424,12 @@ describe('resolveCloudBindings', () => {
       const bindings = resolveCloudBindings(config);
 
       expect(bindings).toBe(FAKE_BINDINGS);
-      expect(bindings.cloudProvider(config)).toBeInstanceOf(FakeCloudProvider);
-      expect(bindings.secretsStore(config)).toBeInstanceOf(FakeSecretsStore);
-      expect(bindings.remoteFileStore(config)).toBeInstanceOf(FakeRemoteFileStore);
+      expect(bindings.cloudProvider(config, makeStore())).toBeInstanceOf(FakeCloudProvider);
+      expect(bindings.secretsStore(config, makeStore())).toBeInstanceOf(FakeSecretsStore);
+      expect(bindings.remoteFileStore(config, makeStore())).toBeInstanceOf(FakeRemoteFileStore);
       expect(bindings.discordReceiver(config)).toBeInstanceOf(FakeDiscordEventReceiver);
-      expect(bindings.auditLogStore(config)).toBeInstanceOf(FakeAuditLogStore);
-      expect(bindings.runRecordStore(config, throwingRemoteFileStore)).toBeInstanceOf(FakeRunRecordStore);
+      expect(bindings.auditLogStore(config, makeStore())).toBeInstanceOf(FakeAuditLogStore);
+      expect(bindings.runRecordStore(config, throwingRemoteFileStore, makeStore())).toBeInstanceOf(FakeRunRecordStore);
     });
 
     it('should not resolve to the aws bindings once a fake cloud is registered', () => {
@@ -384,7 +439,7 @@ describe('resolveCloudBindings', () => {
       const bindings = resolveCloudBindings(config);
 
       expect(bindings).not.toBe(CLOUD_BINDINGS.aws);
-      expect(bindings.cloudProvider(config)).not.toBeInstanceOf(AwsCloudProvider);
+      expect(bindings.cloudProvider(config, makeStore())).not.toBeInstanceOf(AwsCloudProvider);
     });
   });
 

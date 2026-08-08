@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from './config.module.js';
 import { CloudProviderModule } from './cloud-provider.module.js';
+import { ElectronStoreModule } from './electron-store.module.js';
 import { Ec2Service } from '../services/Ec2Service.js';
 import { EcsService } from '../services/EcsService.js';
 import { LogsService } from '../services/LogsService.js';
@@ -30,9 +31,14 @@ import { SchedulerService } from '../services/SchedulerService.js';
  * `CloudProviderModule` to their AWS implementations via `useFactory`. This
  * module only re-exports `CloudProviderModule` for callers that need those
  * tokens.
+ *
+ * Also imports `ElectronStoreModule` directly (not re-exported by
+ * `ConfigModule`/`CloudProviderModule`) so `Ec2Service`/`EcsService` can
+ * inject `ElectronStoreService` to resolve AWS credentials for their own
+ * raw `EC2Client`/`ECSClient` — see `resolveAwsClientCredentials`.
  */
 @Module({
-  imports: [ConfigModule, CloudProviderModule],
+  imports: [ConfigModule, CloudProviderModule, ElectronStoreModule],
   providers: [Ec2Service, EcsService, LogsService, CostService, SchedulerService, FileManagerService],
   exports: [
     ConfigModule,

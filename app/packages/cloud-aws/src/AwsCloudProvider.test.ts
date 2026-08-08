@@ -299,6 +299,35 @@ describe('AwsCloudProvider', () => {
 
       expect(status).toEqual({ state: 'error', message: 'Error: unexpected failure' });
     });
+
+    /**
+     * Regression test for the uncaught-config-resolution defect flagged in
+     * review of #452: `getConfig()` can throw synchronously (e.g.
+     * `resolveAwsClientCredentials` rejecting an undecryptable pasted-credentials
+     * entry for one game's profile). Before this fix, `getWorkloadStatus`'s
+     * `try`/`catch` wrapped only the ECS/EC2 calls below the `getConfig()`
+     * read, so this rejected the whole method instead of surfacing as this
+     * one game's `error` state — which, called from a caller running
+     * `Promise.all` across every game's status (e.g. the dashboard poll),
+     * failed every game's status at once instead of just this one.
+     */
+    it('should return error (not reject) when getConfig itself throws', async () => {
+      const provider = new AwsCloudProvider(() => {
+        throw new Error('cannot decrypt stored credentials');
+      });
+
+      const status = await provider.getWorkloadStatus('minecraft');
+
+      expect(status).toEqual({ state: 'error', message: 'Error: cannot decrypt stored credentials' });
+    });
+
+    it('should return error (not reject) when getConfig returns a rejected promise', async () => {
+      const provider = new AwsCloudProvider(() => Promise.reject(new Error('async decrypt failure')));
+
+      const status = await provider.getWorkloadStatus('minecraft');
+
+      expect(status).toEqual({ state: 'error', message: 'Error: async decrypt failure' });
+    });
   });
 
   describe('streamWorkloadLogs', () => {
@@ -589,5 +618,95 @@ describe('AwsCloudProvider', () => {
   it('should not expose a getActualCosts method', () => {
     const provider = makeProvider();
     expect('getActualCosts' in provider).toBe(false);
+  });
+
+  describe('credentials resolution', () => {
+    const credentials = { accessKeyId: 'AKIA-test', secretAccessKey: 'secret-test' };
+
+    it('should build the ECS client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      ecsMock.on(ListTasksCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { taskArns: [] };
+      });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, credentials });
+      await provider.stopWorkload('minecraft').catch(() => undefined);
+
+      expect(observedCredentials).toMatchObject(credentials);
+    });
+
+    it('should build the EC2 client with the credentials returned by getConfig', async () => {
+      ecsMock.on(ListTasksCommand).resolves({ taskArns: ['arn1'] });
+      ecsMock.on(DescribeTasksCommand).resolves({
+        tasks: [
+          {
+            taskArn: 'arn1',
+            lastStatus: 'RUNNING',
+            attachments: [
+              { type: 'ElasticNetworkInterface', details: [{ name: 'networkInterfaceId', value: 'eni-1' }] },
+            ],
+          },
+        ],
+      });
+      let observedCredentials: unknown;
+      ec2Mock.on(DescribeNetworkInterfacesCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { NetworkInterfaces: [] };
+      });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, credentials });
+      await provider.getWorkloadStatus('minecraft');
+
+      expect(observedCredentials).toMatchObject(credentials);
+    });
+
+    it('should build the CloudWatch Logs client with the credentials returned by getConfig', async () => {
+      let observedCredentials: unknown;
+      logsMock.on(FilterLogEventsCommand).callsFake(async (_input, getClient) => {
+        observedCredentials = await getClient().config.credentials();
+        return { events: [{ eventId: 'e1', message: 'hello', timestamp: 1 }] };
+      });
+
+      const provider = makeProvider({ ...DEFAULT_CONFIG, credentials });
+      const controller = new AbortController();
+      const iterator = provider.streamWorkloadLogs('minecraft', controller.signal, 1)[Symbol.asyncIterator]();
+      await iterator.next();
+      controller.abort();
+
+      expect(observedCredentials).toMatchObject(credentials);
+    });
+
+    /**
+     * Regression test for the stale-client-cache defect flagged in review of
+     * #452: `getEcsClient` used to cache the `ECSClient` forever unless
+     * `region` changed, so a same-region credentials rotation (e.g. the
+     * operator replacing a pasted key via Settings) kept every subsequent ECS
+     * call signed with the original credentials until the process restarted.
+     * `getEcsClient` now also keys its cache on `credentialsSignature`, so a
+     * rotation is picked up on the very next call even when `region` is
+     * unchanged.
+     */
+    it('should rebuild the ECS client when credentialsSignature changes but region does not', async () => {
+      const configs: AwsCloudProviderConfig[] = [
+        { ...DEFAULT_CONFIG, credentials: { accessKeyId: 'AKIA-old', secretAccessKey: 'secret-old' }, credentialsSignature: 'pasted:default:AKIA-old' },
+        { ...DEFAULT_CONFIG, credentials: { accessKeyId: 'AKIA-new', secretAccessKey: 'secret-new' }, credentialsSignature: 'pasted:default:AKIA-new' },
+      ];
+      let call = 0;
+      const provider = new AwsCloudProvider(() => configs[Math.min(call, configs.length - 1)]!);
+
+      const observed: unknown[] = [];
+      ecsMock.on(ListTasksCommand).callsFake(async (_input, getClient) => {
+        observed.push(await getClient().config.credentials());
+        return { taskArns: [] };
+      });
+
+      await provider.getWorkloadStatus('minecraft');
+      call = 1;
+      await provider.getWorkloadStatus('minecraft');
+
+      expect(observed[0]).toMatchObject({ accessKeyId: 'AKIA-old', secretAccessKey: 'secret-old' });
+      expect(observed[1]).toMatchObject({ accessKeyId: 'AKIA-new', secretAccessKey: 'secret-new' });
+    });
   });
 });

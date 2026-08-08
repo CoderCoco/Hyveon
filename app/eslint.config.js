@@ -152,6 +152,14 @@ export default tseslint.config(
       'packages/desktop-main/src/services/IamCheckService.test.ts',
       'packages/desktop-main/src/services/GuidedIamService.ts',
       'packages/desktop-main/src/services/GuidedIamService.test.ts',
+      // resolveAwsClientCredentials converts the wizard's AwsCredentialSource
+      // into the @aws-sdk/client-* `credentials` shape (static keys or
+      // fromIni) — the same job IamCheckService.buildClientConfig already
+      // does privately above, extracted so every other AWS-SDK-client owner
+      // in desktop-main (EcsService, Ec2Service, cloud-provider.module.ts's
+      // factories) can share it instead of re-deriving it.
+      'packages/desktop-main/src/services/awsCredentialSource.ts',
+      'packages/desktop-main/src/services/awsCredentialSource.test.ts',
       // Rotation-integration regression test composing both services above
       // against a shared store — same AWS-SDK-direct reasoning applies.
       'packages/desktop-main/src/services/guided-iam-rotation-integration.test.ts',

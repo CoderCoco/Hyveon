@@ -7,6 +7,8 @@ import {
 import type { CloudProvider, LogChunk } from '@hyveon/shared';
 import { logger } from '../logger.js';
 import { ConfigService } from './ConfigService.js';
+import { ElectronStoreService } from './ElectronStoreService.js';
+import { resolveAwsClientCredentialsWithSignature } from './awsCredentialSource.js';
 import { CLOUD_PROVIDER } from '../modules/cloud-provider.tokens.js';
 
 /**
@@ -33,6 +35,7 @@ type CloudProviderWithPollInterval = CloudProvider & {
 @Injectable()
 export class LogsService {
   private client: CloudWatchLogsClient | null = null;
+  private clientCacheKey: string | null = null;
 
   constructor(
     private readonly config: ConfigService,
@@ -44,11 +47,22 @@ export class LogsService {
     // swappable to another cloud without a call-site change.
     @Inject(CLOUD_PROVIDER)
     private readonly provider: CloudProviderWithPollInterval,
+    private readonly store: ElectronStoreService,
   ) {}
 
+  /**
+   * Lazily constructs the CloudWatch Logs client, recreating it whenever the
+   * freshly-resolved region or credentials signature differs from what the
+   * cached client was built with — see `EcsService.getClient`'s matching doc
+   * comment for why both matter.
+   */
   private getClient(): CloudWatchLogsClient {
-    if (!this.client) {
-      this.client = new CloudWatchLogsClient({ region: this.config.getRegion() });
+    const region = this.config.getRegion();
+    const { credentials, signature } = resolveAwsClientCredentialsWithSignature(this.store);
+    const cacheKey = `${region}::${signature}`;
+    if (!this.client || this.clientCacheKey !== cacheKey) {
+      this.client = new CloudWatchLogsClient({ region, credentials });
+      this.clientCacheKey = cacheKey;
     }
     return this.client;
   }
