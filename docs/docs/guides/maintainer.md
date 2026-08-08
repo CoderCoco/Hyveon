@@ -351,6 +351,12 @@ in the PR body — least-privilege roles are easy to silently widen.
   [Management app](/components/management-app) for the module graph.
 - Use Winston (`logger` from `logger.ts`) for structured logs. No
   `console.log` in production paths.
+- New `@MessagePattern` handler → start it with a `logger.debug` line naming
+  the pattern (never payload contents). New service method that calls an AWS
+  SDK operation or the Pulumi engine → catch failures and log them via
+  `logger.warn`/`logger.error` before returning a modeled result or
+  rethrowing a plain `Error` — never let a raw SDK/Node error object escape
+  uncaught. See [Management app](/components/management-app#logging) for why.
 - Wrap environment access behind a service method — don't reach for
   `process.env` directly in request handlers.
 - Add a matching `.test.ts` file next to the service/controller. Mock the

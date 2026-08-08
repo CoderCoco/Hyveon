@@ -12,10 +12,12 @@ editor, and the app's own diagnostic log.
 ![The Settings page showing the Watchdog Settings panel, a Cloud Setup row with a Reconfigure button, a General placeholder, and the Diagnostics log viewer](/img/app/settings.png)
 
 :::note Screenshot pending an update
-The screenshot above predates both the **General** section described below
-(it still shows the old placeholder text rather than the deployment-settings
-form) and the read-only Watchdog Configuration panel described next (it
-still shows the old three-field editor with a Save button).
+The screenshot above predates the **General** section described below (it
+still shows the old placeholder text rather than the deployment-settings
+form), the read-only Watchdog Configuration panel described next (it still
+shows the old three-field editor with a Save button), and the **Diagnostics**
+panel's Pause/Resume, Levels filter, and search controls described below
+(it shows only the bare scrolling log view).
 :::
 
 Four sections, in order: **Watchdog Configuration**, **Cloud Setup**,
@@ -208,13 +210,56 @@ local date. Logs rotate daily, and this panel only ever shows **today's**
 file — there is no date picker. To read an earlier day, open the file from
 that directory yourself.
 
-The panel refreshes every five seconds and **always scrolls to the bottom**
-when it does, with no pin-to-bottom detection. Scrolling up to read something
-older will get yanked back within five seconds; copy the path and open the
-file in an editor if you need to study it.
+The panel polls for new lines every five seconds regardless of anything
+below — pause, level filters, and search only change what's rendered from
+that poll, never whether it happens. There are still no copy, open-folder,
+or export buttons; the path itself is selectable text. Each line shows a
+small level badge (`INFO`/`WARN`/`ERROR`/`DEBUG`) to its left when a level
+is detected, matching what the Levels filter below acts on.
 
-There are no buttons — no copy, no open-folder, no export. The path is
-selectable text.
+Because this is the same log file the renderer's own console output is
+forwarded into (see [Management app](/components/management-app#logging)),
+lines written by `console.log`/`info`/`warn`/`error` calls in the app's own
+UI code — prefixed `renderer console (...)` — and by uncaught renderer
+crashes — prefixed `renderer error (...)` — show up here too, alongside the
+backend's own `logger.*` output.
+
+### Pause and Resume
+
+The button toggles between **Pause** and **Resume**. Pausing does not stop
+the five-second poll — the app's own log is fetched as a full snapshot each
+time (not an incremental delta the way `/logs`'s CloudWatch stream is), so
+there's no partial update to append while paused. Instead, each poll while
+paused is held back internally, and pressing **Resume** replaces the view
+with that latest snapshot in one step — never by appending poll responses
+one after another, which would duplicate or reorder lines given the
+snapshot (not delta) shape of the data. The status line at the bottom of
+the panel shows `· paused` while paused.
+
+Autoscroll-to-bottom (unconditional, same as before — there is no separate
+on/off setting) is suppressed while paused, for the same reason `/logs`
+suppresses its own autoscroll during a pause — so the view doesn't get
+pulled out from under you while reading.
+
+### The Levels filter
+
+The **Levels** button shows how many are visible, e.g. `Levels (3/4)`.
+Opening it reveals a checkbox for each of `INFO`, `WARN`, `ERROR`, `DEBUG` —
+all checked (visible) by default. Unchecking a level hides matching lines
+from view; lines with no detected level are never hidden by this filter.
+This is the same level-detection logic the `/logs` page's own Levels filter
+uses, so what counts as `WARN` here is what counts as `WARN` there.
+
+### Search highlights, it does not filter
+
+The search box (`Search visible lines…`) highlights matching substrings in
+place, wrapped in `<mark>` — it does not remove non-matching lines or change
+the line count. As on `/logs`, use **Levels** to narrow what's shown and
+**Search** to find something within it; the two are independent.
+
+The status line at the bottom reports the line count, how many levels are
+currently hidden (if any), and whether the view is paused, e.g. `214 lines ·
+1 level hidden · paused`.
 
 | State | Copy |
 |---|---|
