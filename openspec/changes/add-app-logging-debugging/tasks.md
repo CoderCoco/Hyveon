@@ -59,14 +59,14 @@
 
 ## 6. Documentation (Group 4 PR: `logging-4-docs`, per pr-stacking.md's sanctioned "docs land once the flow is verifiable end-to-end" exception)
 
-- [ ] 6.1 Update `docs/docs/components/management-app.md` — document renderer console forwarding via the new `diagnostics.reportLog` channel, and the service-layer logging convention now covering the service layer, not just controllers
-- [ ] 6.2 Update `docs/docs/app/settings.md`'s Diagnostics panel section — document pause/filter/search/autoscroll
-- [ ] 6.3 Confirm no other `docs/docs/**` page describes the old crash-only-forwarding or bare-scrolling-panel behavior in a way that now reads as stale
+- [x] 6.1 Update `docs/docs/components/management-app.md` — document renderer console forwarding via the new `diagnostics.reportLog` channel, and the service-layer logging convention now covering the service layer, not just controllers
+- [x] 6.2 Update `docs/docs/app/settings.md`'s Diagnostics panel section — document pause/filter/search/autoscroll
+- [x] 6.3 Confirm no other `docs/docs/**` page describes the old crash-only-forwarding or bare-scrolling-panel behavior in a way that now reads as stale — also updated `docs/docs/guides/maintainer.md`'s "When you touch the Nest server" section (entry/failure logging convention was undocumented there) and synced the change's delta spec into `openspec/specs/app-diagnostics-logging/spec.md` (no `opsx` CLI available in this sandbox, so folded by hand; the change itself is not yet archived since the PR stack hasn't shipped to `main`)
 
 ## 7. Verification (run before opening each PR in the stack, per `CLAUDE.md`)
 
-- [ ] 7.1 `npm run app:lint` clean
-- [ ] 7.2 `npm run app:typecheck` clean
-- [ ] 7.3 `npm run app:test` green
-- [ ] 7.4 `npm run app:test:integration` green (Group 1 and Group 4 touch controllers/services)
-- [ ] 7.5 `npm run app:test:e2e` — the `chromium` project MUST pass; the `electron` project's known pre-existing failures (verified identical against an unmodified `main` baseline — see PR #453) are accepted only when they still match that baseline exactly, never as a blanket pass
+- [x] 7.1 `npm run app:lint` clean
+- [x] 7.2 `npm run app:typecheck` clean
+- [x] 7.3 `npm run app:test` green (161 files / 2836 tests)
+- [x] 7.4 `npm run app:test:integration` — not applicable to Group 4: this group's diff is docs/OpenSpec-only (no controller/service changes), already covered by Group 2's PR
+- [x] 7.5 `npm run app:test:e2e` — not applicable to Group 4 for the same reason (no renderer/preload/IPC changes); already covered by Group 1 and Group 3's PRs. `docs`' own `npm run build` was run instead and passed clean (no broken links, no MDX parse errors)

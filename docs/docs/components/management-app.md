@@ -180,7 +180,7 @@ which forwards to `ipcRenderer.invoke(channel, ...)`.
 | `LogsController` | `logs.get`, `logs.stream` | Snapshot of last N log events; a streaming channel that pushes new events as they arrive (polls `FilterLogEvents` every 2 s under the hood). |
 | `FilesController` | `files.list`, `files.start`, `files.stop` | Ad-hoc FileBrowser task against the game's EFS access point. `files.start` seeds a random per-launch password (bcrypt-hashed into the container's `--password` flag), returns the one-time plaintext credential in its response, and creates an EventBridge Scheduler one-time schedule that auto-stops the task after 2 hours; `files.stop` cancels that schedule. |
 | `DiscordController` | `discord.getConfig`, `discord.putConfig`, `discord.listGuilds`, `discord.addGuild`, `discord.removeGuild`, `discord.registerCommands`, `discord.getAdmins`, `discord.putAdmins`, `discord.getPermissions`, `discord.putPermission`, `discord.deletePermission` | Read-redacted config, save credentials, manage guild allowlist + commands, admins, per-game permissions. |
-| `EnvController`, `DiagnosticsController`, `DriftController`, `AuditController` | `env.get`; `diagnostics.tail`/`diagnostics.path`/`diagnostics.reportError`; `drift.get`; `audit.list` | Environment info, log-tail diagnostics, config-drift detection, and the audit-log view. `diagnostics.reportError` forwards a renderer-side crash (from the top-level `ErrorBoundary` or a `window.onerror`/`unhandledrejection` listener) to the main-process log via `DiagnosticsService.logRendererError`. |
+| `EnvController`, `DiagnosticsController`, `DriftController`, `AuditController` | `env.get`; `diagnostics.tail`/`diagnostics.path`/`diagnostics.reportError`/`diagnostics.reportLog`; `drift.get`; `audit.list` | Environment info, log-tail diagnostics, config-drift detection, and the audit-log view. Two renderer-forwarding channels land in the same `main-*.log` file but stay distinguishable by line prefix: `diagnostics.reportError` forwards a renderer-side crash (from the top-level `ErrorBoundary` or a `window.onerror`/`unhandledrejection` listener) via `DiagnosticsService.logRendererError`, writing `renderer error (${source}): ${message}`; `diagnostics.reportLog` forwards batched `console.log`/`info`/`warn`/`error` calls (every call, not just crashes — see `installConsoleForwarding()` below) via `DiagnosticsService.logRendererConsoleBatch`, writing one `renderer console (${level}): ${message}` line per entry (level mapped `log`→`debug`, others 1:1) plus a combined `renderer console: ${n} entries dropped (queue capacity exceeded)` warning per flush when the renderer's own queue overflowed. |
 | `IacController` | `iac.stack.initialize`, `iac.plan`, `iac.apply`, `iac.destroy.mintToken`, `iac.destroy`, `iac.output`, `iac.approve`, `iac.rollback.resolve`, `iac.rollback.confirm`, `iac.lock.clear` | Drives `PulumiService` (Automation API via `LocalWorkspace`, which launches the pinned `@pulumi/pulumi` engine as a child process through `LocalWorkspaceOptions.pulumiCommand` — the app downloads and verifies that engine itself, so no host-installed or PATH-discovered CLI is ever used) for the plan/apply/destroy/rollback pipeline. `iac.destroy.mintToken` issues the type-to-confirm token the UI requires before a `destroy` call is accepted; `iac.lock.clear` recovers a stale Pulumi backend lock. |
 | `IacRunsController` | `iac.runs.get`, `iac.runs.logs`, `iac.runs.list`, `iac.runs.logUrl` | Run history: fetch a record, stream/fetch its log, list/paginate, resolve an offloaded S3 log link. |
 | `IacSettingsController` | `iac.settings.get`, `iac.settings.update`, `iac.settings.engineVersion` | Reads/writes every top-level `deployment-config.json` field EXCEPT `gameServers` — backs the Settings page's [General section](/app/settings#general). `update` validates via the shared `validateDeploymentSettingsPatch` (`@hyveon/shared`) before delegating to `DeploymentConfigService.updateTopLevelSettings()`; a stale `expectedVersionId` returns `{ code: 'conflict' }` rather than silently overwriting a concurrent edit. `engineVersion` reads `PulumiEngineService.getResolvedVersion()` (`null` when not yet provisioned) — backs the [Cloud Setup section](/app/settings#cloud-setup)'s Pulumi engine version row. |
@@ -248,6 +248,24 @@ app.
 Winston in `src/logger.ts`. Dev: colourised timestamps + JSON metadata.
 Prod: JSON lines with ISO timestamps. Use `logger.info` / `warn` / `error`
 everywhere, not `console.log`.
+
+The winston log file is the only durable record of what happened in a given
+run — there's no HTTP transport and no NestJS exception filter to fall back
+on for tracing (see [Auth](#auth) above). Two conventions keep it useful,
+applied across every controller and every service method in
+`desktop-main/src/services/*.ts` that can fail (not just controllers): every
+`@MessagePattern` handler logs its pattern name on entry via `logger.debug`
+(pattern name only, never payload contents — a payload can carry pasted AWS
+credentials); and every service method that calls an AWS SDK operation or
+the Pulumi engine catches the error, logs it via `logger.warn`
+(recoverable/expected) or `logger.error` (unexpected) with just
+`err instanceof Error ? err.message : String(err)`, and either returns a
+modeled result or rethrows a plain `Error` — a raw AWS SDK/Node error object
+is never left to escape a service method uncaught, since it can carry
+non-plain fields (e.g. `$metadata`) that fail Electron's structured-clone
+when marshalled back to the renderer. Pure helpers with no external call and
+no possible failure mode (`CostService.ts`'s arithmetic, `sleep.ts`,
+`mergeGameLists.ts`) are exempt — there's nothing to log.
 
 ### Env vars
 
@@ -404,8 +422,18 @@ to an end user's build.
 
 `app/packages/web` — React + Vite.
 
-- **Entry**: `src/main.tsx` → `src/App.tsx`, rendered inside an Electron
-  `BrowserWindow`.
+- **Entry**: `src/main.tsx` → `src/app.component.tsx`, rendered inside an
+  Electron `BrowserWindow`. `main.tsx` calls two forwarding installers from
+  `src/lib/report-renderer-error.utils.ts` before rendering:
+  `installGlobalErrorReporting()` (wires `window.onerror`/`unhandledrejection`
+  to `diagnostics.reportError`) and `installConsoleForwarding()` (wraps
+  `console.log`/`info`/`warn`/`error` so every call is both printed to
+  devtools as normal and queued for batched delivery to
+  `diagnostics.reportLog` — a no-op wherever the bridge doesn't implement
+  `diagnostics.reportLog`, which includes the `chromium` Playwright
+  project's HTTP-polyfilled `window.hyveon` stub as well as a genuinely
+  absent bridge). For the Diagnostics panel UI this backs, see
+  [`/app/settings`](/app/settings#diagnostics).
 - **Auth**: none — there's no bearer token, no login prompt, and nothing in
   `localStorage` gating API access. The renderer's `window.hyveon` bridge is
   only reachable from the app's own preload-scoped context.
